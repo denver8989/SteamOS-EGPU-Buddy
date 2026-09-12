@@ -62,3 +62,23 @@ stays on the desktop.
 **Fix here.** `egpu-conditional-session` runs at boot and sets the autologin session to Game Mode
 (`/etc/nv-egpu-buddy/boot-desktop` as opt-out). `egpu-boot-enumerate.sh` brings the card up before login, with a
 flood lockout so a bad link cannot loop the boot.
+
+## Appendix: the exact recipe for the Game Mode UI fix
+
+1. Source: `https://github.com/NightHammer1000/gamescope.git`, branch `poc/gamescope-gbm-route`, commit `2bfc18c`
+   (2026-08-20, "drm, rendervulkan: apply final review findings"; base gamescope 3.16.25).
+2. Local patch `packaging/gamescope-gbm/0001-force-composition-with-gbm-scanout.patch` (4 lines in
+   `src/Backends/DRMBackend.cpp`): `bNeedsFullComposite |= (g_DRM.gbm && g_DRM.allow_modifiers && cv_drm_gbm_scanout)`.
+3. Build: `meson setup build -Dprefix=$HOME/.local/gamescope-gbm/usr -Dpipewire=disabled -Davif_screenshots=disabled`,
+   `ninja -C build install` (the prefix must be real: `SCRIPT_DIR` is compiled in and gamescope aborts in Lua if its
+   own `util.lua` is not found).
+4. Runtime: the session drop-in sets `NV_EGPU_BUDDY_GAMESCOPE_BIN=$HOME/.local/gamescope-gbm/usr/bin/gamescope`,
+   `gamescope_drm_gbm_scanout=1` (gamescope turns any `gamescope_<convar>` environment variable into a convar
+   override) and `NV_EGPU_GAMESCOPE_FORMAT_FILTER_ENABLE=0`. The shim falls back to `/usr/bin/gamescope` if the
+   private binary cannot be linked. Only the eGPU session uses it; the handheld panel keeps the distro gamescope.
+5. What it does: scan-out buffers are allocated with `gbm_bo_create_with_modifiers2(..., GBM_BO_USE_SCANOUT)` on the
+   KMS device and imported into Vulkan; NVKMS forces GBM scan-out allocations to be physically contiguous, so the
+   display engine never reads scattered memory. Expected log noise: "CreateScanoutBuffer: GBM allocation failed for
+   24x24/32x32" (cursor buffers; harmless).
+6. Not used: the driver-side mitigation (`RMDisableNoncontigAlloc=1` + PR #1305). It works but was reported to crash
+   games (X4: Foundations, Half-Life 2) by the same testers.
