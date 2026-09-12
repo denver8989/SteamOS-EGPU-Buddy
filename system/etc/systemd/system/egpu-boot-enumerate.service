@@ -1,0 +1,15 @@
+[Unit]
+Description=Early-boot eGPU enumerate (clear DPC + load driver) before the session dispatcher
+Documentation=NV-EGPU-Buddy display-aware boot — enumerate the eGPU on either USB4 port pre-dispatcher
+After=systemd-udevd.service local-fs.target
+Before=egpu-session-preflight.service egpu-conditional-session.service plasmalogin.service display-manager.service
+ConditionPathExists=/usr/local/sbin/egpu-boot-enumerate.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/egpu-boot-enumerate.sh
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

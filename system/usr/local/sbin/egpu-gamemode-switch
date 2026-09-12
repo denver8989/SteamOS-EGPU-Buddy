@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# NV-EGPU-Buddy — Game Mode "attach" primitive. Restarts gamescope-session.target; the
+# nv-egpu-gamescope-session wrapper then picks the eGPU output (healthy NVIDIA card + connected
+# external output) or falls back to the handheld panel. Refuses while a game is running unless
+# --force (a restart kills the running game) and records that as a pending attach for the plugin.
+set -u; U=1000; RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
+ST=/run/nvegpu; mkdir -p $ST; LOG=/var/log/egpu-gamemode.log; log(){ printf '%s switch: %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; echo "$*"; }
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+force=0; [ "${1:-}" = "--force" ] && force=1
+as_deck(){ runuser -u deck -- env $RUNENV "$@"; }
+# exact process names only: a -f pattern also matches any shell whose command line quotes these words
+game_running(){ pgrep -x reaper >/dev/null 2>&1; }   # reaper wraps every launched game; pv-adverb/srt-bwrap also host steamwebhelper
+pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 || as_deck systemctl --user is-active gamescope-session.target >/dev/null 2>&1 || { log "Game Mode is not running"; exit 2; }
+if game_running && [ "$force" = 0 ]; then
+  date +%s > $ST/gm-attach-pending; log "a game is running -> attach deferred (close the game, then Attach)"; exit 3
+fi
+rm -f $ST/gm-attach-pending
+gpu=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}')
+log "restarting gamescope-session (eGPU=${gpu:-absent}, force=$force)"
+echo '{"state":"SWITCHING","message":"Restarting Game Mode onto the eGPU display..."}' > $ST/gm-status.json
+G0=$(pgrep -n -x 'gamescope(-wl)?')
+as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+for _ in $(seq 1 60); do sleep 2; g=$(pgrep -n -x 'gamescope(-wl)?'); [ -n "$g" ] && [ "$g" != "$G0" ] && pgrep -x steam >/dev/null && break; done; sleep 3
+g=$(pgrep -n -x 'gamescope(-wl)?'); oc=$(tr '\0' '\n' </proc/${g:-0}/environ 2>/dev/null | grep -oE '^OUTPUT_CONNECTOR=.*' | cut -d= -f2)
+if [ -n "$g" ]; then
+  log "gamescope up (pid $g) OUTPUT_CONNECTOR=${oc:-?}"
+# mangoapp (Steam performance overlay) races the session restart and hits its start limit -> revive it
+as_deck systemctl --user reset-failed gamescope-mangoapp.service 2>/dev/null; as_deck systemctl --user restart gamescope-mangoapp.service 2>/dev/null || true
+  printf '{"state":"ATTACHED","message":"Game Mode is on %s."}\n' "${oc%%,*}" > $ST/gm-status.json
+  case "${oc%%,*}" in ""|"*"|eDP-1) ;; *) /usr/local/sbin/egpu-panel off >/dev/null 2>&1 ;; esac   # handheld panel fully off while on the eGPU display
+  exit 0
+fi
+log "gamescope did not come back"; echo '{"state":"FAILED","message":"Game Mode did not restart. Switch to Desktop and back."}' > $ST/gm-status.json; exit 4

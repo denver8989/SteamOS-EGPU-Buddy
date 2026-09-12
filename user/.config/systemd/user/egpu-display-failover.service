@@ -1,0 +1,13 @@
+[Unit]
+Description=eGPU display failover (re-enable handheld panel when the eGPU TV output disappears)
+After=plasma-kwin_wayland.service graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/egpu-display-failover.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

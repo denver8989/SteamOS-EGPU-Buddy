@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=eGPU Desktop Display (TV-only handoff)
+Comment=Re-assert HDMI-A-1 on the RTX 3080 at KDE login so Game Mode -> Desktop never lands on a black screen. No-op when the eGPU is absent.
+Exec=/home/deck/.local/bin/egpu-desktop-display-autostart.sh
+Icon=video-display
+Terminal=false
+X-KDE-autostart-phase=2
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+Hidden=true

@@ -1,0 +1,2 @@
+# SteamOS-EGPU-Buddy: the Decky plugin / user tools call the privileged helper without a password
+deck ALL=(root) NOPASSWD: /usr/local/sbin/nv-egpu-buddy-privileged *

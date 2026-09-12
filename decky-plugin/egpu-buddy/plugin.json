@@ -1,0 +1,11 @@
+{
+  "name": "EGPU Buddy",
+  "version": "1.0.0",
+  "author": "denver8989",
+  "flags": ["root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["egpu", "nvidia", "hardware"],
+    "description": "Attach and safely detach a Thunderbolt/USB4 eGPU from Game Mode, with live eGPU details and power controls."
+  }
+}

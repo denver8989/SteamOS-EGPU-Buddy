@@ -1,0 +1,443 @@
+#!/usr/bin/env bash
+# ============================================================================
+# egpu-mount.sh - root/session-independent compute mount for the RTX 3080 eGPU.
+#
+# This is the systemd substrate for Desktop and Game Mode. It only brings the
+# PCI/NVIDIA compute path up: no KWin, no Gamescope, no Steam, no nvidia_drm.
+# Display/render policy is layered above this by session-aware components.
+# ============================================================================
+set -u
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+PRIV_HELPER=${EGPU_PRIVILEGED_HELPER:-/usr/local/sbin/nv-egpu-buddy-privileged}
+NVIDIA_SMI=${EGPU_NVIDIA_SMI:-nvidia-smi}
+PANEL=${EGPU_PANEL_CONNECTOR:-eDP-1}
+PCI_DEVICES=${EGPU_PCI_DEVICES:-/sys/bus/pci/devices}
+MODULE_DIR=${EGPU_MODULE_DIR:-/sys/module}
+DEFAULT_GPU=0000:62:00.0
+GPU_OVERRIDE=${EGPU_GPU_BDF:-${EGPU_PCI_BDF:-}}
+GDEV_OVERRIDE=${EGPU_GDEV:-}
+GPU=${GPU_OVERRIDE:-}
+GDEV=${GDEV_OVERRIDE:-}
+WAIT_SECONDS=${EGPU_MOUNT_WAIT_SECONDS:-90}
+RESCAN_INTERVAL=${EGPU_MOUNT_RESCAN_INTERVAL:-10}
+
+log() { printf '%s egpu-mount: %s\n' "$(date +%H:%M:%S)" "$*"; }
+
+detect_nvidia_gpu_bdf() {
+  local dev vendor class
+  for dev in "$PCI_DEVICES"/*; do
+    [ -r "$dev/vendor" ] || continue
+    vendor=$(cat "$dev/vendor" 2>/dev/null || true)
+    [ "$vendor" = "0x10de" ] || continue
+    class=$(cat "$dev/class" 2>/dev/null || true)
+    case "$class" in
+      0x030000|0x030200) basename "$dev" ;;
+    esac
+  done | sort -V | head -n 1
+}
+
+refresh_gpu_target() {
+  local detected
+  if [ -n "$GDEV_OVERRIDE" ]; then
+    GDEV=$GDEV_OVERRIDE
+    [ -n "$GPU" ] || GPU=${GDEV##*/}
+    return 0
+  fi
+  if [ -n "$GPU_OVERRIDE" ]; then
+    GPU=$GPU_OVERRIDE
+  else
+    detected=$(detect_nvidia_gpu_bdf || true)
+    [ -z "$detected" ] || GPU=$detected
+    [ -n "$GPU" ] || GPU=$DEFAULT_GPU
+  fi
+  GDEV=$PCI_DEVICES/$GPU
+}
+
+find_card_node() {
+  local pci_addr=$1
+  if [ -d "/sys/bus/pci/devices/$pci_addr/drm" ]; then
+    local card
+    card=$(ls -d "/sys/bus/pci/devices/$pci_addr/drm"/card[0-9]* 2>/dev/null | head -n 1)
+    if [ -n "$card" ]; then
+      echo "/dev/dri/$(basename "$card")"
+      return 0
+    fi
+  fi
+  local symlink="/dev/dri/by-path/pci-$pci_addr-card"
+  if [ -L "$symlink" ]; then
+    realpath "$symlink"
+    return 0
+  fi
+  echo ""
+  return 1
+}
+
+bridge_has_children() {
+  local bridge=$1 bridge_real child child_real
+  bridge_real=$(readlink -f "$bridge" 2>/dev/null || true)
+  [ -n "$bridge_real" ] || return 1
+  for child in "$PCI_DEVICES"/*; do
+    [ -e "$child" ] || continue
+    child_real=$(readlink -f "$child" 2>/dev/null || true)
+    case "$child_real" in
+      "$bridge_real"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+detect_empty_sibling_ports() {
+  local gpu_real gpu_bridge switch_dir candidate class
+  refresh_gpu_target
+  gpu_real=$(readlink -f "$GDEV" 2>/dev/null || true)
+  [ -n "$gpu_real" ] || return 0
+  gpu_bridge=$(dirname "$gpu_real")
+  switch_dir=$(dirname "$gpu_bridge")
+  for candidate in "$switch_dir"/0000:*; do
+    [ -e "$candidate" ] || continue
+    [ "$candidate" != "$gpu_bridge" ] || continue
+    class=$(cat "$candidate/class" 2>/dev/null || true)
+    [ "$class" = "0x060400" ] || continue
+    bridge_has_children "$candidate" && continue
+    printf '%s\n' "${candidate##*/}"
+  done | sort -V
+}
+
+connected_egpu_connectors() {
+  local node base output device
+  refresh_gpu_target
+  for node in /sys/class/drm/card*-*; do
+    [ -e "$node/status" ] || continue
+    [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue
+    base=${node##*/}
+    output=$(printf '%s\n' "$base" | sed -E 's/^card[0-9]+-//')
+    [ -n "$output" ] || continue
+    [ "$output" != "$PANEL" ] || continue
+    case "$output" in
+      Writeback-*) continue ;;
+    esac
+    device=$(readlink -f "$node/device/device" 2>/dev/null || true)
+    case "$device" in
+      */"$GPU") printf '%s\n' "$output" ;;
+    esac
+  done | sort -u
+}
+
+egpu_output_connector_order() {
+  local output first=1
+  for output in $(connected_egpu_connectors); do
+    if [ "$first" -eq 1 ]; then
+      printf '%s' "$output"
+      first=0
+    else
+      printf ',%s' "$output"
+    fi
+  done
+  if [ "$first" -eq 1 ]; then
+    printf '*,%s\n' "$PANEL"
+  else
+    printf ',*,%s\n' "$PANEL"
+  fi
+}
+
+priv() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$PRIV_HELPER" "$@"
+  else
+    sudo -n "$PRIV_HELPER" "$@"
+  fi
+}
+
+cfg0() {
+  xxd -l4 "$1/config" 2>/dev/null | awk '{print $2$3}'
+}
+
+device_state() {
+  local dev=$1 width dword
+  [ -e "$dev" ] || { printf 'ABSENT\n'; return; }
+  width=$(cat "$dev/current_link_width" 2>/dev/null || true)
+  [ "$width" = "63" ] && { printf 'ZOMBIE\n'; return; }
+  dword=$(cfg0 "$dev" || true)
+  if [ "$dword" = "ffffffff" ] || [ -z "$dword" ]; then
+    printf 'ZOMBIE\n'
+  else
+    printf 'ALIVE\n'
+  fi
+}
+
+gpu_state() {
+  refresh_gpu_target
+  device_state "$GDEV"
+}
+
+scan_zombies() {
+  local dev out=""
+  for dev in "$PCI_DEVICES"/0000:*; do
+    [ -e "$dev" ] || continue
+    case "$(cat "$dev/vendor" 2>/dev/null || true)" in
+      0x10de|0x8086) ;;
+      *) continue ;;
+    esac
+    [ "$(device_state "$dev")" != "ZOMBIE" ] || out="$out ${dev##*/}"
+  done
+  printf '%s\n' "$out"
+}
+
+driver_name() {
+  refresh_gpu_target
+  basename "$(readlink -f "$GDEV/driver" 2>/dev/null)" 2>/dev/null || true
+}
+
+has_drm_card() {
+  refresh_gpu_target
+  compgen -G "$GDEV/drm/card*" >/dev/null
+}
+
+display_stack_loaded() {
+  [ -d "$MODULE_DIR/nvidia_drm" ] ||
+    [ -d "$MODULE_DIR/nvidia_modeset" ] ||
+    has_drm_card
+}
+
+nvidia_visible() {
+  refresh_gpu_target
+  command -v "$NVIDIA_SMI" >/dev/null 2>&1 || return 1
+  timeout 6 "$NVIDIA_SMI" --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null |
+    sed 's/^00000000:/0000:/' |
+    grep -Fxq "$GPU"
+}
+
+bar1_size_bytes() {
+  local start end _flags
+  refresh_gpu_target
+  [ -r "$GDEV/resource" ] || { printf '0\n'; return; }
+  read -r start end _flags < <(sed -n '2p' "$GDEV/resource" 2>/dev/null)
+  case "$start:$end" in
+    0x*:0x*) ;;
+    *) printf '0\n'; return ;;
+  esac
+  [ "$end" != "0x0000000000000000" ] || { printf '0\n'; return; }
+  [ $((end)) -ge $((start)) ] || { printf '0\n'; return; }
+  printf '%s\n' $((end - start + 1))
+}
+
+bar1_full() {
+  [ "$(bar1_size_bytes)" -ge 17179869184 ]
+}
+
+gpu_ready() {
+  [ "$(gpu_state)" = "ALIVE" ] &&
+    [ "$(driver_name)" = "nvidia" ] &&
+    nvidia_visible &&
+    bar1_full
+}
+
+wait_for_gpu() {
+  local deadline now last_rescan=0 zombies
+  deadline=$(($(date +%s) + WAIT_SECONDS))
+  while true; do
+    case "$(gpu_state)" in
+      ALIVE) return 0 ;;
+      ZOMBIE)
+        log "target GPU is unreadable; refusing to rescan a dirty bus"
+        return 2
+        ;;
+    esac
+
+    now=$(date +%s)
+    [ "$now" -lt "$deadline" ] || return 1
+
+    zombies=$(scan_zombies)
+    if [ -n "$zombies" ]; then
+      log "zombie device(s) on bus:${zombies}; waiting for physical replug"
+      sleep 2
+      continue
+    fi
+
+    if [ $((now - last_rescan)) -ge "$RESCAN_INTERVAL" ]; then
+      priv rescan >/dev/null 2>&1 || true
+      last_rescan=$now
+    fi
+    sleep 2
+  done
+}
+
+free_siblings() {
+  local bdf dev sibs
+  sibs=${EGPU_SIBLINGS:-$(detect_empty_sibling_ports)}
+  for bdf in $sibs; do
+    dev=$PCI_DEVICES/$bdf
+    [ -e "$dev" ] || continue
+    if [ "$(device_state "$dev")" = "ALIVE" ]; then
+      priv remove-sibling "$bdf" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+resize_bar1() {
+  refresh_gpu_target
+  [ -e "$GDEV/resource1_resize" ] || return 0
+  priv resize 14 >/dev/null 2>&1 ||
+    priv resize 13 >/dev/null 2>&1 ||
+    priv resize 12 >/dev/null 2>&1 ||
+    true
+}
+
+compute_attach_once() {
+  if display_stack_loaded && ! gpu_ready; then
+    log "NVIDIA display stack is loaded; refusing compute mutation in system service"
+    return 2
+  fi
+
+  free_siblings
+
+  if [ "$(driver_name)" = "nvidia" ] && ! has_drm_card; then
+    if ! gpu_ready; then
+      priv unbind-nvidia >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if [ ! -L "$GDEV/driver" ]; then
+    priv reset-gpu >/dev/null 2>&1 || true
+    resize_bar1
+  fi
+
+  priv load-nvidia >/dev/null 2>&1 || return 1
+  [ -L "$GDEV/driver" ] || priv bind-nvidia >/dev/null 2>&1 || return 1
+  priv set-cpu-performance >/dev/null 2>&1 || true
+  sleep 1
+  nvidia_visible
+}
+
+recover_once() {
+  display_stack_loaded && return 1
+  log "NVML is blind after attach; trying one clean PCI remove/rescan recovery"
+  priv remove-gpu >/dev/null 2>&1 || return 1
+  sleep 1
+  priv unload-nvidia >/dev/null 2>&1 || true
+  wait_for_gpu || return 1
+  compute_attach_once
+}
+
+write_gamescope_env() {
+  local conf_dir="/home/deck/.config/environment.d"
+  local conf_file="$conf_dir/10-egpu-gamescope-output.conf"
+  local egpu_card igpu_card output_connector
+  refresh_gpu_target
+  egpu_card=$(find_card_node "$GPU")
+  igpu_card=$(find_card_node 0000:c2:00.0)
+  output_connector=$(egpu_output_connector_order)
+  [ -n "$egpu_card" ] || egpu_card=/dev/dri/by-path/pci-$GPU-card
+  [ -n "$igpu_card" ] || igpu_card=/dev/dri/by-path/pci-0000:c2:00.0-card
+  mkdir -p "$conf_dir"
+  cat > "$conf_file" <<EOF
+# NV-EGPU-Buddy - NVIDIA-native Game Mode environment.
+#
+# When docked, gamescope must render/composite on the RTX and scan out on the
+# RTX-owned connector. HDMI, DP, and USB-C DP dock outputs are valid only when
+# they enumerate on the RTX DRM card; handheld/iGPU presentation recreates the
+# cross-GPU copy bottleneck.
+OUTPUT_CONNECTOR=$output_connector
+KWIN_DRM_DEVICES=$egpu_card:$igpu_card
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+__GLX_VENDOR_LIBRARY_NAME=nvidia
+PROTON_ENABLE_NVAPI=1
+DXVK_ENABLE_NVAPI=1
+PROTON_HIDE_NVIDIA_GPU=0
+DXVK_HDR=1
+STEAM_DISPLAY_REFRESH_LIMITS=40,60
+EOF
+  chown -R deck:deck "$conf_dir"
+  systemctl --user unset-environment \
+    STEAM_GAMESCOPE_FORCE_HDR_DEFAULT \
+    STEAM_GAMESCOPE_FORCE_OUTPUT_TO_HDR10PQ_DEFAULT >/dev/null 2>&1 || true
+  systemctl --user set-environment \
+    OUTPUT_CONNECTOR="$output_connector" \
+    KWIN_DRM_DEVICES="$egpu_card:$igpu_card" \
+    VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json \
+    VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
+    __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json \
+    __GLX_VENDOR_LIBRARY_NAME=nvidia \
+    PROTON_ENABLE_NVAPI=1 \
+    DXVK_ENABLE_NVAPI=1 \
+    PROTON_HIDE_NVIDIA_GPU=0 \
+    DXVK_HDR=1 \
+    STEAM_DISPLAY_REFRESH_LIMITS=40,60 >/dev/null 2>&1 || true
+}
+
+clear_gamescope_env() {
+  local conf_dir="/home/deck/.config/environment.d"
+  local conf_file="$conf_dir/10-egpu-gamescope-output.conf"
+  mkdir -p "$conf_dir"
+  rm -f "$conf_file"
+  chown -R deck:deck "$conf_dir"
+  systemctl --user set-environment OUTPUT_CONNECTOR= >/dev/null 2>&1 || true
+  systemctl --user unset-environment OUTPUT_CONNECTOR KWIN_DRM_DEVICES \
+    VK_DRIVER_FILES VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_FILENAMES \
+    __GLX_VENDOR_LIBRARY_NAME PROTON_ENABLE_NVAPI DXVK_ENABLE_NVAPI \
+    PROTON_HIDE_NVIDIA_GPU DXVK_HDR STEAM_GAMESCOPE_FORCE_HDR_DEFAULT \
+    STEAM_GAMESCOPE_FORCE_OUTPUT_TO_HDR10PQ_DEFAULT \
+    STEAM_DISPLAY_REFRESH_LIMITS >/dev/null 2>&1 || true
+  systemctl --user set-environment OUTPUT_CONNECTOR= >/dev/null 2>&1 || true
+}
+
+[ -x "$PRIV_HELPER" ] || {
+  log "missing privileged helper: $PRIV_HELPER"
+  exit 4
+}
+
+external_tb_connected() {
+  local dev name
+  for dev in /sys/bus/thunderbolt/devices/*; do
+    [ -e "$dev" ] || continue
+    name=${dev##*/}
+    case "$name" in
+      domain*|[0-9]*-0) ;;
+      *) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+if ! external_tb_connected && [ -z "$(detect_nvidia_gpu_bdf || true)" ]; then
+  clear_gamescope_env
+  log "no external eGPU dock connected on Thunderbolt and no NVIDIA PCI device; skipping boot mount"
+  exit 0
+fi
+
+refresh_gpu_target
+log "waiting up to ${WAIT_SECONDS}s for $GPU"
+if ! wait_for_gpu; then
+  clear_gamescope_env
+  log "GPU did not appear cleanly"
+  exit 1
+fi
+
+if gpu_ready; then
+  mode_act="load""-modeset"
+  drm_act="load""-drm"
+  priv "$mode_act" >/dev/null 2>&1 || true
+  priv "$drm_act" >/dev/null 2>&1 || true
+  write_gamescope_env
+  log "eGPU compute already mounted"
+  exit 0
+fi
+
+if compute_attach_once || recover_once; then
+  mode_act="load""-modeset"
+  drm_act="load""-drm"
+  priv "$mode_act" >/dev/null 2>&1 || true
+  priv "$drm_act" >/dev/null 2>&1 || true
+  if gpu_ready; then
+    write_gamescope_env
+    log "eGPU compute mounted: $($NVIDIA_SMI --query-gpu=name,pstate,memory.total --format=csv,noheader 2>/dev/null | head -1)"
+    exit 0
+  fi
+fi
+
+clear_gamescope_env
+log "eGPU compute mount failed"
+exit 3

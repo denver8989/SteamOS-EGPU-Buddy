@@ -1,0 +1,56 @@
+--- a/kernel-open/nvidia-drm/nvidia-drm-priv.h	2026-09-11 02:55:32.711950947 +0900
++++ b/kernel-open/nvidia-drm/nvidia-drm-priv.h	2026-09-11 01:54:49.007287055 +0900
+@@ -183,6 +183,12 @@
+      */
+     NvBool inRemoval;
+ 
++    /*
++     * Set when the device was unloaded while DRM clients still held objects:
++     * drm_mode_config_cleanup() is deferred to nv_drm_dev_release() (last ref).
++     */
++    NvBool modeConfigCleanupPending;
++
+     struct drm_property *nv_out_fence_property;
+     struct drm_property *nv_input_colorspace_property;
+ 
+--- a/kernel-open/nvidia-drm/nvidia-drm-drv.c	2026-09-11 02:55:32.711363145 +0900
++++ b/kernel-open/nvidia-drm/nvidia-drm-drv.c	2026-09-11 02:55:06.656416037 +0900
+@@ -936,7 +936,21 @@
+ 
+         atomic_set(&nv_dev->enable_event_handling, false);
+         drm_kms_helper_poll_fini(dev);
+-        drm_mode_config_cleanup(dev);
++
++        if (nv_drm_vblank_module_param) {
++            nv_drm_workthread_shutdown(&nv_dev->vblank_worker);
++        }
++
++        /*
++         * Do NOT tear down the mode configuration here: a compositor may still
++         * hold the connector/CRTC/plane objects and framebuffers.  The DRM
++         * device is already unplugged (ioctls fail with -ENODEV); its clients
++         * release their framebuffers through drm_release(), and the mode
++         * config is cleaned up in nv_drm_dev_release() once the last reference
++         * is dropped.  Tearing it down now leaks the connector and corrupts
++         * fb_list, faulting in drm_framebuffer_cleanup() on the client's close.
++         */
++        WRITE_ONCE(nv_dev->modeConfigCleanupPending, NV_TRUE);
+ 
+         pDevice = READ_ONCE(nv_dev->pDevice);
+         WRITE_ONCE(nv_dev->pDevice, NULL);
+@@ -2298,6 +2312,15 @@
+     }
+ 
+     nv_dev = dev->dev_private;
++
++    /*
++     * Mode-config teardown deferred from nv_drm_dev_unload() (surprise removal):
++     * on kernels with the managed drm_mode_config_init() the DRM core runs
++     * drm_mode_config_cleanup() itself right after this callback (drm_managed_release),
++     * once every client has closed.  Calling it here as well double-puts the
++     * connectors (refcount underflow, ida double-free).  So: nothing to do.
++     */
++
+     dev->dev_private = NULL;
+ 
+     if (nv_dev != NULL) {

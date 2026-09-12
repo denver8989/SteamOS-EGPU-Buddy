@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# NV-EGPU-Buddy — SURPRISE removal recovery (cable yank / link loss) for the NVIDIA eGPU.
+# Triggered by udev on ACTION=remove of the NVIDIA VGA function. KWin (6.x) quits when its primary GPU
+# vanishes; plasmalogin (Relogin=true) relaunches Plasma and the session env script pins KWin to the iGPU.
+# This side does the root work: user-manager env -> iGPU (belt and braces), unload the orphaned nvidia
+# stack once free (else standby fails), clear DPC containment on the tunnel port so a replug can link.
+set -u; U=1000; RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
+LOG=/var/log/egpu-surprise-recover.log; log(){ printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+[ "$(id -u)" = 0 ] || exit 1
+# safe detach / reattach own their PCI-remove -> not a surprise
+[ -e /run/user/$U/nv-egpu-buddy/detach-handoff-active ] && { log "skip: safe-detach in progress"; exit 0; }
+pgrep -f '/usr/local/sbin/egpu-safe-detach' >/dev/null && { log "skip: safe-detach helper running"; exit 0; }
+lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { log "skip: GPU still on the bus"; exit 0; }
+exec 9>/run/egpu-surprise-recover.lock; flock -n 9 || { log "skip: already running"; exit 0; }
+log "SURPRISE removal detected (GPU gone from bus)"
+T0=$(date +%s); mkdir -p /run/nvegpu; date +%s > /run/nvegpu/surprise-pending   # hotplug-mount: stale modules -> unbind+FLR+rebind on next attach
+# 1. user-manager env -> iGPU immediately (the relaunching session must not point at the dead card)
+igpu=$(for c in /sys/class/drm/card[0-9]; do [ "$(cat $c/device/vendor 2>/dev/null)" = 0x1002 ] && basename $c && break; done)
+runuser -u deck -- env $RUNENV systemctl --user set-environment \
+  "KWIN_DRM_DEVICES=/dev/dri/${igpu:-card1}" \
+  "KWIN_RENDER_NODES=/dev/dri/$(ls /sys/class/drm/${igpu:-card1}/device/drm 2>/dev/null | grep -m1 renderD)" \
+  "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json" \
+  "__GLX_VENDOR_LIBRARY_NAME=mesa" \
+  "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.json" "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json" >/dev/null 2>&1
+runuser -u deck -- env $RUNENV systemctl --user unset-environment PROTON_ENABLE_NVAPI DXVK_ENABLE_NVAPI PROTON_HIDE_NVIDIA_GPU >/dev/null 2>&1
+log "user env -> iGPU (${igpu:-card1})"
+GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1; runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
+log "game-mode=$GM"
+# 2. wait for the session to come back on the iGPU (KWin exit -> autologin relaunch), up to 90s  [desktop only]
+[ "$GM" = 0 ] && \
+for _ in $(seq 1 90); do
+  k=$(pgrep -x kwin_wayland | head -1)
+  if [ -n "$k" ] && tr '\0' '\n' </proc/$k/environ 2>/dev/null | grep -q "KWIN_DRM_DEVICES=/dev/dri/${igpu:-card1}"; then break; fi
+  sleep 1
+done
+log "kwin=$(pgrep -x kwin_wayland | head -1) on $(k=$(pgrep -x kwin_wayland|head -1); tr '\0' '\n' </proc/$k/environ 2>/dev/null | grep -oE 'KWIN_DRM_DEVICES=.*')"
+# 3. unload the orphaned nvidia stack (no device behind it) once nothing holds it; retry up to 60s, kill respawners
+systemctl stop nvidia-persistenced 2>/dev/null; systemctl stop lactd 2>/dev/null
+# old-session Go Hub (python3 WebKit) survives the session end and keeps dmabufs exported by the removed card -> pins nvidia_drm
+pkill -9 -f '[g]o-hub-remix-native|[l]egohub-backend|[p]anel2-overlay' 2>/dev/null; sleep 1
+# pre-removal user processes still holding dmabufs (e.g. a Steam Proton helper) keep NVIDIA-exported buffers -> pin nvidia_drm
+for p in $(pgrep -u 1000); do
+  st=$(stat -c %Y /proc/$p 2>/dev/null); [ -n "$st" ] && [ "$st" -lt "$T0" ] || continue
+  ls -l /proc/$p/fd 2>/dev/null | grep -qE 'dmabuf|sync_file' || continue
+  case "$(cat /proc/$p/comm 2>/dev/null)" in kwin_wayland|Xwayland|plasmashell|pipewire*|wireplumber|systemd*) ;; *) kill -9 "$p" 2>/dev/null; log "killed pre-removal dmabuf holder $p ($(cat /proc/$p/comm 2>/dev/null))";; esac
+done
+for _ in $(seq 1 20); do
+  modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia 2>/dev/null
+  lsmod | grep -q '^nvidia' || break
+  for p in $(fuser /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm 2>/dev/null | tr -s ' \n' ' '); do
+    cmd=$(tr '\0' ' ' </proc/$p/cmdline 2>/dev/null)
+    case "$cmd" in *kwin_wayland*|*Xwayland*) ;; *) kill -9 "$p" 2>/dev/null ;; esac
+  done
+  sleep 3
+done
+log "nvidia modules left: $(lsmod | grep '^nvidia' | awk '{print $1"="$3}' | tr '\n' ' ')"
+# 3b. GAME MODE: gamescope (on the NVIDIA card) is dead or dying -> restart it on the handheld panel
+if [ "$GM" = 1 ]; then
+  runuser -u deck -- env $RUNENV systemctl --user reset-failed gamescope-session.service gamescope-session.target 2>/dev/null
+  runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+  log "gamescope-session restart issued (panel)"
+fi
+# 4. DPC containment on the USB4 root ports would block the next link-up -> clear (hotplug-mount's lever)
+eval "$(sed -n '/^clear_dpc(){/,/^}/p' /usr/local/sbin/egpu-hotplug-mount.sh)"; clear_dpc 2>/dev/null; log "DPC cleared"
+# 4b. the relaunched session has a new Xwayland: republish DISPLAY/XAUTHORITY (else "Unable to open a connection to X")
+for _ in $(seq 1 30); do pgrep -x Xwayland >/dev/null && pgrep -x plasmashell >/dev/null && break; sleep 2; done; sleep 3
+/usr/local/sbin/egpu-republish-display >/dev/null 2>&1 || true
+# 5. internal panel back on + failover watcher promotes eDP-1; audio to internal
+/usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
+runuser -u deck -- env $RUNENV bash -c 'pactl set-default-sink alsa_output.pci-0000_c2_00.6.pro-output-0' >/dev/null 2>&1
+runuser -u deck -- env $RUNENV bash -c 'pgrep -f "[g]o-hub-remix-native" >/dev/null || systemd-run --user --collect --quiet --unit=egpu-surprise-gohub-$(date +%s) /home/deck/.local/bin/go-hub' >/dev/null 2>&1
+[ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-surprise-steam-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1   # plain steam on the iGPU session (old instance is dead/zombie)
+runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 notify-send -a NV-EGPU-Buddy "eGPU disconnected" "Desktop moved to the internal screen." >/dev/null 2>&1 || true
+log "DONE"

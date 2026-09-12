@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+interval=${NV_EGPU_GAMESCOPE_SDR_CLAMP_INTERVAL:-0.5}
+max_failures=${NV_EGPU_GAMESCOPE_SDR_CLAMP_MAX_FAILURES:-20}
+failures=0
+
+prop_value() {
+  xprop -root "$1" 2>/dev/null | awk -F'= ' 'NF > 1 { print $2; found = 1 } END { if (!found) print "" }'
+}
+
+set_zero_if_needed() {
+  local prop=$1 current
+  current=$(prop_value "$prop")
+  [ "$current" = "0" ] && return 0
+  xprop -root -f "$prop" 32c -set "$prop" 0
+}
+
+set_sdr_props() {
+  set_zero_if_needed GAMESCOPE_DISPLAY_HDR_ENABLED
+  set_zero_if_needed GAMESCOPE_DEBUG_FORCE_HDR10_PQ_OUTPUT
+  set_zero_if_needed GAMESCOPE_DEBUG_FORCE_HDR_SUPPORT
+}
+
+while :; do
+  if set_sdr_props; then
+    failures=0
+  else
+    failures=$((failures + 1))
+    [ "$failures" -ge "$max_failures" ] && exit 0
+  fi
+  sleep "$interval"
+done

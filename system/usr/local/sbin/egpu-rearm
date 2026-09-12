@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Clear the eGPU flood lockout and allow ONE bring-up attempt this boot, even if
+# the current boot came from a flood (sets a tmpfs override the mount honors).
+set -e
+rm -f /var/lib/nvegpu/flood-lockout
+touch /run/egpu-rearmed
+echo "eGPU re-armed: flood lockout cleared, next plug-in / boot will attempt bring-up."

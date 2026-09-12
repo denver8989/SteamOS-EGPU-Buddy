@@ -1,0 +1,572 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+detect_nvidia_gpu_bdf() {
+  local dev vendor class
+  for dev in /sys/bus/pci/devices/*; do
+    [ -r "$dev/vendor" ] || continue
+    vendor=$(cat "$dev/vendor" 2>/dev/null || true)
+    [ "$vendor" = "0x10de" ] || continue
+    class=$(cat "$dev/class" 2>/dev/null || true)
+    case "$class" in
+      0x030000|0x030200) basename "$dev" ;;
+    esac
+  done | sort -V | head -n 1
+}
+
+EGPU_PCI=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
+[ -n "$EGPU_PCI" ] || EGPU_PCI=0000:62:00.0
+IGPU_PCI=${IGPU_PCI:-0000:c2:00.0}
+PANEL=${EGPU_PANEL_CONNECTOR:-eDP-1}
+STOCK_GAMESCOPE_SESSION=${STOCK_GAMESCOPE_SESSION:-/usr/lib/steamos/gamescope-session}
+PROFILE_HELPER=${EGPU_DISPLAY_PROFILE_HELPER:-/home/deck/.local/bin/egpu-display-profile.sh}
+SHIM_DIR=${NV_EGPU_GAMESCOPE_SHIM_DIR:-/home/deck/.local/lib/nv-egpu-buddy/gamescope-shim}
+FORMAT_FILTER=${NV_EGPU_GAMESCOPE_FORMAT_FILTER:-/home/deck/.local/lib/nv-egpu-buddy/nv-egpu-gamescope-format-filter.so}
+EGPU_WAIT_SECONDS=${EGPU_GAMESCOPE_EGPU_WAIT_SECONDS:-25}
+EGPU_PROBE_SECONDS=${EGPU_GAMESCOPE_EGPU_PROBE_SECONDS:-5}
+EGPU_GAMESCOPE_HDR=${NV_EGPU_GAMESCOPE_HDR:-0}
+EGPU_GAMESCOPE_MAX_REFRESH=${NV_EGPU_GAMESCOPE_MAX_REFRESH:-60}
+SDR_CLAMP=${NV_EGPU_GAMESCOPE_SDR_CLAMP:-/home/deck/.local/bin/nv-egpu-gamescope-sdr-clamp}
+STEAM_SCALE_CLAMP=${NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP_BIN:-/home/deck/.local/bin/nv-egpu-gamescope-steam-scale-clamp}
+
+log() {
+  printf 'nv-egpu-gamescope-session: %s\n' "$*" >&2
+}
+
+card_for_pci() {
+  local pci=$1 card
+  for card in /sys/bus/pci/devices/"$pci"/drm/card*; do
+    [ -e "$card" ] || continue
+    printf '/dev/dri/%s\n' "${card##*/}"
+    return 0
+  done
+  return 1
+}
+
+connected_egpu_outputs() {
+  local node base output device
+  for node in /sys/class/drm/card*-*; do
+    [ -e "$node/status" ] || continue
+    [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue
+    base=${node##*/}
+    output=$(printf '%s\n' "$base" | sed -E 's/^card[0-9]+-//')
+    [ -n "$output" ] || continue
+    [ "$output" != "$PANEL" ] || continue
+    case "$output" in
+      Writeback-*) continue ;;
+    esac
+    device=$(readlink -f "$node/device/device" 2>/dev/null || true)
+    case "$device" in
+      */"$EGPU_PCI") printf '%s\n' "$output" ;;
+    esac
+  done | sort -u
+}
+
+bar1_size_bytes() {
+  local start end _flags resource="/sys/bus/pci/devices/$EGPU_PCI/resource"
+  [ -r "$resource" ] || { printf '0\n'; return; }
+  read -r start end _flags < <(sed -n '2p' "$resource" 2>/dev/null)
+  case "$start:$end" in
+    0x*:0x*) ;;
+    *) printf '0\n'; return ;;
+  esac
+  [ "$end" != "0x0000000000000000" ] || { printf '0\n'; return; }
+  [ $((end)) -ge $((start)) ] || { printf '0\n'; return; }
+  printf '%s\n' $((end - start + 1))
+}
+
+bar1_full() {
+  [ "$(bar1_size_bytes)" -ge 17179869184 ]
+}
+
+connector_order() {
+  local output first=1
+  for output in $(connected_egpu_outputs); do
+    if [ "$first" -eq 1 ]; then
+      printf '%s' "$output"
+      first=0
+    else
+      printf ',%s' "$output"
+    fi
+  done
+  if [ "$first" -eq 1 ]; then
+    printf '*,%s\n' "$PANEL"
+  else
+    printf ',*,%s\n' "$PANEL"
+  fi
+}
+
+clear_egpu_env() {
+  unset DISPLAY
+  unset WAYLAND_DISPLAY
+  unset WAYLAND_SOCKET
+  unset XAUTHORITY
+  unset OUTPUT_CONNECTOR
+  unset KWIN_DRM_DEVICES
+  unset VK_DRIVER_FILES
+  unset VK_ICD_FILENAMES
+  unset __EGL_VENDOR_LIBRARY_FILENAMES
+  unset __GLX_VENDOR_LIBRARY_NAME
+  unset GAMESCOPE_FORCE_GENERAL_QUEUE
+  unset PROTON_ENABLE_NVAPI
+  unset DXVK_ENABLE_NVAPI
+  unset PROTON_HIDE_NVIDIA_GPU
+  unset DXVK_HDR
+  unset ENABLE_HDR_WSI
+  unset PROTON_ENABLE_HDR
+  unset STEAM_GAMESCOPE_HDR_SUPPORTED
+  unset STEAM_DISPLAY_REFRESH_LIMITS
+  unset NV_EGPU_GAMESCOPE_OUTPUT_WIDTH
+  unset NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT
+  unset NV_EGPU_GAMESCOPE_NESTED_WIDTH
+  unset NV_EGPU_GAMESCOPE_NESTED_HEIGHT
+  unset NV_EGPU_GAMESCOPE_NESTED_REFRESH
+  unset NV_EGPU_GAMESCOPE_FORCE_8BIT
+  unset NV_EGPU_GAMESCOPE_FORCE_LINEAR
+  unset NV_EGPU_GAMESCOPE_MAX_BLOCK_HEIGHT
+  unset NV_EGPU_GAMESCOPE_DISABLE_MODIFIERS
+  unset NV_EGPU_GAMESCOPE_HDMI_REDUCED_BLANKING
+  unset NV_EGPU_GAMESCOPE_DRM_SYNC_GUARDS
+  unset NV_EGPU_GAMESCOPE_FORMAT_FILTER_ENABLE
+  unset NV_EGPU_GAMESCOPE_FORMAT_FILTER
+  unset NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP
+  unset NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP_BIN
+  unset STEAM_GAMESCOPE_FORCE_HDR_DEFAULT
+  unset STEAM_GAMESCOPE_FORCE_OUTPUT_TO_HDR10PQ_DEFAULT
+  # GBM-scanout gamescope build is an NVIDIA-only workaround: handheld/iGPU sessions use the stock binary
+  unset NV_EGPU_BUDDY_GAMESCOPE_BIN
+  unset gamescope_drm_gbm_scanout
+}
+
+clear_session_env() {
+  unset DISPLAY
+  unset WAYLAND_DISPLAY
+  unset WAYLAND_SOCKET
+  unset XAUTHORITY
+}
+
+refresh_egpu_target() {
+  local detected
+  detected=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
+  [ -n "$detected" ] || detected=${EGPU_PCI:-0000:62:00.0}
+  EGPU_PCI=$detected
+}
+
+refresh_egpu_state() {
+  refresh_egpu_target
+  egpu_card=$(card_for_pci "$EGPU_PCI" || true)
+  igpu_card=$(card_for_pci "$IGPU_PCI" || true)
+  outputs=$(connected_egpu_outputs | paste -sd, -)
+  bar1_bytes=$(bar1_size_bytes)
+}
+
+egpu_requested_by_env_file() {
+  local conf_file="/home/deck/.config/environment.d/10-egpu-gamescope-output.conf"
+  [ -r "$conf_file" ] || return 1
+  grep -Eq '^(OUTPUT_CONNECTOR|KWIN_DRM_DEVICES)=' "$conf_file"
+}
+
+egpu_pci_present() {
+  refresh_egpu_target
+  [ -e "/sys/bus/pci/devices/$EGPU_PCI" ]
+}
+
+egpu_native_ready() {
+  refresh_egpu_state
+  [ -n "$egpu_card" ] &&
+    [ -n "$igpu_card" ] &&
+    [ -n "$outputs" ] &&
+    bar1_full &&
+    [ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]
+}
+
+wait_for_egpu_native_ready() {
+  local elapsed=0 requested=0 announced=0
+
+  egpu_requested_by_env_file && requested=1
+  while [ "$elapsed" -lt "$EGPU_WAIT_SECONDS" ]; do
+    if egpu_native_ready; then
+      if [ "$announced" -eq 1 ]; then
+        log "eGPU became Game Mode ready after ${elapsed}s: $outputs"
+      fi
+      return 0
+    fi
+
+    if [ "$requested" -eq 0 ]; then
+      if egpu_pci_present; then
+        requested=1
+      elif [ "$elapsed" -ge "$EGPU_PROBE_SECONDS" ]; then
+        return 1
+      fi
+    fi
+
+    if [ "$announced" -eq 0 ]; then
+      log "waiting up to ${EGPU_WAIT_SECONDS}s for NVIDIA-native Game Mode routing"
+      announced=1
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  refresh_egpu_state
+  if [ "$requested" -eq 1 ]; then
+    log "eGPU wait timed out; falling back to handheld gamescope routing"
+  fi
+  return 1
+}
+
+use_ultrawide_nested_canvas() {
+  local output node request
+
+  if [ "${NV_EGPU_GAMESCOPE_NATIVE_STEAM_CANVAS:-0}" = "1" ]; then
+    return 1
+  fi
+
+  request=${NV_EGPU_GAMESCOPE_SYNTHETIC_GAME_CANVAS:-auto}
+  case "$request" in
+    auto|1|true|yes|on) ;;
+    *) return 1 ;;
+  esac
+
+  for output in $(connected_egpu_outputs); do
+    for node in /sys/class/drm/card*-"$output"; do
+      [ -r "$node/modes" ] || continue
+      if grep -Fxq "5120x1440" "$node/modes"; then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+best_sysfs_mode() {
+  local output=$1 node mode
+  for node in /sys/class/drm/card*-"$output"; do
+    [ -r "$node/modes" ] || continue
+    mode=$(awk '
+      match($0, /^([0-9]+)x([0-9]+)$/, m) {
+        width = m[1] + 0
+        height = m[2] + 0
+        score = (width * 1000000000) + (width * height)
+        if (score > best_score) {
+          best_score = score
+          best_width = width
+          best_height = height
+        }
+      }
+      END {
+        if (best_width != "") {
+          print best_width " " best_height
+        }
+      }
+    ' "$node")
+    [ -n "$mode" ] || continue
+    printf '%s\n' "$mode"
+    return 0
+  done
+  return 1
+}
+
+best_egpu_drm_mode() {
+  local output=$1
+  command -v modetest >/dev/null 2>&1 || return 1
+  modetest -M nvidia-drm -c 2>/dev/null | awk -v output="$output" -v max_refresh="$EGPU_GAMESCOPE_MAX_REFRESH" '
+    $0 ~ "connected[[:space:]]+" output "[[:space:]]" {
+      in_connector = 1
+      next
+    }
+    in_connector && /^  props:/ {
+      exit
+    }
+    in_connector && /^  #[0-9]+/ {
+      refresh = $3 + 0
+      width = $4 + 0
+      height = $8 + 0
+      if (max_refresh != "" && refresh > (max_refresh + 0.5)) {
+        next
+      }
+      score = (width * 1000000000) + (width * height * 1000) + refresh
+      if (score > best_score) {
+        best_score = score
+        best_width = width
+        best_height = height
+        best_refresh = refresh
+      }
+    }
+    END {
+      if (best_width != "") {
+        printf "%s %s %.0f\n", best_width, best_height, best_refresh
+      }
+    }
+  '
+}
+
+stage_gamescope_native_mode() {
+  local output mode width height refresh
+  for output in $(connected_egpu_outputs); do
+    mode=$(best_egpu_drm_mode "$output" || true)
+    if [ -z "$mode" ]; then
+      mode=$(best_sysfs_mode "$output" || true)
+    fi
+    [ -n "$mode" ] || continue
+    set -- $mode
+    width=$1
+    height=$2
+    refresh=${3:-}
+    export NV_EGPU_GAMESCOPE_OUTPUT_WIDTH="$width"
+    export NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT="$height"
+    if [ -n "$refresh" ]; then
+      export NV_EGPU_GAMESCOPE_NESTED_REFRESH="$refresh"
+      export STEAM_DISPLAY_REFRESH_LIMITS="40,$refresh"
+      log "staging Game Mode output ${width}x${height}@${refresh} on $output"
+    else
+      export STEAM_DISPLAY_REFRESH_LIMITS=40,60
+      log "staging Game Mode output ${width}x${height} on $output"
+    fi
+    return 0
+  done
+  return 1
+}
+
+nohdr_stock_gamescope_session() {
+  local dir out tmp
+  dir="${XDG_RUNTIME_DIR:-/tmp}/nv-egpu-buddy"
+  out="$dir/gamescope-session-nohdr"
+  tmp="$out.tmp.$$"
+  mkdir -p "$dir"
+  awk '
+    /^export STEAM_GAMESCOPE_HDR_SUPPORTED=1$/ {
+      print "export STEAM_GAMESCOPE_HDR_SUPPORTED=0"
+      next
+    }
+    /^export STEAM_USE_MANGOAPP=1$/ {
+      print "export STEAM_USE_MANGOAPP=0"
+      next
+    }
+    /^export STEAM_MANGOAPP_PRESETS_SUPPORTED=1$/ {
+      print "export STEAM_MANGOAPP_PRESETS_SUPPORTED=0"
+      next
+    }
+    /^export STEAM_MANGOAPP_HORIZONTAL_SUPPORTED=1$/ {
+      print "export STEAM_MANGOAPP_HORIZONTAL_SUPPORTED=0"
+      next
+    }
+    /^export STEAM_GAMESCOPE_COLOR_MANAGED=1$/ {
+      print "export STEAM_GAMESCOPE_COLOR_MANAGED=0"
+      next
+    }
+    /^export STEAM_GAMESCOPE_VIRTUAL_WHITE=1$/ {
+      print "export STEAM_GAMESCOPE_VIRTUAL_WHITE=0"
+      next
+    }
+    /^export STEAM_GAMESCOPE_VRR_SUPPORTED=1$/ {
+      print "export STEAM_GAMESCOPE_VRR_SUPPORTED=0"
+      next
+    }
+    /^export STEAM_GAMESCOPE_HAS_TEARING_SUPPORT=1$/ {
+      print "export STEAM_GAMESCOPE_HAS_TEARING_SUPPORT=0"
+      next
+    }
+    /^export STEAM_GAMESCOPE_TEARING_SUPPORTED=1$/ {
+      print "export STEAM_GAMESCOPE_TEARING_SUPPORTED=0"
+      next
+    }
+    /^[[:space:]]*export STEAM_GAMESCOPE_FORCE_HDR_DEFAULT=1$/ {
+      sub(/=1$/, "=0")
+      print
+      next
+    }
+    /^[[:space:]]*export STEAM_GAMESCOPE_FORCE_OUTPUT_TO_HDR10PQ_DEFAULT=1$/ {
+      sub(/=1$/, "=0")
+      print
+      next
+    }
+    /^[[:space:]]*export GAMESCOPE_WAYLAND_DISPLAY="\$response_wl_display"$/ {
+      print
+      print "    if [ -x \"${NV_EGPU_GAMESCOPE_SDR_CLAMP:-/home/deck/.local/bin/nv-egpu-gamescope-sdr-clamp}\" ]; then"
+      print "      \"${NV_EGPU_GAMESCOPE_SDR_CLAMP:-/home/deck/.local/bin/nv-egpu-gamescope-sdr-clamp}\" >/tmp/nv-egpu-gamescope-sdr-clamp.log 2>&1 &"
+      print "    fi"
+      next
+    }
+    { print }
+  ' "$STOCK_GAMESCOPE_SESSION" > "$tmp"
+  chmod 700 "$tmp"
+  mv "$tmp" "$out"
+  printf '%s\n' "$out"
+}
+
+disable_steam_gamescope_hdr_config() {
+  local config timestamp backup real seen=""
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  for config in /home/deck/.local/share/Steam/config/config.vdf /home/deck/.steam/steam/config/config.vdf; do
+    [ -f "$config" ] || continue
+    real=$(readlink -f "$config" 2>/dev/null || printf '%s' "$config")
+    case " $seen " in
+      *" $real "*) continue ;;
+    esac
+    seen="$seen $real"
+    backup="${config}.bak-nv-egpu-hdr-off-${timestamp}"
+    cp -a "$config" "$backup"
+    perl -0pi -e '
+      s{
+        ("HDREnabled"\s*\{)
+        (.*?)
+        (\n\s*\})
+      }{
+        my ($head, $body, $tail) = ($1, $2, $3);
+        $body =~ s/("[^"]+"\s+)"1"/$1"0"/g;
+        $head . $body . $tail;
+      }egsx
+    ' "$config"
+  done
+}
+
+egpu_card=
+igpu_card=
+outputs=
+bar1_bytes=0
+stock_session="$STOCK_GAMESCOPE_SESSION"
+
+wait_for_egpu_native_ready || refresh_egpu_state
+
+# NV-EGPU-Buddy safe detach (Game Mode): while the marker exists the relaunched session must NOT take the eGPU
+# even though it is still on the bus (the detach helper removes it once this session is up on the panel).
+detach_mode=0; { [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-detach-mode" ] || [ -e /run/nvegpu/gm-detach-pending ]; } && detach_mode=1
+if [ "$detach_mode" = 0 ] && [ -n "$egpu_card" ] && [ -n "$igpu_card" ] && [ -n "$outputs" ] && bar1_full && [ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
+  clear_session_env
+  export PATH="$SHIM_DIR:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin"
+  export OUTPUT_CONNECTOR
+  OUTPUT_CONNECTOR=$(connector_order)
+  export KWIN_DRM_DEVICES="$egpu_card:$igpu_card"
+  export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
+  export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+  export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+  export __GLX_VENDOR_LIBRARY_NAME=nvidia
+  export PROTON_ENABLE_NVAPI=1
+  export DXVK_ENABLE_NVAPI=1
+  export PROTON_HIDE_NVIDIA_GPU=0
+  export NV_EGPU_GAMESCOPE_FORMAT_FILTER_ENABLE=${NV_EGPU_GAMESCOPE_FORMAT_FILTER_ENABLE:-1}
+  if [ "$NV_EGPU_GAMESCOPE_FORMAT_FILTER_ENABLE" = "1" ]; then
+    export NV_EGPU_GAMESCOPE_FORMAT_FILTER="$FORMAT_FILTER"
+    export NV_EGPU_GAMESCOPE_FORCE_8BIT=${NV_EGPU_GAMESCOPE_FORCE_8BIT:-1}
+    export NV_EGPU_GAMESCOPE_FORCE_LINEAR=${NV_EGPU_GAMESCOPE_FORCE_LINEAR:-0}
+    export NV_EGPU_GAMESCOPE_MAX_BLOCK_HEIGHT=${NV_EGPU_GAMESCOPE_MAX_BLOCK_HEIGHT:-0}
+    export NV_EGPU_GAMESCOPE_DISABLE_MODIFIERS=${NV_EGPU_GAMESCOPE_DISABLE_MODIFIERS:-0}
+    export NV_EGPU_GAMESCOPE_HDMI_REDUCED_BLANKING=${NV_EGPU_GAMESCOPE_HDMI_REDUCED_BLANKING:-0}
+    log "NVIDIA eGPU Gamescope format filter enabled: 8-bit scanout, lowest block height, no linear/no reduced-blanking rewrite"
+  else
+    unset NV_EGPU_GAMESCOPE_FORMAT_FILTER
+    unset NV_EGPU_GAMESCOPE_FORCE_8BIT
+    unset NV_EGPU_GAMESCOPE_FORCE_LINEAR
+    unset NV_EGPU_GAMESCOPE_MAX_BLOCK_HEIGHT
+    unset NV_EGPU_GAMESCOPE_DISABLE_MODIFIERS
+    unset NV_EGPU_GAMESCOPE_HDMI_REDUCED_BLANKING
+    log "NVIDIA eGPU Gamescope format filter disabled; set NV_EGPU_GAMESCOPE_FORMAT_FILTER_ENABLE=1 for diagnostics"
+  fi
+  # 2026-09-11: the Lua hook (~/.config/gamescope/scripts/zz-nv-egpu-sync.lua) is what implements these; the
+  # explicit-sync disable is the non-laggy corruption fix, the syncobj wait guard is the laggy fallback (opt-in).
+  export NV_EGPU_GAMESCOPE_DISABLE_EXPLICIT_SYNC=${NV_EGPU_GAMESCOPE_DISABLE_EXPLICIT_SYNC:-0}   # 2026-09-11: =1 breaks the gamescope WSI layer hook on 610/5060Ti ("non-hooked swapchain" dialog)
+  export NV_EGPU_GAMESCOPE_DRM_SYNC_GUARDS=${NV_EGPU_GAMESCOPE_DRM_SYNC_GUARDS:-0}
+  export NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP=${NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP:-1}
+  export NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP_BIN="$STEAM_SCALE_CLAMP"
+  unset NV_EGPU_GAMESCOPE_OUTPUT_WIDTH
+  unset NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT
+  unset NV_EGPU_GAMESCOPE_NESTED_WIDTH
+  unset NV_EGPU_GAMESCOPE_NESTED_HEIGHT
+  unset NV_EGPU_GAMESCOPE_NESTED_REFRESH
+  stage_gamescope_native_mode || export STEAM_DISPLAY_REFRESH_LIMITS=40,60
+  export NV_EGPU_GAMESCOPE_DISABLE_LAYERS=${NV_EGPU_GAMESCOPE_DISABLE_LAYERS:-1}
+  export NV_EGPU_GAMESCOPE_FORCE_COMPOSITION=${NV_EGPU_GAMESCOPE_FORCE_COMPOSITION:-1}
+  # 2026-08-21: default OFF. Disabling gamescope colour management makes the SDR
+  # Game Mode UI colours wrong/oversaturated (gamescope #2242). Keep CM enabled.
+  export NV_EGPU_GAMESCOPE_DISABLE_COLOR_MANAGEMENT=${NV_EGPU_GAMESCOPE_DISABLE_COLOR_MANAGEMENT:-0}
+  if use_ultrawide_nested_canvas; then
+    export NV_EGPU_GAMESCOPE_OUTPUT_WIDTH=${NV_EGPU_GAMESCOPE_OUTPUT_WIDTH:-5120}
+    export NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT=${NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT:-1440}
+    export NV_EGPU_GAMESCOPE_NESTED_WIDTH=3840
+    export NV_EGPU_GAMESCOPE_NESTED_HEIGHT=1080
+    export NV_EGPU_GAMESCOPE_NESTED_REFRESH=60
+    export STEAM_DISPLAY_REFRESH_LIMITS=40,60
+    log "using 3840x1080 nested Steam canvas on native 5120x1440 eGPU output"
+  fi
+  if [ "$EGPU_GAMESCOPE_HDR" = "1" ]; then
+    # 2026-09-11: do NOT export DXVK_HDR=1 session-wide. It made every SDR game (Black Flag) run a
+    # 10-bit HDR-flavoured swapchain and publish HDR metadata -> grey picture + green flashes at start.
+    # Steam adds DXVK_HDR per game when its HDR toggle is on; stock session does not export it either.
+    unset DXVK_HDR
+    unset ENABLE_HDR_WSI
+    unset PROTON_ENABLE_HDR
+    unset STEAM_GAMESCOPE_FORCE_HDR_DEFAULT
+    unset STEAM_GAMESCOPE_FORCE_OUTPUT_TO_HDR10PQ_DEFAULT
+  else
+    export DXVK_HDR=0
+    export ENABLE_HDR_WSI=0
+    export PROTON_ENABLE_HDR=0
+    export gamescope_hdr_enabled=0
+    export gamescope_adaptive_sync=0
+    export gamescope_tearing_enabled=0
+    export NV_EGPU_GAMESCOPE_SDR_CLAMP="$SDR_CLAMP"
+    export STEAM_GAMESCOPE_HDR_SUPPORTED=0
+    export STEAM_GAMESCOPE_COLOR_MANAGED=0
+    export STEAM_GAMESCOPE_VIRTUAL_WHITE=0
+    export STEAM_GAMESCOPE_FORCE_HDR_DEFAULT=0
+    export STEAM_GAMESCOPE_FORCE_OUTPUT_TO_HDR10PQ_DEFAULT=0
+    disable_steam_gamescope_hdr_config
+    stock_session=$(nohdr_stock_gamescope_session)
+    log "NVIDIA eGPU Game Mode HDR exposure disabled; set NV_EGPU_GAMESCOPE_HDR=1 to opt in"
+  fi
+  if [ -x "$PROFILE_HELPER" ]; then
+    "$PROFILE_HELPER" hdr-repair >/tmp/nv-egpu-buddy-gamescope-prestart.log 2>&1 || true
+  fi
+  if [ "${NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP:-1}" != "0" ] && [ -x "$STEAM_SCALE_CLAMP" ]; then
+    "$STEAM_SCALE_CLAMP" >/tmp/nv-egpu-gamescope-steam-scale-clamp.log 2>&1 &
+  fi
+else
+  clear_egpu_env
+  export OUTPUT_CONNECTOR="*,${PANEL}"
+  if [ "$detach_mode" = 1 ]; then
+    # pin gamescope + Vulkan/EGL to the AMD card so nothing in this session holds the NVIDIA nodes
+    _amd=""; for _c in /sys/class/drm/card[0-9]; do [ "$(cat "$_c/device/vendor" 2>/dev/null)" = 0x1002 ] && { _amd=/dev/dri/${_c##*/}; break; }; done
+    [ -n "$_amd" ] && export KWIN_DRM_DEVICES="$_amd"
+    export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.json VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json
+    export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json __GLX_VENDOR_LIBRARY_NAME=mesa
+  fi
+fi
+
+if [ "${1:-}" = "--print-env" ] || [ "${NV_EGPU_GAMESCOPE_SESSION_PRINT_ENV:-0}" = "1" ]; then
+  printf 'EGPU_PCI=%s\n' "$EGPU_PCI"
+  printf 'BAR1_BYTES=%s\n' "$bar1_bytes"
+  printf 'BAR1_FULL=%s\n' "$(bar1_full && printf true || printf false)"
+  printf 'OUTPUT_CONNECTOR=%s\n' "${OUTPUT_CONNECTOR:-}"
+  printf 'KWIN_DRM_DEVICES=%s\n' "${KWIN_DRM_DEVICES:-}"
+  printf 'VK_DRIVER_FILES=%s\n' "${VK_DRIVER_FILES:-}"
+  printf 'VK_ICD_FILENAMES=%s\n' "${VK_ICD_FILENAMES:-}"
+  printf 'DXVK_HDR=%s\n' "${DXVK_HDR:-}"
+  printf 'NV_EGPU_GAMESCOPE_HDR=%s\n' "$EGPU_GAMESCOPE_HDR"
+  printf 'NV_EGPU_GAMESCOPE_MAX_REFRESH=%s\n' "$EGPU_GAMESCOPE_MAX_REFRESH"
+  printf 'NV_EGPU_GAMESCOPE_OUTPUT_WIDTH=%s\n' "${NV_EGPU_GAMESCOPE_OUTPUT_WIDTH:-}"
+  printf 'NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT=%s\n' "${NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT:-}"
+  printf 'NV_EGPU_GAMESCOPE_NESTED_WIDTH=%s\n' "${NV_EGPU_GAMESCOPE_NESTED_WIDTH:-}"
+  printf 'NV_EGPU_GAMESCOPE_NESTED_HEIGHT=%s\n' "${NV_EGPU_GAMESCOPE_NESTED_HEIGHT:-}"
+  printf 'NV_EGPU_GAMESCOPE_NESTED_REFRESH=%s\n' "${NV_EGPU_GAMESCOPE_NESTED_REFRESH:-}"
+  printf 'NV_EGPU_GAMESCOPE_DISABLE_LAYERS=%s\n' "${NV_EGPU_GAMESCOPE_DISABLE_LAYERS:-}"
+  printf 'NV_EGPU_GAMESCOPE_FORCE_COMPOSITION=%s\n' "${NV_EGPU_GAMESCOPE_FORCE_COMPOSITION:-}"
+  printf 'NV_EGPU_GAMESCOPE_DISABLE_COLOR_MANAGEMENT=%s\n' "${NV_EGPU_GAMESCOPE_DISABLE_COLOR_MANAGEMENT:-}"
+  printf 'NV_EGPU_GAMESCOPE_FORMAT_FILTER=%s\n' "${NV_EGPU_GAMESCOPE_FORMAT_FILTER:-}"
+  printf 'NV_EGPU_GAMESCOPE_FORCE_8BIT=%s\n' "${NV_EGPU_GAMESCOPE_FORCE_8BIT:-}"
+  printf 'NV_EGPU_GAMESCOPE_FORCE_LINEAR=%s\n' "${NV_EGPU_GAMESCOPE_FORCE_LINEAR:-}"
+  printf 'NV_EGPU_GAMESCOPE_MAX_BLOCK_HEIGHT=%s\n' "${NV_EGPU_GAMESCOPE_MAX_BLOCK_HEIGHT:-}"
+  printf 'NV_EGPU_GAMESCOPE_DISABLE_MODIFIERS=%s\n' "${NV_EGPU_GAMESCOPE_DISABLE_MODIFIERS:-}"
+  printf 'NV_EGPU_GAMESCOPE_HDMI_REDUCED_BLANKING=%s\n' "${NV_EGPU_GAMESCOPE_HDMI_REDUCED_BLANKING:-}"
+  printf 'NV_EGPU_GAMESCOPE_DRM_SYNC_GUARDS=%s\n' "${NV_EGPU_GAMESCOPE_DRM_SYNC_GUARDS:-}"
+  printf 'NV_EGPU_GAMESCOPE_SDR_CLAMP=%s\n' "$SDR_CLAMP"
+  printf 'NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP=%s\n' "${NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP:-}"
+  printf 'NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP_BIN=%s\n' "$STEAM_SCALE_CLAMP"
+  printf 'STOCK_GAMESCOPE_SESSION=%s\n' "$stock_session"
+  printf 'STEAM_DISPLAY_REFRESH_LIMITS=%s\n' "${STEAM_DISPLAY_REFRESH_LIMITS:-}"
+  exit 0
+fi
+
+# diagnostics: NV_EGPU_DIAG=1 in /run/nvegpu/diag turns on Proton + Vulkan loader logging for every game of this session
+if [ -e /run/nvegpu/diag ]; then export PROTON_LOG=1 VK_LOADER_DEBUG=error,warn WINEDEBUG=-all,+vulkan; fi   # NV_EGPU_DIAG_PROTON_LOG
+exec "$stock_session"

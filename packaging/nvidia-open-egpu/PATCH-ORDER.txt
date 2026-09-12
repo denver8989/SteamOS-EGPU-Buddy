@@ -1,0 +1,1 @@
+note: full patched tree = stock + 160 + 170 + 165(v2) + 166

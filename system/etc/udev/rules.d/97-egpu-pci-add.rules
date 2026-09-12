@@ -1,0 +1,2 @@
+# eGPU GPU function (re)enumerated on PCI (rescan / tunnel up) -> attach path (stale-bound unbind+FLR when a surprise removal preceded)
+ACTION=="add", SUBSYSTEM=="pci", ENV{PCI_ID}=="10DE:*", ENV{PCI_CLASS}=="30000", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/egpu-hotplug-mount.sh"

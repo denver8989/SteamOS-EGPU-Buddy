@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# egpu-safe-detach (v10) — clean planned hot-detach via Thunderbolt DE-AUTHORIZE.
+#
+# Method from research (kernel docs + KDE bug 511618 + snd_hda D-state reports):
+#   The two freezes are removal-callback stalls, neutralized BEFORE tunnel teardown:
+#     * KWin freeze = a Mesa GBM deadlock (KDE #511618); there is NO live "drop card"
+#       API, so KWin must not OWN the NVIDIA node when it goes away -> pin KWin to the
+#       iGPU and let it release card0 first.
+#     * snd_hda D-state = azx_remove()/cancel_work_sync() in the PCI-remove path ->
+#       unbind snd_hda_intel from the audio function first (power_save already 0).
+#     * nvidia function -> idle it (KWin off) then unbind while usage count is 0.
+#   Then de-authorize the Thunderbolt device: the kernel docs call this "essentially
+#   the same thing as PCIe hot-remove", tearing down the whole tunnel in ONE
+#   kernel-managed op — no per-function `echo 1 > .../remove` (which hits the hang).
+#
+# Re-attach: `echo 1 > <tbdev>/authorized` (or replug) -> automount rebuilds the
+# full Gen4/16GB/NVIDIA-first state.
+set -u
+export HOME=/home/deck   # NOPASSWD sudo calls this directly
+TEARDOWN_ONLY=0
+[ "${1:-}" = "--teardown-only" ] && TEARDOWN_ONLY=1
+HIDE_LIST="/usr/lib/libnvidia-ml.so.1 /usr/lib/libnvidia-ml.so.610.57.04 /usr/lib32/libnvidia-ml.so.1 /usr/lib32/libnvidia-ml.so.610.57.04 /usr/share/glvnd/egl_vendor.d/10_nvidia.json /usr/lib/gbm/nvidia-drm_gbm.so /usr/share/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/implicit_layer.d/nvidia_layers.json /usr/share/egl/egl_external_platform.d/10_nvidia_wayland.json /usr/share/egl/egl_external_platform.d/15_nvidia_gbm.json"
+nv_drm_nodes(){ g=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$g" ] || return 0
+  for n in /sys/class/drm/card[0-9]* /sys/class/drm/renderD*; do [ "$(basename "$(readlink -f "$n/device" 2>/dev/null)")" = "$g" ] && echo "/dev/dri/$(basename "$n")"; done; }
+panel_bl(){ for b in /sys/class/backlight/*; do echo "$1" > "$b/bl_power" 2>/dev/null; done; }
+hide_nv(){ panel_bl 0; /usr/local/sbin/egpu-panel on >/dev/null 2>&1; for f in $HIDE_LIST; do [ -e "$f" ] && mv -f "$f" "$f.egpu-off"; done; ldconfig 2>/dev/null
+  : ; }
+restore_nv(){ for f in $HIDE_LIST; do [ -e "$f.egpu-off" ] && mv -f "$f.egpu-off" "$f"; done; ldconfig 2>/dev/null
+  for d in $(nv_drm_nodes); do case "$d" in */card*) chmod 660 "$d"; chgrp video "$d" ;; *) chmod 666 "$d";; esac; done 2>/dev/null; }
+case "${1:-}" in
+  --prep)    [ "$(id -u)" = 0 ] || exit 1; hide_nv; echo "nvidia userspace hidden"; exit 0 ;;
+  --restore) [ "$(id -u)" = 0 ] || exit 1; restore_nv; echo "nvidia userspace restored"; exit 0 ;;
+  --unload)  [ "$(id -u)" = 0 ] || exit 1; for p in $(fuser /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm /dev/dri/renderD129 2>/dev/null | tr -s " \n" " "); do c=$(tr "\0" " " </proc/$p/cmdline 2>/dev/null); case "$c" in *kwin_wayland*) ;; *) kill "$p" 2>/dev/null;; esac; done; sleep 2; modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia 2>/dev/null; lsmod | grep -q "^nvidia" && { echo "still loaded: $(lsmod|grep "^nvidia"|awk "{print \$1\"=\"\$3}"|tr "\n" " ") holders: $(fuser -v /dev/nvidia0 /dev/dri/renderD129 2>&1 | awk "NR>1&&NF>=3{print \$NF}" | sort -u | tr "\n" " ")"; exit 5; }; echo "nvidia stack unloaded"; exit 0 ;;
+  --republish) [ "$(id -u)" = 0 ] || exit 1; /usr/local/sbin/egpu-republish-display; exit 0 ;;
+  --panel-off) [ "$(id -u)" = 0 ] || exit 1; panel_bl 1; exit 0 ;;
+  --panel-on)  [ "$(id -u)" = 0 ] || exit 1; panel_bl 0; exit 0 ;;
+esac   # caller already moved the compositor off the eGPU; do electrical teardown only
+U=1000
+RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
+DM=/run/user/$U/egpu-detach-mode
+say(){ printf '  %s\n' "$*"; }
+
+[ "$(id -u)" = 0 ] || { echo "run with: sudo $0"; exit 1; }
+
+GPU=$(lspci -Dnn 2>/dev/null | awk '/\[0300\]: .*\[10de:/{print $1; exit}')
+[ -n "$GPU" ] || { say "no eGPU on the bus — nothing to detach."; exit 0; }
+HDA=${GPU%.*}.1
+
+# the authorized AORUS TB device
+TBDEV=""
+for d in /sys/bus/thunderbolt/devices/*-*; do
+  [ -e "$d/device_name" ] && [ "$(cat "$d/authorized" 2>/dev/null)" = 1 ] || continue
+  case "$(cat "$d/device_name" 2>/dev/null)" in *AORUS*|*RTX*|*AI\ BOX*) TBDEV=$d; break ;; esac
+done
+
+# iGPU (amdgpu) card node for KWin
+IGPU_CARD=""
+for c in /sys/class/drm/card[0-9]*; do
+  [ "$(basename "$(readlink -f "$c/device/driver" 2>/dev/null)")" = amdgpu ] && { IGPU_CARD=$(basename "$c"); break; }
+done
+IGPU_CARD=${IGPU_CARD:-card1}
+
+if [ "$TEARDOWN_ONLY" = 1 ]; then
+  say "[1/5] teardown-only: compositor already released by caller (egpu-safe-detach-ui)"
+else
+  # ---- 1. free the eGPU from whichever compositor owns it ----
+  if pgrep -f '[s]tart-gamescope-session' >/dev/null 2>&1 || pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then
+    # GAME MODE: gamescope owns card0. Unlike KWin it can release the device, so we
+    # simply stop the session rather than doing the iGPU-repoint dance.
+    say "[1/5] Game Mode detected — stopping the gamescope session to release the eGPU…"
+    runuser -u deck -- env $RUNENV systemctl --user stop gamescope-session.target >/dev/null 2>&1
+    runuser -u deck -- env $RUNENV systemctl --user stop cachyos-gamescope-autologin.service >/dev/null 2>&1
+    for _ in $(seq 1 20); do
+      pgrep -f '[s]tart-gamescope-session' >/dev/null 2>&1 || pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 || break
+      sleep 1
+    done
+    pkill -x 'gamescope(-wl)?' 2>/dev/null
+    sleep 2
+    released=1
+    say "      gamescope stopped (eGPU released)"
+  else
+    # DESKTOP: KWin mmaps the node and cannot drop it live (KDE #511618), so re-point
+    # it at the iGPU + mesa and restart the compositor unit.
+    say "[1/5] moving KWin off the eGPU ($IGPU_CARD, mesa render)…"
+  touch "$DM"
+  runuser -u deck -- env $RUNENV systemctl --user set-environment \
+    "KWIN_DRM_DEVICES=/dev/dri/$IGPU_CARD" \
+    "KWIN_RENDER_NODES=/dev/dri/$(ls /sys/class/drm/$IGPU_CARD/device/drm 2>/dev/null | grep -m1 renderD)" \
+    "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json" \
+    "__GLX_VENDOR_LIBRARY_NAME=mesa" >/dev/null 2>&1
+  runuser -u deck -- env $RUNENV systemctl --user restart plasma-kwin_wayland.service >/dev/null 2>&1
+    sleep 3; /usr/local/sbin/egpu-republish-display 2>/dev/null || true
+  released=0
+  for _ in $(seq 1 20); do
+    sleep 2
+    k=$(pgrep -x kwin_wayland | head -1)
+    [ -n "$k" ] || continue
+    ls -l /proc/"$k"/fd 2>/dev/null | grep -q 'card0' || { released=1; break; }
+  done
+  if [ "$released" != 1 ]; then
+    say "      KWin still holds card0 (Mesa/KWin fd) — falling back to full logout…"
+    runuser -u deck -- env $RUNENV qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1 \
+      || runuser -u deck -- env $RUNENV qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1
+    for _ in $(seq 1 20); do
+      sleep 2; k=$(pgrep -x kwin_wayland | head -1); [ -n "$k" ] || continue
+      ls -l /proc/"$k"/fd 2>/dev/null | grep -q 'card0' || { released=1; break; }
+    done
+  fi
+  [ "$released" = 1 ] || { say "      could not free card0 — ABORTING (safe; eGPU still attached)."; rm -f "$DM"; exit 3; }
+  say "      KWin released the eGPU (card0 free)"
+  fi
+
+fi
+
+# ---- 2. unbind snd_hda_intel from the audio function (avoids the D-state hang) ----
+say "[2/5] unbinding audio ($HDA)…"
+echo 0 > /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null
+# GUARD: never unbind/remove while the eGPU sound card is still held by an open
+# fd (PipeWire) -- that blocks in snd_card_free (uninterruptible D-state ->
+# reboot). The UI sets the eGPU card profile "off" first; if something still
+# holds it, abort cleanly here instead of wedging the machine.
+snd_n=""
+for s in /sys/class/sound/card[0-9]*; do
+  case "$(readlink -f "$s/device" 2>/dev/null)" in *"$HDA"*) snd_n=${s##*card}; break ;; esac
+done
+if [ -n "$snd_n" ]; then
+  held=$(fuser /dev/snd/controlC"$snd_n" /dev/snd/pcmC"$snd_n"D* 2>/dev/null | tr -s " ")
+  if [ -n "$held" ]; then
+    say "      eGPU sound card (card$snd_n) still open by:$held -- ABORTING before the unbind."
+    say "      (removing it now would hang in snd_card_free / D-state.) Release audio first:"
+    say "      set the eGPU card profile 'off' in PipeWire, then retry."
+    rm -f "$DM"; exit 5
+  fi
+fi
+if [ -L "/sys/bus/pci/devices/$HDA/driver" ]; then
+  drv=$(basename "$(readlink -f "/sys/bus/pci/devices/$HDA/driver")")
+  echo "$HDA" > "/sys/bus/pci/drivers/$drv/unbind" 2>/dev/null
+  for _ in $(seq 1 10); do [ -L "/sys/bus/pci/devices/$HDA/driver" ] || break; sleep 0.5; done
+fi
+say "      audio driver: $([ -L /sys/bus/pci/devices/$HDA/driver ] && echo still-bound || echo unbound)"
+
+# ---- 3. release every /dev/nvidia* user, then FULLY unload the nvidia stack ----
+say "[3/5] releasing NVIDIA users + unloading the driver stack…"
+systemctl stop nvidia-persistenced 2>/dev/null; systemctl stop lactd 2>/dev/null
+runuser -u deck -- env $RUNENV systemd-run --user --collect --quiet --wait --unit=egpu-steam-shutdown-$(date +%s) /usr/bin/steam -shutdown >/dev/null 2>&1; for _ in $(seq 1 15); do pgrep -x steam >/dev/null || break; sleep 1; done
+for _ in 1 2 3; do
+  held=$(fuser /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm $(nv_drm_nodes) 2>/dev/null | tr -s ' \n' ' ')
+  [ -n "$held" ] || break
+  for p in $held; do cmd=$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null)
+    case "$cmd" in *steam*|*--type=gpu-process*|*--type=broker*|*--type=utility*|*go-hub*|*gohub*|*legohub*|*lact*|*nvidia-smi*|*zenity*|*python3*|*WebKit*|*xdg-dbus-proxy*|*panel2-overlay*) kill "$p" 2>/dev/null ;; esac
+  done; sleep 2
+done
+held=$(fuser -v /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm $(nv_drm_nodes) 2>&1 | awk 'NR>1&&NF>=3{print $NF"("$2")"}' | sort -u | tr '\n' ' ')
+[ -z "$held" ] || { say "      /dev/nvidia* still held by: $held -- ABORTING before removal (safe; eGPU still attached)"; restore_nv; rm -f "$DM"; exit 5; }
+modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia 2>/dev/null
+lsmod | grep -q '^nvidia' && { say "      nvidia stack still loaded: $(lsmod|grep '^nvidia'|awk '{print $1"="$3}'|tr '\n' ' ') -- ABORTING (safe)"; restore_nv; rm -f "$DM"; exit 5; }
+say "      nvidia stack fully unloaded"
+
+
+# ---- 4. PCI-remove the GPU functions (Thunderbolt tunnel stays up -> rescan re-attach) ----
+say "[4/5] PCI-removing $GPU (+audio fn) — tunnel left up for software re-attach…"
+[ -e "/sys/bus/pci/devices/$GPU/remove" ] || { modprobe --ignore-install nvidia 2>/dev/null; sleep 2; }
+echo 1 > "/sys/bus/pci/devices/$GPU/remove" 2>/dev/null; sleep 3
+[ -e "/sys/bus/pci/devices/$HDA/remove" ] && { echo 1 > "/sys/bus/pci/devices/$HDA/remove" 2>/dev/null; sleep 1; }
+modprobe -r nvidia 2>/dev/null
+
+# ---- 5. verify ----
+on_bus=$(lspci -Dn 2>/dev/null | grep -cE '0300: 10de:')
+say "[5/5] result:"
+say "      eGPU on bus : $on_bus   (0 = tunnel removed, SAFE TO UNPLUG)"
+say "      nvidia mods : $(lsmod 2>/dev/null | grep -c '^nvidia')"
+say "      floods      : $(dmesg 2>/dev/null | grep -c 'data fabric sync flood')"
+say "      D-state     : $(ps -eo stat,comm 2>/dev/null | awk '$1 ~ /D/ {print $2}' | tr '\n' ' ')"
+rm -f "$DM"
+runuser -u deck -- env $RUNENV bash -c 'pgrep -x plasmashell >/dev/null || (setsid plasmashell >/dev/null 2>&1 &)' 2>/dev/null
+[ "$on_bus" = 0 ] && say "DONE — safe to unplug. Re-attach WITHOUT replug: sudo egpu-reattach" \
+                  || say "DONE — but GPU still on bus; do NOT unplug."

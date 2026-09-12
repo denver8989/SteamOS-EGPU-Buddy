@@ -1,0 +1,12 @@
+#!/bin/bash
+# nv-egpu-buddy boot policy (2026-09-12): ALWAYS boot into Game Mode (gamescope-session), whether the
+# eGPU is attached or not. "Switch to Desktop" persists Session=plasma.desktop on CachyOS, so without
+# this a reboot from the desktop stays on the desktop. Opt-out: touch /etc/nv-egpu-buddy/boot-desktop
+set -u
+CONF=/etc/plasmalogin.conf
+sess=gamescope-session.desktop
+[ -e /etc/nv-egpu-buddy/boot-desktop ] && sess=plasma.desktop
+[ -f "$CONF" ] || exit 0
+if grep -q "^Session=$sess\$" "$CONF"; then logger -t egpu-cond-session "boot session already $sess"; exit 0; fi
+sed -i "s/^Session=.*/Session=$sess/" "$CONF"
+logger -t egpu-cond-session "boot session -> $sess"

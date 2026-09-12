@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# Steam can recalculate this external gamescope display as a 49" TV and relaunch
+# Big Picture with a 2.4x CEF scale. On a 5120x1440 panel that leaves the UI
+# with a 2125x598 viewport, causing cropped and overlapping elements.
+
+[ "${NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP:-1}" != "0" ] || exit 0
+
+scale=${NV_EGPU_STEAM_UI_SCALE:-1.27981042861938477}
+min_scale=${NV_EGPU_STEAM_UI_MIN_SCALE:-0.711512446403503418}
+max_scale=${NV_EGPU_STEAM_UI_MAX_SCALE:-3.40971922874450684}
+fast_attempts=${NV_EGPU_STEAM_SCALE_CLAMP_FAST_ATTEMPTS:-45}
+interval=${NV_EGPU_STEAM_SCALE_CLAMP_INTERVAL:-10}
+live_interval=${NV_EGPU_STEAM_SCALE_CLAMP_LIVE_INTERVAL:-300}
+runtime_dir=${XDG_RUNTIME_DIR:-/tmp}
+lock_file="$runtime_dir/nv-egpu-gamescope-steam-scale-clamp.lock"
+timestamp=$(date +%Y%m%d_%H%M%S)
+
+log() {
+  printf 'nv-egpu-gamescope-steam-scale-clamp: %s\n' "$*" >&2
+}
+
+mkdir -p "$runtime_dir" 2>/dev/null || true
+exec 9>"$lock_file"
+if ! flock -n 9; then
+  exit 0
+fi
+
+unique_existing_files() {
+  local seen="" path real
+  for path in "$@"; do
+    [ -f "$path" ] || continue
+    real=$(readlink -f "$path" 2>/dev/null || printf '%s' "$path")
+    case " $seen " in
+      *" $real "*) continue ;;
+    esac
+    seen="$seen $real"
+    printf '%s\n' "$path"
+  done
+}
+
+sanitize_config() {
+  local config tmp backup
+  while IFS= read -r config; do
+    [ -n "$config" ] || continue
+    grep -qE 'External: [^"]*\|\|\|Windowed' "$config" || continue
+
+    tmp=$(mktemp)
+    cp "$config" "$tmp"
+    NV_EGPU_STEAM_UI_MIN_SCALE="$min_scale" \
+    NV_EGPU_STEAM_UI_MAX_SCALE="$max_scale" \
+    NV_EGPU_STEAM_UI_SCALE="$scale" \
+    perl -0pi -e '
+      my $min = $ENV{"NV_EGPU_STEAM_UI_MIN_SCALE"};
+      my $max = $ENV{"NV_EGPU_STEAM_UI_MAX_SCALE"};
+      my $scale = $ENV{"NV_EGPU_STEAM_UI_SCALE"};
+
+      sub set_key {
+        my ($body, $key, $value, $indent) = @_;
+        if ($body =~ s/(\n[ \t]*"\Q$key\E"[ \t]*")[^"]*(")/$1$value$2/s) {
+          return $body;
+        }
+        return $body . "\n" . $indent . "\"" . $key . "\"\t\t\"" . $value . "\"";
+      }
+
+      s{(\n([ \t]*)"Current"[ \t]*\n\2\{)(.*?)(\n\2\})}{
+        my ($open, $indent, $body, $close) = ($1, $2, $3, $4);
+        if ($body =~ /"name"[ \t]*"External: .*?\|\|\|Windowed"/s) {
+          my $key_indent = $indent . "\t";
+          $body = set_key($body, "MinScaleFactor", $min, $key_indent);
+          $body = set_key($body, "MaxScaleFactor", $max, $key_indent);
+          $body = set_key($body, "AutoScaleFactor", $scale, $key_indent);
+          $body = set_key($body, "ScaleFactor", $scale, $key_indent);
+        }
+        $open . $body . $close;
+      }egs;
+
+      s{(\n([ \t]*)"External: [^\n]*?\|\|\|Windowed"[ \t]*\n\2\{)(.*?)(\n\2\})}{
+        my ($open, $indent, $body, $close) = ($1, $2, $3, $4);
+        my $key_indent = $indent . "\t";
+        $body = set_key($body, "MinScaleFactor", $min, $key_indent);
+        $body = set_key($body, "MaxScaleFactor", $max, $key_indent);
+        $body = set_key($body, "AutoScaleFactor", $scale, $key_indent);
+        $body = set_key($body, "ScaleFactor", $scale, $key_indent);
+        $open . $body . $close;
+      }egs;
+    ' "$tmp"
+
+    if ! cmp -s "$tmp" "$config"; then
+      backup="$config.bak-nv-egpu-steam-scale-clamp-$timestamp"
+      [ -e "$backup" ] || cp -a "$config" "$backup"
+      cat "$tmp" > "$config"
+      chown deck:deck "$config" 2>/dev/null || true
+      log "clamped $config to Steam UI scale $scale"
+    fi
+    rm -f "$tmp"
+  done <<EOF
+$(unique_existing_files \
+  /home/deck/.local/share/Steam/config/config.vdf \
+  /home/deck/.steam/steam/config/config.vdf)
+EOF
+}
+
+config_signature() {
+  local config
+  while IFS= read -r config; do
+    [ -n "$config" ] || continue
+    stat -Lc '%n:%Y:%s' "$config" 2>/dev/null || true
+  done <<EOF | paste -sd ';' -
+$(unique_existing_files \
+  /home/deck/.local/share/Steam/config/config.vdf \
+  /home/deck/.steam/steam/config/config.vdf)
+EOF
+}
+
+steamwebhelper_signature() {
+  pgrep -u "$(id -u)" -x steamwebhelper 2>/dev/null | sort -n | paste -sd, -
+}
+
+set_live_scale() {
+  command -v node >/dev/null 2>&1 || return 0
+  NV_EGPU_STEAM_UI_SCALE="$scale" node <<'NODE'
+const http = require('http');
+const net = require('net');
+const crypto = require('crypto');
+
+const scale = Number(process.env.NV_EGPU_STEAM_UI_SCALE || '1.27981042861938477');
+
+function getPages() {
+  return new Promise((resolve, reject) => {
+    const req = http.get('http://127.0.0.1:8080/json', res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    req.setTimeout(1500, () => {
+      req.destroy(new Error('timeout'));
+    });
+    req.on('error', reject);
+  });
+}
+
+function encodeFrame(payload) {
+  const data = Buffer.from(payload);
+  let header;
+  if (data.length < 126) {
+    header = Buffer.alloc(2);
+    header[1] = 0x80 | data.length;
+  } else if (data.length < 65536) {
+    header = Buffer.alloc(4);
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(data.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(data.length), 2);
+  }
+  header[0] = 0x81;
+  const mask = crypto.randomBytes(4);
+  const frame = Buffer.concat([header, mask, data]);
+  for (let i = 0; i < data.length; i++) {
+    frame[header.length + 4 + i] ^= mask[i % 4];
+  }
+  return frame;
+}
+
+function decodeFrames(buffers, onText) {
+  const combined = Buffer.concat(buffers.splice(0));
+  let offset = 0;
+  while (offset + 2 <= combined.length) {
+    const b0 = combined[offset];
+    const b1 = combined[offset + 1];
+    let length = b1 & 0x7f;
+    let pos = offset + 2;
+    if (length === 126) {
+      if (pos + 2 > combined.length) break;
+      length = combined.readUInt16BE(pos);
+      pos += 2;
+    } else if (length === 127) {
+      if (pos + 8 > combined.length) break;
+      length = Number(combined.readBigUInt64BE(pos));
+      pos += 8;
+    }
+    const masked = Boolean(b1 & 0x80);
+    let mask;
+    if (masked) {
+      if (pos + 4 > combined.length) break;
+      mask = combined.subarray(pos, pos + 4);
+      pos += 4;
+    }
+    if (pos + length > combined.length) break;
+    const payload = Buffer.from(combined.subarray(pos, pos + length));
+    if (masked) {
+      for (let i = 0; i < payload.length; i++) {
+        payload[i] ^= mask[i % 4];
+      }
+    }
+    if ((b0 & 0x0f) === 1) {
+      onText(payload.toString());
+    }
+    offset = pos + length;
+  }
+  if (offset < combined.length) {
+    buffers.push(combined.subarray(offset));
+  }
+}
+
+function evaluate(wsUrl, expression) {
+  const url = new URL(wsUrl);
+  return new Promise((resolve, reject) => {
+    const key = crypto.randomBytes(16).toString('base64');
+    const socket = net.connect(Number(url.port), url.hostname);
+    const buffers = [];
+    let headers = Buffer.alloc(0);
+    let upgraded = false;
+    socket.setTimeout(2000);
+    socket.on('connect', () => {
+      socket.write([
+        `GET ${url.pathname}${url.search} HTTP/1.1`,
+        `Host: ${url.host}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Key: ${key}`,
+        'Sec-WebSocket-Version: 13',
+        '',
+        ''
+      ].join('\r\n'));
+    });
+    socket.on('data', chunk => {
+      if (!upgraded) {
+        headers = Buffer.concat([headers, chunk]);
+        const end = headers.indexOf('\r\n\r\n');
+        if (end < 0) return;
+        const head = headers.subarray(0, end).toString();
+        if (!/^HTTP\/1\.1 101/.test(head)) {
+          reject(new Error(head.split('\r\n')[0] || 'websocket upgrade failed'));
+          socket.destroy();
+          return;
+        }
+        upgraded = true;
+        socket.write(encodeFrame(JSON.stringify({
+          id: 1,
+          method: 'Runtime.evaluate',
+          params: { expression, returnByValue: true, awaitPromise: true }
+        })));
+        const rest = headers.subarray(end + 4);
+        if (rest.length) buffers.push(rest);
+      } else {
+        buffers.push(chunk);
+      }
+      decodeFrames(buffers, text => {
+        let msg;
+        try {
+          msg = JSON.parse(text);
+        } catch {
+          return;
+        }
+        if (msg.id === 1) {
+          socket.end();
+          resolve(msg.result || msg.error || {});
+        }
+      });
+    });
+    socket.on('timeout', () => {
+      socket.destroy(new Error('timeout'));
+    });
+    socket.on('error', reject);
+  });
+}
+
+(async () => {
+  const pages = await getPages();
+  const expression = `
+    (() => {
+      if (typeof SteamClient !== "object" || !SteamClient._internal ||
+          typeof SteamClient._internal.SetForceDeviceScaleFactor !== "function") {
+        return "no-scale-api";
+      }
+      SteamClient._internal.SetForceDeviceScaleFactor(${scale});
+      if (typeof SteamClient._internal.GetDisplayScaleFactors === "function") {
+        return SteamClient._internal.GetDisplayScaleFactors();
+      }
+      return "scale-set";
+    })()
+  `;
+  const targets = pages.filter(page =>
+    page.webSocketDebuggerUrl && /Steam Big Picture Mode|SharedJSContext/.test(page.title || '')
+  );
+  await Promise.allSettled(targets.map(page => evaluate(page.webSocketDebuggerUrl, expression)));
+})().catch(() => {});
+NODE
+}
+
+attempt=0
+last_config_signature=
+last_steamwebhelper_signature=
+last_live_check=0
+while :; do
+  now=$(date +%s)
+  current_config_signature=$(config_signature)
+  current_steamwebhelper_signature=$(steamwebhelper_signature)
+
+  if [ "$attempt" -lt "$fast_attempts" ] ||
+     [ "$current_config_signature" != "$last_config_signature" ]; then
+    sanitize_config || true
+    current_config_signature=$(config_signature)
+  fi
+
+  if [ "$attempt" -lt "$fast_attempts" ] ||
+     [ "$current_steamwebhelper_signature" != "$last_steamwebhelper_signature" ] ||
+     [ $((now - last_live_check)) -ge "$live_interval" ]; then
+    set_live_scale || true
+    last_live_check=$now
+  fi
+
+  last_config_signature=$current_config_signature
+  last_steamwebhelper_signature=$current_steamwebhelper_signature
+
+  attempt=$((attempt + 1))
+  if [ "$attempt" -lt "$fast_attempts" ]; then
+    sleep 1
+    continue
+  fi
+
+  if ! pgrep -u "$(id -u)" -x steam >/dev/null 2>&1 &&
+     ! pgrep -u "$(id -u)" -x steamwebhelper >/dev/null 2>&1; then
+    exit 0
+  fi
+  sleep "$interval"
+done

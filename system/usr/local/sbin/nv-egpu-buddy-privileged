@@ -1,0 +1,562 @@
+#!/usr/bin/env bash
+# Root-owned privileged boundary for the runtime eGPU scripts.
+# Only fixed, safety-gated actions are accepted. Never source user-owned files.
+set -euo pipefail
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+detect_nvidia_gpu_bdf() {
+  local dev vendor class
+  for dev in /sys/bus/pci/devices/*; do
+    [ -r "$dev/vendor" ] || continue
+    vendor=$(cat "$dev/vendor" 2>/dev/null || true)
+    [ "$vendor" = "0x10de" ] || continue
+    class=$(cat "$dev/class" 2>/dev/null || true)
+    case "$class" in
+      0x030000|0x030200) basename "$dev" ;;
+    esac
+  done | sort -V | head -n 1
+}
+
+GPU=${EGPU_GPU_BDF:-${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}}
+[ -n "$GPU" ] || GPU=0000:62:00.0
+AUD=${EGPU_AUDIO_BDF:-${GPU%.*}.1}
+GDEV=/sys/bus/pci/devices/$GPU
+PCI_DEVICES=/sys/bus/pci/devices
+REMOVAL_PROOF=/etc/nv-egpu-buddy/surprise-removal-safe
+
+die() {
+  printf 'egpu-privileged: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+cfg0() {
+  xxd -l4 "$1/config" 2>/dev/null | awk '{print $2$3}'
+}
+
+device_state() {
+  local dev=$1 width dword
+  [ -e "$dev" ] || { printf 'ABSENT\n'; return; }
+  width=$(cat "$dev/current_link_width" 2>/dev/null || true)
+  [ "$width" = "63" ] && { printf 'ZOMBIE\n'; return; }
+  dword=$(cfg0 "$dev" || true)
+  if [ "$dword" = "ffffffff" ] || [ -z "$dword" ]; then
+    printf 'ZOMBIE\n'
+  else
+    printf 'ALIVE\n'
+  fi
+}
+
+gpu_state() {
+  device_state "$GDEV"
+}
+
+require_gpu_alive() {
+  local state
+  state=$(gpu_state)
+  [ "$state" = "ALIVE" ] || die "GPU is $state; refusing $1" 2
+}
+
+require_clean_subtree() {
+  local dev state
+  for dev in "$PCI_DEVICES"/0000:*; do
+    [ -e "$dev" ] || continue
+    case "$(cat "$dev/vendor" 2>/dev/null || true)" in
+      0x10de|0x8086) ;;
+      *) continue ;;
+    esac
+    state=$(device_state "$dev")
+    [ "$state" != "ZOMBIE" ] ||
+      die "unreadable device ${dev##*/}; refusing rescan" 2
+  done
+}
+
+require_removal_proof() {
+  grep -qx 'yes' "$REMOVAL_PROOF" 2>/dev/null ||
+    die "surprise-removal proof is absent; refusing display-driver load" 2
+}
+
+removal_proven() {
+  grep -qx 'yes' "$REMOVAL_PROOF" 2>/dev/null
+}
+
+require_supported_driver_stack() {
+  local version license
+  version=$(modinfo -F version nvidia 2>/dev/null | head -1 || true)
+  license=$(modinfo -F license nvidia 2>/dev/null | head -1 || true)
+  [ -n "$version" ] && [ -n "$license" ] ||
+    die "NVIDIA kernel module is not identifiable; refusing eGPU attach" 2
+  # 2026-08-19 Blackwell pivot: the RTX 5060 Ti (GB206) ONLY works on the OPEN
+  # modules (proprietary refuses to bind: "requires use of the NVIDIA open
+  # kernel modules"). The old block on Dual MIT/GPL was an Ampere/3080-era rule
+  # (open+GSP caused a data-fabric sync flood on that card) and is now inverted.
+  # Guard on VERSION instead: 580 GSP hard-reset this AMD platform every ~35min;
+  # 610.57.04 fixed it. Refuse anything older than 590.
+  case "$license" in
+    *"Dual MIT/GPL"*)
+      case "${version%%.*}" in
+        ''|*[!0-9]*)
+          die "NVIDIA open module version '$version' unparseable; refusing eGPU attach" 2
+          ;;
+        *)
+          [ "${version%%.*}" -ge 590 ] ||
+            die "NVIDIA open module $version is too old for this eGPU (needs >=590; 580 GSP hard-resets this AMD platform)" 2
+          ;;
+      esac
+      ;;
+  esac
+}
+
+require_compute_only_driver_state() {
+  if ! removal_proven && [ -d /sys/module/nvidia_drm ]; then
+    die "NVIDIA DRM is loaded without removal proof; refusing compute attach" 2
+  fi
+}
+
+require_safe_display_handoff() {
+  local card enabled internal_enabled=no
+  for enabled in /sys/class/drm/card*-eDP-*/enabled; do
+    [ -e "$enabled" ] || continue
+    [ "$(cat "$enabled" 2>/dev/null || true)" != "enabled" ] || internal_enabled=yes
+  done
+
+  # Wayland/atomic KMS can leave the legacy 'enabled' sysfs attribute stale.
+  # Connector presence alone is not proof of a usable panel: after a failed
+  # eGPU detach we observed eDP-1 status=connected while every CRTC was
+  # active=0 and the screen was black. Accept only a legacy enabled flag or an
+  # atomic state where an eDP connector is actually attached to a CRTC.
+  if [ "$internal_enabled" != "yes" ]; then
+    for state in /sys/kernel/debug/dri/[0-9]*/state /sys/kernel/debug/dri/0000:*/state; do
+      [ -r "$state" ] || continue
+      awk '
+        /^connector\[[0-9]+\]: eDP-/ { in_edp = 1; next }
+        /^connector\[/ { in_edp = 0 }
+        in_edp && /^[[:space:]]*crtc=crtc-/ { found = 1 }
+        END { exit(found ? 0 : 1) }
+      ' "$state" && { internal_enabled=yes; break; }
+    done
+  fi
+  [ "$internal_enabled" = "yes" ] ||
+    die "internal panel is not actively lit; refusing GPU removal" 2
+
+  for card in "$GDEV"/drm/card*; do
+    [ -e "$card" ] || continue
+    for enabled in "$card"/card*-*/enabled; do
+      [ -e "$enabled" ] || continue
+      [ "$(cat "$enabled" 2>/dev/null || true)" = "enabled" ] || continue
+      # The legacy 'enabled' attribute goes stale after KWin moves off the eGPU
+      # (detach mode). Only refuse if the connector is ACTUALLY attached to a CRTC
+      # in the atomic state — otherwise nothing is being driven and removal is safe.
+      _rsdh_conn=$(basename "$(dirname "$enabled")"); _rsdh_conn=${_rsdh_conn#card*-}
+      _rsdh_active=0
+      for state in /sys/kernel/debug/dri/[0-9]*/state /sys/kernel/debug/dri/0000:*/state; do
+        [ -r "$state" ] || continue
+        awk -v c="$_rsdh_conn" '
+          $0 ~ ("^connector\\[[0-9]+\\]: " c "$") { in_c = 1; next }
+          /^connector\[/ { in_c = 0 }
+          in_c && /^[[:space:]]*crtc=crtc-/ { found = 1 }
+          END { exit(found ? 0 : 1) }
+        ' "$state" && { _rsdh_active=1; break; }
+      done
+      [ "$_rsdh_active" = 1 ] &&
+        die "an eGPU display output ($_rsdh_conn) is driving a CRTC; refusing GPU removal" 2
+    done
+  done
+}
+
+require_no_external_link() {
+  local dev name
+  [ "$(gpu_state)" = "ABSENT" ] || die "GPU is present; refusing host-link recovery" 2
+
+  for dev in "$PCI_DEVICES"/0000:*; do
+    [ -e "$dev" ] || continue
+    case "$(cat "$dev/vendor" 2>/dev/null || true)" in
+      0x10de|0x8086) die "eGPU PCIe subtree still exists at ${dev##*/}; refusing host-link recovery" 2 ;;
+    esac
+  done
+
+  for dev in /sys/bus/thunderbolt/devices/*; do
+    [ -e "$dev" ] || continue
+    name=${dev##*/}
+    case "$name" in
+      domain*|[0-9]*-0) ;;
+      *) die "external Thunderbolt device exists; refusing host-link recovery" 2 ;;
+    esac
+  done
+
+  for dev in /sys/class/typec/*-partner; do
+    [ -e "$dev" ] || continue
+    die "Type-C partner exists; refusing host-link recovery" 2
+  done
+}
+
+bridge_has_children() {
+  local bridge=$1 bridge_real child child_real
+  bridge_real=$(readlink -f "$bridge" 2>/dev/null || true)
+  [ -n "$bridge_real" ] || return 1
+  for child in "$PCI_DEVICES"/*; do
+    [ -e "$child" ] || continue
+    child_real=$(readlink -f "$child" 2>/dev/null || true)
+    case "$child_real" in
+      "$bridge_real"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+require_empty_sibling_bridge() {
+  local bdf=$1 dev class gpu_real gpu_bridge switch_dir dev_real
+  dev=$PCI_DEVICES/$bdf
+  [ -e "$dev" ] || die "sibling $bdf is absent" 2
+  [ "$(device_state "$dev")" = "ALIVE" ] ||
+    die "sibling $bdf is absent or unreadable" 2
+  class=$(cat "$dev/class" 2>/dev/null || true)
+  [ "$class" = "0x060400" ] ||
+    die "sibling $bdf is not a PCI bridge" 2
+  gpu_real=$(readlink -f "$GDEV" 2>/dev/null || true)
+  dev_real=$(readlink -f "$dev" 2>/dev/null || true)
+  [ -n "$gpu_real" ] && [ -n "$dev_real" ] ||
+    die "cannot resolve GPU/sibling sysfs paths" 2
+  gpu_bridge=$(dirname "$gpu_real")
+  switch_dir=$(dirname "$gpu_bridge")
+  case "$dev_real" in
+    "$switch_dir"/*) ;;
+    *) die "sibling $bdf is not on the active eGPU switch" 2 ;;
+  esac
+  [ "$dev_real" != "$gpu_bridge" ] ||
+    die "refusing to remove the active GPU downstream bridge" 2
+  ! bridge_has_children "$dev" ||
+    die "sibling $bdf has child devices; refusing remove" 2
+}
+
+[ "$(id -u)" -eq 0 ] || die "must run as root"
+[ "$#" -ge 1 ] || die "missing action"
+
+action=$1
+shift
+
+case "$action" in
+  status)
+    [ "$#" -eq 0 ] || die "status takes no arguments"
+    gpu_state
+    ;;
+  rescan)
+    [ "$#" -eq 0 ] || die "rescan takes no arguments"
+    require_supported_driver_stack
+    [ "$(gpu_state)" = "ABSENT" ] || die "GPU is already present; refusing rescan" 2
+    require_clean_subtree
+    echo 1 > /sys/bus/pci/rescan
+    ;;
+  remove-sibling)
+    [ "$#" -eq 1 ] || die "remove-sibling requires one BDF"
+    require_empty_sibling_bridge "$1"
+    dev=$PCI_DEVICES/$1
+    echo 1 > "$dev/remove"
+    ;;
+  unbind-nvidia)
+    [ "$#" -eq 0 ] || die "unbind-nvidia takes no arguments"
+    require_gpu_alive "NVIDIA unbind"
+    driver=$(basename "$(readlink -f "$GDEV/driver" 2>/dev/null)" 2>/dev/null || true)
+    [ "$driver" = "nvidia" ] ||
+      die "GPU is not bound to NVIDIA" 2
+    ! compgen -G "$GDEV/drm/card*" >/dev/null ||
+      die "NVIDIA DRM card exists; refusing unbind" 2
+    echo "$GPU" > /sys/bus/pci/drivers/nvidia/unbind
+    ;;
+  resize)
+    [ "$#" -eq 1 ] || die "resize requires one size code"
+    case "$1" in 12|13|14) ;; *) die "resize code $1 is not allowed" 2 ;; esac
+    require_gpu_alive "BAR1 resize"
+    [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing resize" 2
+    [ -e "$GDEV/resource1_resize" ] || die "BAR1 resize control is absent" 2
+    echo "$1" > "$GDEV/resource1_resize"
+    ;;
+  iommu-passthrough)
+    # Realise the cmdline's iommu=pt intent for the eGPU. The kernel marks anything behind Thunderbolt
+    # as untrusted/removable and forces its IOMMU group into a translated DMA domain for DMA-attack
+    # protection, overriding iommu=pt. That makes every GPU DMA pay page-table translation + IOTLB
+    # misses. Flipping the group to 'identity' removes that. Only possible while EVERY device in the
+    # group is driver-unbound, so this runs in the same driverless window as the BAR1 resize.
+    [ "$#" -eq 0 ] || die "iommu-passthrough takes no arguments"
+    require_gpu_alive "IOMMU passthrough"
+    [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing IOMMU change" 2
+    grp=$(basename "$(readlink -f "$GDEV/iommu_group" 2>/dev/null)" 2>/dev/null)
+    [ -n "$grp" ] && [ -w "/sys/kernel/iommu_groups/$grp/type" ] || die "IOMMU group type not writable" 2
+    for dev in /sys/kernel/iommu_groups/"$grp"/devices/*; do
+      b=$(basename "$dev")
+      if [ -L "/sys/bus/pci/devices/$b/driver" ]; then
+        drv=$(basename "$(readlink -f "/sys/bus/pci/devices/$b/driver")")
+        [ "$drv" = "nvidia" ] && die "nvidia still bound to $b" 2
+        printf '%s' "$b" > "/sys/bus/pci/devices/$b/driver/unbind" 2>/dev/null || true
+      fi
+    done
+    cur=$(cat "/sys/kernel/iommu_groups/$grp/type" 2>/dev/null)
+    if [ "$cur" != "identity" ]; then
+      printf 'identity' > "/sys/kernel/iommu_groups/$grp/type" || die "IOMMU group $grp refused identity" 1
+    fi
+    printf 'iommu group %s: %s\n' "$grp" "$(cat "/sys/kernel/iommu_groups/$grp/type")"
+    ;;
+  bar1)
+    [ "$#" -eq 0 ] || die "bar1 takes no arguments"
+    require_gpu_alive "BAR1 inspection"
+    lspci -vvs "$GPU"
+    ;;
+  reset-gpu)
+    # Function-Level Reset of the GPU while driverless. Clears the host-side
+    # first-init residue that makes NVIDIA RmInitAdapter (0x24:0x72:1603) fail on
+    # every warm replug after the first since boot. FLR ONLY — never a secondary
+    # bus reset (that is the fabric-flood family). Refuses on a bound/zombie GPU.
+    [ "$#" -eq 0 ] || die "reset-gpu takes no arguments"
+    require_gpu_alive "function-level reset"
+    [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing reset" 2
+    [ -e "$GDEV/reset_method" ] || die "reset control is absent" 2
+    case " $(cat "$GDEV/reset_method" 2>/dev/null || true) " in
+      *" flr "*) ;;
+      *) die "FLR is not an available reset method; refusing (no bus-reset fallback)" 2 ;;
+    esac
+    # Pin to FLR so the kernel can never fall back to a flood-risky bus reset.
+    echo flr > "$GDEV/reset_method"
+    echo 1 > "$GDEV/reset"
+    ;;
+  load-nvidia)
+    [ "$#" -eq 0 ] || die "load-nvidia takes no arguments"
+    require_supported_driver_stack
+    require_gpu_alive "NVIDIA probe"
+    require_compute_only_driver_state
+    modprobe --ignore-install nvidia
+    ;;
+  bind-nvidia)
+    [ "$#" -eq 0 ] || die "bind-nvidia takes no arguments"
+    require_supported_driver_stack
+    require_gpu_alive "NVIDIA bind"
+    require_compute_only_driver_state
+    [ ! -L "$GDEV/driver" ] || die "GPU already has a bound driver" 2
+    echo "$GPU" > /sys/bus/pci/drivers/nvidia/bind
+    ;;
+  load-modeset)
+    [ "$#" -eq 0 ] || die "load-modeset takes no arguments"
+    require_removal_proof
+    require_gpu_alive "NVIDIA modeset probe"
+    modprobe --ignore-install nvidia_modeset
+    ;;
+  load-drm)
+    [ "$#" -eq 0 ] || die "load-drm takes no arguments"
+    require_removal_proof
+    require_gpu_alive "NVIDIA DRM probe"
+    modprobe --ignore-install nvidia_drm modeset=1 fbdev=1
+    ;;
+  remove-audio)
+    [ "$#" -eq 0 ] || die "remove-audio takes no arguments"
+    require_gpu_alive "audio-function removal"
+    if [ -e "$PCI_DEVICES/$AUD" ]; then
+      # Unbind snd_hda_intel from THIS function first. Removing it while bound blocks
+      # in D-state (snd_card teardown inside the PCI-remove path). Unbinding does the
+      # teardown separately (~2s) so the subsequent remove is instant. Only this
+      # function — the iGPU HDA (c2:00.1/.6) shares the driver.
+      if [ -L "$PCI_DEVICES/$AUD/driver" ]; then
+        _ra_drv=$(basename "$(readlink -f "$PCI_DEVICES/$AUD/driver")")
+        echo "$AUD" > "/sys/bus/pci/drivers/$_ra_drv/unbind" 2>/dev/null || true
+        for _ in $(seq 1 10); do [ -L "$PCI_DEVICES/$AUD/driver" ] || break; sleep 0.5; done
+      fi
+      echo 1 > "$PCI_DEVICES/$AUD/remove"
+    fi
+    ;;
+  remove-gpu)
+    [ "$#" -eq 0 ] || die "remove-gpu takes no arguments"
+    require_gpu_alive "GPU removal"
+    require_safe_display_handoff
+    if [ -w "$GDEV/remove" ]; then
+      echo 1 > "$GDEV/remove"
+    else
+      # No 'remove' attribute on the endpoint (Blackwell eGPU exposes only reset/rescan).
+      # Remove the parent hotplug bridge instead: that tears down the whole subtree.
+      # Walk up to the first ancestor exposing a writable 'remove'. Stop before the
+      # host USB4 root port (1022:150a) so we only tear down the eGPU subtree.
+      _rg_node=$(readlink -f "$GDEV" 2>/dev/null)
+      _rg_target=""
+      while :; do
+        _rg_node=$(dirname "$_rg_node")
+        case "$_rg_node" in */devices/pci*) ;; *) break ;; esac
+        _rg_bdf=$(basename "$_rg_node")
+        case "$_rg_bdf" in 0000:*) ;; *) break ;; esac
+        # never remove the host's own USB4 root port
+        if [ "$(cat "$_rg_node/vendor" 2>/dev/null)" = "0x1022" ] &&
+           [ "$(cat "$_rg_node/device" 2>/dev/null)" = "0x150a" ]; then
+          break
+        fi
+        if [ -w "$_rg_node/remove" ]; then _rg_target=$_rg_bdf; break; fi
+      done
+      if [ -n "$_rg_target" ]; then
+        echo "egpu-privileged: endpoint has no remove node; removing ancestor $_rg_target (tears down the eGPU subtree)" >&2
+        echo 1 > "$PCI_DEVICES/$_rg_target/remove"
+      else
+        die "no removable node for $GDEV (no ancestor below the host root port has 'remove')" 2
+      fi
+    fi
+    ;;
+  unload-nvidia)
+    [ "$#" -eq 0 ] || die "unload-nvidia takes no arguments"
+    [ "$(gpu_state)" = "ABSENT" ] || die "GPU is still present; refusing module unload" 2
+    modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia
+    ;;
+  reset-ucsi)
+    [ "$#" -eq 0 ] || die "reset-ucsi takes no arguments"
+    require_no_external_link
+    [ -e /sys/bus/platform/drivers/ucsi_acpi/USBC000:00 ] ||
+      die "UCSI ACPI device is not bound" 2
+    echo USBC000:00 > /sys/bus/platform/drivers/ucsi_acpi/unbind
+    sleep 2
+    echo USBC000:00 > /sys/bus/platform/drivers/ucsi_acpi/bind
+    ;;
+  set-cpu-performance)
+    [ "$#" -eq 0 ] || die "set-cpu-performance takes no arguments"
+    for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+      [ -e "$f" ] && echo performance > "$f" || true
+    done
+    for f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
+      [ -e "$f" ] && echo performance > "$f" || true
+    done
+    ;;
+  set-cpu-powersave)
+    [ "$#" -eq 0 ] || die "set-cpu-powersave takes no arguments"
+    for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+      [ -e "$f" ] && echo powersave > "$f" || true
+    done
+    for f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
+      [ -e "$f" ] && echo balance_performance > "$f" || true
+    done
+    ;;
+  set-session-plasma)
+    [ "$#" -eq 0 ] || die "set-session-plasma takes no arguments"
+    install -d -m 0755 /etc/plasmalogin.conf.d
+    printf '[Autologin]\nSession=plasma.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
+    ;;
+  set-session-gamescope)
+    [ "$#" -eq 0 ] || die "set-session-gamescope takes no arguments"
+    install -d -m 0755 /etc/plasmalogin.conf.d
+    printf '[Autologin]\nSession=gamescope-session.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
+    ;;
+  set-session-bigpicture)
+    [ "$#" -eq 0 ] || die "set-session-bigpicture takes no arguments"
+    install -d -m 0755 /etc/plasmalogin.conf.d
+    printf '[Autologin]\nSession=egpu-bigpicture.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
+    ;;
+  emergency-console)
+    # eGPU yank lifeboat: switch the foreground VT to tty3 (fbcon deferred-takeover fires on
+    # first visible output -> console appears on the AMD/eDP panel, untouched by the dead eGPU).
+    [ "$#" -eq 0 ] || die "emergency-console takes no arguments"
+    systemctl start getty@tty3.service 2>/dev/null || true
+    chvt 3
+    ;;
+  restart-display-manager)
+    [ "$#" -eq 0 ] || die "restart-display-manager takes no arguments"
+    dm=$(systemctl show -p Id --value display-manager.service 2>/dev/null || true)
+    case "$dm" in
+      plasmalogin.service|sddm.service) systemctl restart "$dm" ;;
+      *) die "unsupported display manager '$dm'" 2 ;;
+    esac
+    ;;
+  set-gpu-power-limit)
+    [ "$#" -eq 1 ] || die "set-gpu-power-limit requires one argument (Watts)"
+    limit=$1
+    if [[ ! "$limit" =~ ^[0-9]+$ ]] || [ "$limit" -lt 100 ] || [ "$limit" -gt 320 ]; then
+      die "invalid power limit: $limit (must be between 100 and 320)" 2
+    fi
+    require_gpu_alive "set-gpu-power-limit"
+    nvidia-smi -pl "$limit"
+    ;;
+  set-gpu-graphics-clock)
+    [ "$#" -eq 1 ] || die "set-gpu-graphics-clock requires one argument (MHz)"
+    clock=$1
+    if [[ ! "$clock" =~ ^[0-9]+$ ]] || [ "$clock" -lt 210 ] || [ "$clock" -gt 2100 ]; then
+      die "invalid graphics clock: $clock (must be between 210 and 2100)" 2
+    fi
+    require_gpu_alive "set-gpu-graphics-clock"
+    nvidia-smi -lgc "210,$clock"
+    ;;
+  set-gpu-core-offset)
+    [ "$#" -eq 1 ] || die "set-gpu-core-offset requires one argument (MHz)"
+    offset=$1
+    if [[ ! "$offset" =~ ^-?[0-9]+$ ]] || [ "$offset" -lt -500 ] || [ "$offset" -gt 500 ]; then
+      die "invalid core offset: $offset (must be between -500 and 500)" 2
+    fi
+    require_gpu_alive "set-gpu-core-offset"
+    if [ -x /usr/local/bin/nv-egpu-offset-helper ]; then
+      /usr/local/bin/nv-egpu-offset-helper "$offset"
+    else
+      die "offset helper binary is missing" 3
+    fi
+    ;;
+  reset-gpu-clocks)
+    [ "$#" -eq 0 ] || die "reset-gpu-clocks takes no arguments"
+    require_gpu_alive "reset-gpu-clocks"
+    nvidia-smi -rgc
+    if [ -x /usr/local/bin/nv-egpu-offset-helper ]; then
+      /usr/local/bin/nv-egpu-offset-helper 0
+    fi
+    ;;
+  dpc-off)
+    # Strix Halo USB4 second-port eGPU PCIe-tunnel fix. Clear PCIe DPC trigger
+    # on the AMD USB4 root-port bridges [1022:150a] so the tunnel-formation
+    # surprise-down error no longer contains the link. Device-gated -> no-op on
+    # other APUs. If the GPU is absent, rebuild any contained tunnel by
+    # re-authorizing the external TB device (only when absent, so an active
+    # display tunnel is never disturbed). See docs / second-port DPC notes.
+    [ "$#" -eq 0 ] || die "dpc-off takes no arguments"
+    command -v setpci >/dev/null 2>&1 || die "setpci missing" 2
+    for P in $(lspci -D -d 1022:150a -n 2>/dev/null | awk '{print $1}'); do
+      off=0x100
+      for _ in $(seq 1 48); do
+        v=$(setpci -s "$P" "$off".l 2>/dev/null) || break
+        id=$(( 0x$v & 0xffff )); nxt=$(( (0x$v >> 20) & 0xffc ))
+        if [ "$id" -eq 29 ]; then
+          dctl=$(printf 0x%x $(( off + 0x06 )))
+          c=$(setpci -s "$P" "$dctl".w)
+          setpci -s "$P" "$dctl".w=$(printf %04x $(( 0x$c & ~0x3 )))
+          echo "dpc-off: $P DPC trigger $c -> $(setpci -s "$P" "$dctl".w)"
+          break
+        fi
+        [ "$nxt" -eq 0 ] && break
+        off=$(printf 0x%x "$nxt")
+      done
+    done
+    if [ "$(gpu_state)" = "ABSENT" ]; then
+      for tb in /sys/bus/thunderbolt/devices/*-*; do
+        [ -e "$tb/authorized" ] && [ -e "$tb/device_name" ] || continue
+        [ "$(cat "$tb/authorized" 2>/dev/null)" = "1" ] || continue
+        echo 0 > "$tb/authorized" 2>/dev/null || true
+        echo 1 > "$tb/authorized" 2>/dev/null || true
+        echo "dpc-off: re-authorized $(basename "$tb") to rebuild PCIe tunnel"
+      done
+      sleep 2
+      # enumeration is left to the caller's guarded rescan (anti-flood checks).
+    fi
+    ;;
+  dpc-on)
+    # Re-ARM PCIe DPC trigger on the AMD USB4 root-port bridges [1022:150a] AFTER
+    # the eGPU tunnel is established. This restores Downstream Port Containment so
+    # a SURPRISE cable yank is contained at the PCIe port (Surprise-Down fatal
+    # error -> link contained + subtree removed) instead of hanging the bus.
+    # Set trigger-enable bits[1:0] = 01b (enabled on ERR_FATAL). Device-gated.
+    [ "$#" -eq 0 ] || die "dpc-on takes no arguments"
+    command -v setpci >/dev/null 2>&1 || die "setpci missing" 2
+    for P in $(lspci -D -d 1022:150a -n 2>/dev/null | awk '{print $1}'); do
+      off=0x100
+      for _ in $(seq 1 48); do
+        v=$(setpci -s "$P" "$off".l 2>/dev/null) || break
+        id=$(( 0x$v & 0xffff )); nxt=$(( (0x$v >> 20) & 0xffc ))
+        if [ "$id" -eq 29 ]; then
+          dctl=$(printf 0x%x $(( off + 0x06 )))
+          c=$(setpci -s "$P" "$dctl".w)
+          setpci -s "$P" "$dctl".w=$(printf %04x $(( (0x$c & ~0x3) | 0x1 )))
+          echo "dpc-on: $P DPC trigger $c -> $(setpci -s "$P" "$dctl".w)"
+          break
+        fi
+        [ "$nxt" -eq 0 ] && break
+        off=$(printf 0x%x "$nxt")
+      done
+    done
+    ;;
+  *)
+    die "unknown action: $action"
+    ;;
+esac

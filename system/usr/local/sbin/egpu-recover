@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# egpu-recover — no-reboot recovery for a wedged / crashed / fallen-off-bus eGPU.
+#
+# From research (gengchaogit/blackwell-xid-wpr2-gsp-crash-recovery + kernel docs):
+# after a GSP crash (Xid 79/119) or a bad yank, the driver never issues a true
+# hardware Secondary Bus Reset, so WPR2 stays up and re-init dies with
+# "unexpected WPR2 already up". The fix is a masked SBR on the upstream bridge,
+# then rebuild the tunnel + rescan + reload.
+#
+# Also handles the "GPU won't re-enumerate after de-authorize" case by clearing DPC
+# on BOTH USB4 root ports and forcing a fresh Thunderbolt authorization.
+#
+# Run from a TTY/SSH if the desktop is wedged. ponytail: best-effort, each step guarded.
+set -u
+PRIV=/usr/local/sbin/nv-egpu-buddy-privileged
+say(){ printf '  %s\n' "$*"; }
+[ "$(id -u)" = 0 ] || { echo "run as root: sudo $0"; exit 1; }
+
+GPU=0000:62:00.0
+BRIDGE=0000:61:00.0   # Barlow-Ridge bridge directly above the GPU
+
+say "[1/6] unloading nvidia stack (ignore-install aware)…"
+"$PRIV" unload-nvidia 2>/dev/null || modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null || true
+
+say "[2/6] clearing DPC on BOTH USB4 root ports…"
+"$PRIV" dpc-off 2>/dev/null | sed 's/^/      /'
+
+if [ -e "/sys/bus/pci/devices/$BRIDGE" ]; then
+  say "[3/6] Secondary Bus Reset on the upstream bridge $BRIDGE…"
+  # BRIDGE_CONTROL is at config offset 0x3e; bit 6 (0x40) = Secondary Bus Reset.
+  setpci -s "$BRIDGE" BRIDGE_CONTROL.w=0040:0040 2>/dev/null
+  sleep 0.5
+  setpci -s "$BRIDGE" BRIDGE_CONTROL.w=0000:0040 2>/dev/null
+  sleep 1
+else
+  say "[3/6] bridge $BRIDGE not present — skipping SBR (will rebuild tunnel)"
+fi
+
+say "[4/6] rebuilding the Thunderbolt tunnel (de-auth/re-auth) + PCI rescan…"
+for d in /sys/bus/thunderbolt/devices/*-*; do
+  [ -e "$d/device_name" ] || continue
+  case "$(cat "$d/device_name" 2>/dev/null)" in *AORUS*|*RTX*|*AI\ BOX*)
+    echo 0 > "$d/authorized" 2>/dev/null; sleep 2
+    echo 1 > "$d/authorized" 2>/dev/null; sleep 1 ;;
+  esac
+done
+echo 1 > /sys/bus/pci/rescan 2>/dev/null
+
+say "[5/6] waiting for the GPU to enumerate…"
+ok=0
+for _ in $(seq 1 30); do lspci 2>/dev/null | grep -qi nvidia && { ok=1; break; }; sleep 2; done
+if [ "$ok" != 1 ]; then
+  say "      GPU still not on the bus after 60s. A reboot with the eGPU attached will rebuild it."
+  exit 2
+fi
+say "      GPU enumerated: $(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1}')"
+
+say "[6/6] re-running the automount (FLR -> 16GB -> Gen4 pin -> driver -> display)…"
+/usr/local/sbin/egpu-rearm 2>/dev/null
+systemd-run --no-block /usr/local/sbin/egpu-hotplug-mount.sh 2>/dev/null
+sleep 12
+tail -4 /var/log/egpu-hotplug-mount.log 2>/dev/null | sed 's/^/      /'
+say "DONE — check nvidia-smi + the log above."

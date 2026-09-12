@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Push the LIVE display credentials into the systemd user manager after a compositor restart.
+# DISPLAY/XAUTHORITY come from the running Xwayland's own arguments (KWin's environment only
+# carries the values it INHERITED, which go stale on every restart -> "Unable to open a connection to X").
+set -u
+xw=$(pgrep -a Xwayland 2>/dev/null | head -1)
+D=$(printf '%s' "$xw" | grep -oE ' :[0-9]+' | head -1 | tr -d ' ')
+X=$(printf '%s' "$xw" | grep -oE -- '-auth [^ ]+' | head -1 | cut -d' ' -f2)
+k=$(pgrep -x kwin_wayland | head -1)
+Wd=$(tr '\0' '\n' < /proc/"$k"/environ 2>/dev/null | sed -n 's/^WAYLAND_DISPLAY=//p' | head -1)
+[ -z "$D" ] && D=$(tr '\0' '\n' < /proc/"$k"/environ 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -1)
+[ -z "$X" ] && X=$(ls -t /run/user/1000/xauth_* 2>/dev/null | head -1)
+[ -z "$Wd" ] && Wd=wayland-0
+args=(); [ -n "$D" ] && args+=("DISPLAY=$D"); [ -n "$Wd" ] && args+=("WAYLAND_DISPLAY=$Wd"); [ -n "$X" ] && args+=("XAUTHORITY=$X")
+[ ${#args[@]} -gt 0 ] || exit 0
+runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user set-environment "${args[@]}" 2>/dev/null
+echo "republished: ${args[*]}"

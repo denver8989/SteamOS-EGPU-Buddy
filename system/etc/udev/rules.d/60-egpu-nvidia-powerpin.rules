@@ -1,0 +1,3 @@
+# eGPU marginal-TB-link timeout mitigation (2026-08-19): keep NVIDIA eGPU out of PCIe runtime PM.
+# Reversible: delete this file. See ACTIVE_TASK memory.
+ACTION=="add|bind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{power/control}="on"

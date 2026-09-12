@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# egpu-panel off|on — internal OLED panel (eDP-1 on amdgpu) truly OFF: disable its CRTC via a direct DRM
+# SETCRTC ioctl as master (no compositor owns card1 when the desktop is on the eGPU). "on" is left to the
+# compositor that takes card1 (detach mode); we only make sure the backlight flag is not blocking it.
+set -u; want=${1:-off}
+if fuser /dev/dri/card1 >/dev/null 2>&1; then [ "$want" = off ] && exit 0; fi   # a compositor owns the panel
+case "$want" in
+  off)
+    id=$(modetest -M amdgpu -c 2>/dev/null | awk '/eDP-1/{print $1; exit}')
+    for crtc in $(modetest -M amdgpu -p 2>/dev/null | awk '/^CRTCs:/{f=1;next}/^Planes:/{f=0}f&&/^[0-9]/&&$2!=0{print $1}'); do
+      python3 /usr/local/sbin/egpu-crtc-off.py /dev/dri/card1 "$crtc" >/dev/null 2>&1
+    done
+    [ -n "$id" ] && modetest -M amdgpu -w "$id":DPMS:3 >/dev/null 2>&1
+    for b in /sys/class/backlight/*; do echo 1 > "$b/bl_power" 2>/dev/null; done ;;
+  on)
+    for b in /sys/class/backlight/*; do echo 0 > "$b/bl_power" 2>/dev/null; done ;;
+esac
+echo "eDP-1 dpms=$(cat /sys/class/drm/card1-eDP-1/dpms 2>/dev/null) enabled=$(cat /sys/class/drm/card1-eDP-1/enabled 2>/dev/null)"

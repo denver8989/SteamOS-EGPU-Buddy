@@ -1,0 +1,15 @@
+[Unit]
+Description=Session-independent eGPU compute mount
+Documentation=file:/home/deck/NV-EGPU-Buddy/docs/HANDOFF.md
+After=local-fs.target systemd-udevd.service bolt.service
+Before=display-manager.service
+Wants=bolt.service
+ConditionPathExists=/usr/local/sbin/nv-egpu-buddy-privileged
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nv-egpu-buddy-mount
+TimeoutStartSec=150
+
+[Install]
+WantedBy=multi-user.target

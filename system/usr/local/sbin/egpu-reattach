@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -u; U=1000; RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"; say(){ printf '  %s\n' "$*"; }
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+/usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1
+say "[1/4] PCI rescan"; echo 1 > /sys/bus/pci/rescan; sleep 4
+GPU=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$GPU" ] || { say "GPU did not enumerate"; exit 2; }; say "      GPU at $GPU"
+say "[2/4] fresh nvidia stack"; modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null
+modprobe --ignore-install nvidia && modprobe --ignore-install nvidia_modeset && modprobe --ignore-install nvidia_drm modeset=1 fbdev=1; modprobe --ignore-install nvidia_uvm 2>/dev/null
+for _ in $(seq 1 15); do [ -e /sys/class/drm/card0 ] && [ "$(basename "$(readlink -f /sys/class/drm/card0/device/driver 2>/dev/null)")" = nvidia ] && break; sleep 1; done
+[ -e /sys/class/drm/card0 ] || { say "no card0 after reload"; exit 3; }; say "      card0 up"
+# wait until the NVIDIA connector(s) are actually probed (link + modes) before restaging KWin,
+# otherwise KWin can start against a card0 that has no usable output yet (dark monitor 2026-09-10 01:57).
+for _ in $(seq 1 30); do
+  ok=0; for c in /sys/class/drm/card0-*; do [ "$(cat $c/status 2>/dev/null)" = connected ] && [ -s "$c/modes" ] && ok=1; done
+  [ "$ok" = 1 ] && break; sleep 1
+done
+say "      connectors: $(for c in /sys/class/drm/card0-*; do [ "$(cat $c/status)" = connected ] && printf '%s(%s modes) ' "$(basename $c)" "$(wc -l < $c/modes)"; done)"
+say "[3/4] restage session"; systemd-run --no-block --setenv=EGPU_REATTACH_IN_PROGRESS=1 /usr/local/sbin/egpu-hotplug-mount.sh >/dev/null 2>&1
+if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then   # GAME MODE: hotplug-mount restarts gamescope onto the eGPU (or defers while a game runs)
+  for _ in $(seq 1 60); do sleep 2; g=$(pgrep -n -x 'gamescope(-wl)?'); [ -n "$g" ] && [ "$(ps -o etimes= -p "$g" | tr -d ' ')" -lt 100 ] && break; done
+  say "DONE (Game Mode) $(cat /run/nvegpu/gm-status.json 2>/dev/null)"; exit 0
+fi
+for _ in $(seq 1 40); do runuser -u deck -- env $RUNENV systemctl --user show-environment 2>/dev/null | grep -q 'KWIN_DRM_DEVICES=/dev/dri/card0' && break; sleep 2; done; sleep 8
+/usr/local/sbin/egpu-republish-display >/dev/null 2>&1
+# verify KWin is painting on the eGPU; if not, one more KWin restart now that the driver is settled
+painting(){ m=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1); [ "${m:-0}" -gt 150 ] && runuser -u deck -- env $RUNENV timeout 3 qdbus6 org.kde.KWin /KWin org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; }
+painting || { say "      KWin not painting on eGPU -> one retry"; runuser -u deck -- env $RUNENV systemctl --user restart plasma-kwin_wayland.service; sleep 12; /usr/local/sbin/egpu-republish-display >/dev/null 2>&1; }
+say "      painting: $(painting && echo yes || echo NO) (NV $(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null))"
+# re-kick the external link once (HDR/DP handshake after a fresh driver load)
+out=$(for c in /sys/class/drm/card0-*; do [ "$(cat $c/status)" = connected ] && basename $c | sed 's/^card0-//'; done | head -1)
+[ -n "$out" ] && runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 bash -c "timeout 6 kscreen-doctor output.$out.disable >/dev/null 2>&1; sleep 2; timeout 6 kscreen-doctor output.$out.enable >/dev/null 2>&1"
+runuser -u deck -- env $RUNENV systemctl --user unmask --runtime app-steam@autostart.service >/dev/null 2>&1
+say "[4/4] apps (via the user manager; wait for the old Steam to fully exit, then relaunch once, verify, retry once)"
+runuser -u deck -- env $RUNENV bash -c '
+  systemd-run --user --collect --quiet --wait --unit=egpu-steam-shutdown-$(date +%s) /usr/bin/steam -shutdown >/dev/null 2>&1
+  for _ in $(seq 1 40); do pgrep -x steam >/dev/null || pgrep -x steamwebhelper >/dev/null || break; sleep 1; done
+  pkill -x steam 2>/dev/null; pkill -x steamwebhelper 2>/dev/null; sleep 2
+  for try in 1 2; do
+    systemd-run --user --collect --quiet --unit=egpu-reattach-steam-$(date +%s)-$try /home/deck/.local/bin/steam-egpu-vk.sh -silent >/dev/null 2>&1
+    for _ in $(seq 1 60); do pgrep -x steamwebhelper >/dev/null && break; sleep 1; done
+    pgrep -x steamwebhelper >/dev/null && break
+  done
+  pgrep -f "[g]o-hub" >/dev/null || systemd-run --user --collect --quiet --unit=egpu-reattach-gohub-$(date +%s) /home/deck/.local/bin/go-hub >/dev/null 2>&1' 2>/dev/null
+say "      steam: $(pgrep -x steam >/dev/null && echo up || echo DOWN) webhelper: $(pgrep -x steamwebhelper >/dev/null && echo up || echo DOWN)"
+# Plasma helpers race the new Wayland socket on every compositor restart -> start any that failed
+runuser -u deck -- env $RUNENV bash -c 'systemctl --user reset-failed 2>/dev/null; for u in plasma-kded6 plasma-powerdevil plasma-polkit-agent plasma-xdg-desktop-portal-kde plasma-kaccess plasma-gmenudbusmenuproxy plasma-xembedsniproxy; do systemctl --user is-active $u.service >/dev/null 2>&1 || systemctl --user start $u.service 2>/dev/null; done'
+# desktop is on the eGPU now: the internal panel is not driven (stale last frame) -> backlight off
+# audio: the detach turned the eGPU HDA card profile off; bring it back and route to the plugged HDMI/DP port
+runuser -u deck -- env $RUNENV bash -c '
+  pat=$(printf "%s" "$1" | tr ":" "_")
+  for _ in $(seq 1 20); do c=$(pactl list short cards 2>/dev/null | awk -v p="$pat" "index(\$2,p){print \$2; exit}"); [ -n "$c" ] && break; sleep 1; done
+  [ -n "$c" ] || exit 0; pactl set-card-profile "$c" HiFi >/dev/null 2>&1 || pactl set-card-profile "$c" pro-audio >/dev/null 2>&1; sleep 2
+  p=$(pactl list sinks | awk -v c="${c#alsa_card.}" "/Name: alsa_output\\./{n=\$2} n!=\"\" && index(n,c) && /\\[Out\\]/ && !/not available\\)/ && /available\\)\$/{print n; exit}")
+  [ -n "$p" ] || p=$(pactl list short sinks | awk -v c="${c#alsa_card.}" "index(\$2,c){print \$2; exit}")
+  [ -n "$p" ] && pactl set-default-sink "$p" >/dev/null 2>&1
+' _ "${GPU%.*}.1"
+/usr/local/sbin/egpu-panel off >/dev/null 2>&1
+say "DONE KWIN_DRM=$(runuser -u deck -- env $RUNENV systemctl --user show-environment 2>/dev/null | grep -oE 'KWIN_DRM_DEVICES=.*')"

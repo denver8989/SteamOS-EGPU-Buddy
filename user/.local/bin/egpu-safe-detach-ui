@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Planned physical-detach entrypoint (OPTION B).  After the proven iGPU handoff it
+# runs the electrical teardown (audio unbind -> nvidia unbind -> Thunderbolt
+# de-authorize) so the eGPU is OFF the PCI bus BEFORE the user unplugs.  The HDA
+# D-state hang that previously blocked this is fixed by unbinding snd_hda_intel
+# from the eGPU function first (handled inside the root helper).
+set -euo pipefail
+RUN=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+STATE_DIR="$RUN/nv-egpu-buddy"
+STATE="$STATE_DIR/safe-detach-status.json"
+RECOVERY=${EGPU_POST_DETACH_RECOVERY:-$(dirname "$0")/egpu-post-detach-recovery}
+SINK=alsa_output.pci-0000_c2_00.6.pro-output-0
+SOURCE=alsa_input.pci-0000_c2_00.6.pro-input-0
+HANDOFF_LOCK="$RUN/nv-egpu-buddy/detach-handoff-active"
+speaker_card(){
+  local card path
+  for card in /sys/class/sound/card*; do
+    path=$(readlink -f "$card/device" 2>/dev/null || true)
+    case "$path" in *0000:c2:00.6*) printf '%s\n' "${card##*card}"; return 0 ;; esac
+  done
+  return 1
+}
+SPEAKER_CARD=$(speaker_card || true)
+mkdir -p "$STATE_DIR"
+trap 'rm -f "$RUN/egpu-detach-mode" "$HANDOFF_LOCK"' EXIT
+status(){
+  printf '{"state":"%s","message":"%s"}\n' "$1" "$2" >"$STATE"
+  case "$1" in
+    SAFE_COMPLETE)
+      command -v notify-send >/dev/null 2>&1 && notify-send -u critical -a "NV-EGPU-Buddy" "SAFE TO UNPLUG" \
+        "$2 Reconnect note: if the AORUS AI BOX does not reappear after reconnecting, press its Reset button or power-cycle the enclosure. Desktop auto-mount resumes after fresh enumeration." || true ;;
+    DO_NOT_UNPLUG)
+      command -v notify-send >/dev/null 2>&1 && notify-send -u critical -a "NV-EGPU-Buddy" "DO NOT UNPLUG" "$2" || true ;;
+    INTERNAL_AUDIO_RECOVERY_INCOMPLETE|STEAM_RECOVERY_INCOMPLETE)
+      command -v notify-send >/dev/null 2>&1 && notify-send -a "NV-EGPU-Buddy" "SAFE TO UNPLUG (note)" "$2 The eGPU is OFF the bus. Re-attach: sudo egpu-reattach" || true ;;
+    PREFLIGHT_PASS)
+      command -v notify-send >/dev/null 2>&1 && notify-send -a "NV-EGPU-Buddy" "Safe Detach running" "$2" || true ;;
+  esac
+}
+fail(){ status DO_NOT_UNPLUG "$1"; printf '%s\n' "$1" >&2; systemctl --user unmask --runtime app-steam@autostart.service >/dev/null 2>&1; sudo -n /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1 || true
+  # never leave the user dark: if the eGPU is still attached, put KWin back on it
+  if lspci -Dn 2>/dev/null | grep -qiE '0300: 10de:'; then
+    rm -f "$RUN/egpu-detach-mode" "$HANDOFF_LOCK"
+    systemctl --user unset-environment KWIN_RENDER_NODES; systemctl --user set-environment "KWIN_DRM_DEVICES=/dev/dri/$GPU_CARD" "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json" "__GLX_VENDOR_LIBRARY_NAME=nvidia" "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json" "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json" >/dev/null 2>&1
+    # full session relogin (plasmalogin Relogin=true) = the recovery that has come up NVIDIA-first every time
+    systemctl --user start wireplumber >/dev/null 2>&1 || true
+    systemctl --user restart plasma-kwin_wayland.service >/dev/null 2>&1; sleep 8; sudo -n /usr/local/sbin/egpu-safe-detach --republish >/dev/null 2>&1 || true
+    sudo -n /usr/local/sbin/egpu-safe-detach --panel-off >/dev/null 2>&1 || true
+  fi
+  exit 1; }
+drm_card_for(){
+  local vendor=$1 card
+  for card in /sys/class/drm/card[0-9]*; do
+    [ "$(cat "$card/device/vendor" 2>/dev/null || true)" = "$vendor" ] && { basename "$card"; return 0; }
+  done
+  return 1
+}
+drm_nodes_for_card(){
+  local card=$1 node dev
+  dev=$(readlink -f "/sys/class/drm/$card/device" 2>/dev/null || true)
+  for node in /sys/class/drm/card[0-9]* /sys/class/drm/renderD*; do
+    [ "$(readlink -f "$node/device" 2>/dev/null || true)" = "$dev" ] && basename "$node"
+  done
+}
+kwin_holds_nodes(){
+  local nodes=$1 k n
+  k=$(pgrep -x kwin_wayland | head -1)
+  [ -n "$k" ] || return 1
+  for n in $nodes; do ls -l "/proc/$k/fd" 2>/dev/null | grep -q "/dev/dri/$n" && return 0; done
+  return 1
+}
+internal_panel_ready(){
+  local layout
+  layout=$(timeout 6 kscreen-doctor -j 2>/dev/null) || return 1
+  jq -e '
+    .outputs[] | select(.name == "eDP-1")
+    | .enabled == true and ((.priority // 99) == 1 or .primary == true)
+  ' >/dev/null <<<"$layout"
+}
+prepare_internal_audio(){
+  # Keep docked playback on the NVIDIA HDMI/DisplayPort sink, but make the
+  # internal speaker hardware ready for the post-unplug recovery path.  This
+  # setting can reset across boots, so it is preparation rather than a reason
+  # to make the user manually repair the button's preflight.
+  amixer -c "$SPEAKER_CARD" set Speaker 100% unmute >/dev/null 2>&1 || return 1
+  amixer -c "$SPEAKER_CARD" get Speaker 2>/dev/null | grep -q '\[on\]'
+}
+kwin_session_ready(){
+  timeout 3 qdbus6 org.kde.KWin /KWin org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1
+}
+recover_after_unplug(){
+  local i
+  for i in $(seq 1 180); do
+    if ! find /sys/bus/thunderbolt/devices -maxdepth 2 -name device_name -exec grep -Flqx 'AORUS RTX506T AI BOX' {} + 2>/dev/null | grep -q .; then
+      "$RECOVERY" recover || { status INTERNAL_AUDIO_RECOVERY_INCOMPLETE 'eGPU was unplugged, but internal audio recovery needs attention.'; exit; }
+      "$RECOVERY" steam || { status STEAM_RECOVERY_INCOMPLETE 'eGPU was unplugged and audio recovered, but Steam did not return.'; exit; }
+      exit
+    fi
+    sleep 1
+  done
+}
+# Preserve the real-call-validated Pro Audio microphone; never substitute HiFi Mic1.
+[ -n "$SPEAKER_CARD" ] || fail 'Internal Realtek audio card is unavailable.'
+[ "$(pactl get-default-source 2>/dev/null || true)" = "$SOURCE" ] || fail 'Internal Pro Audio microphone is not selected.'
+# While docked, HDMI/DisplayPort is the correct default playback route.  The
+# internal speaker becomes the default only after the physical unplug.
+pactl list short sinks 2>/dev/null | awk -v sink="$SINK" '$2 == sink { found=1 } END { exit !found }' || fail 'Internal Pro Audio speaker route is unavailable.'
+prepare_internal_audio || fail 'Internal speaker hardware could not be prepared.'
+pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && fail 'Desktop Safe Detach is not available in Game Mode.'
+IGPU_CARD=$(drm_card_for 0x1002 || true)
+GPU_CARD=$(drm_card_for 0x10de || true)
+[ -n "$IGPU_CARD" ] || fail 'Internal AMD display card is unavailable.'
+[ -n "$GPU_CARD" ] || fail 'NVIDIA eGPU display card is unavailable.'
+GPU_NODES=$(drm_nodes_for_card "$GPU_CARD")
+[ -n "$GPU_NODES" ] || fail 'NVIDIA DRM nodes are unavailable.'
+"$RECOVERY" snapshot || fail 'Could not snapshot user-session audio state.'
+status PREFLIGHT_PASS 'Moving the Desktop to the internal iGPU. Do not unplug yet.'
+touch "$HANDOFF_LOCK"
+touch "$RUN/egpu-detach-mode"
+IGPU_RENDER=$(ls /sys/class/drm/$IGPU_CARD/device/drm 2>/dev/null | grep -m1 renderD)
+systemctl --user set-environment \
+  "KWIN_DRM_DEVICES=/dev/dri/$IGPU_CARD" \
+  "KWIN_RENDER_NODES=/dev/dri/${IGPU_RENDER:-renderD128}" \
+  "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json" \
+  "__GLX_VENDOR_LIBRARY_NAME=mesa" || fail 'Could not prepare the iGPU compositor environment.'
+# the compositor restart re-triggers Plasma autostarts; Steam would relaunch with stale X creds -> mask it for the window
+systemctl --user mask --runtime app-steam@autostart.service >/dev/null 2>&1; systemctl --user stop app-steam@autostart.service >/dev/null 2>&1
+sudo -n /usr/local/sbin/egpu-safe-detach --prep >/dev/null 2>&1 || fail 'Could not hide the NVIDIA userspace for the iGPU handoff.'
+# --- release the eGPU sound card BEFORE the teardown window (root helper's fuser guard requires it) ---
+status PREFLIGHT_PASS 'Moving audio to the internal speaker before removal. Do not unplug yet.'
+pactl set-default-sink "$SINK" >/dev/null 2>&1 || true
+pactl list short sink-inputs 2>/dev/null | awk '{print $1}' | while read -r _in; do pactl move-sink-input "$_in" "$SINK" >/dev/null 2>&1 || true; done
+_egpu_bdf=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}')
+_egpu_patt=$(printf '%s' "${_egpu_bdf%.*}" | tr ':' '_')
+for _card in $(pactl list short cards 2>/dev/null | awk -v p="$_egpu_patt" 'index($2,p){print $2}'); do pactl set-card-profile "$_card" off >/dev/null 2>&1 || true; done
+# WirePlumber keeps the card's control node open even with the profile off -> stop it across the teardown
+systemctl --user stop wireplumber >/dev/null 2>&1 || true
+sleep 1
+# TEARDOWN: the root helper's full mode RESTARTS the KWin unit on the iGPU (session kept alive) and then
+# unloads + PCI-removes the GPU. Never `systemctl stop` the KWin unit here: that ends the logind session
+# and plasmalogin (Relogin=true) immediately spawns a fresh NVIDIA KWin into the teardown window (18:15 abort).
+status PREFLIGHT_PASS 'Moving the Desktop to the internal panel and removing the GPU (~30s). Do not unplug yet.'
+if ! sudo -n /usr/local/sbin/egpu-safe-detach >"$STATE_DIR/helper.log" 2>&1; then
+  fail 'eGPU teardown failed; the GPU is still attached. Do not unplug.'
+fi
+for _ in $(seq 1 60); do
+  kwin_session_ready && break
+  sleep 1
+done
+kwin_session_ready || fail 'KWin did not become responsive on the iGPU.'
+sudo -n /usr/local/sbin/egpu-safe-detach --republish >/dev/null 2>&1 || true
+systemctl --user start wireplumber >/dev/null 2>&1 || true
+# The NVIDIA graphics and HDA audio functions must be GONE.
+if lspci -Dn 2>/dev/null | grep -qiE '0300: 10de:'; then
+  fail 'NVIDIA GPU function is still present after teardown. Do not unplug.'
+fi
+
+# The eGPU HDMI/DP audio sink vanished with the tunnel; restore internal audio now.
+for _ in $(seq 1 20); do systemctl --user is-active wireplumber >/dev/null 2>&1 && break; sleep 1; done; sleep 3
+"$RECOVERY" recover >/dev/null 2>&1 || { sleep 5; "$RECOVERY" recover >/dev/null 2>&1; } \
+  || { status INTERNAL_AUDIO_RECOVERY_INCOMPLETE 'eGPU removed, but internal audio recovery needs attention.'; exit; }
+systemctl --user unmask --runtime app-steam@autostart.service >/dev/null 2>&1
+sleep 8; "$RECOVERY" steam >/dev/null 2>&1 || { sleep 10; "$RECOVERY" steam >/dev/null 2>&1; } \
+  || { status STEAM_RECOVERY_INCOMPLETE 'eGPU removed and audio recovered, but Steam did not return.'; exit; }
+
+status SAFE_COMPLETE 'The eGPU is electrically removed and OFF the PCI bus. You may now physically unplug it.'
+

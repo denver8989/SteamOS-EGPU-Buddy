@@ -1,0 +1,15 @@
+diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+index 120c0d0..1e4e885 100644
+--- a/src/Backends/DRMBackend.cpp
++++ b/src/Backends/DRMBackend.cpp
+@@ -3635,6 +3635,10 @@ namespace gamescope
+ 
+ 			bool bNeedsFullComposite = false;
+ 			bNeedsFullComposite |= cv_composite_force;
++			// NV-EGPU-Buddy: with GBM-allocated scanout the client's Vulkan-allocated buffers must never hit the
++			// plane directly (scattered vidmem -> corruption); Steam's GAMESCOPE_COMPOSITE_FORCE=0 would otherwise
++			// override --force-composition and allow direct scanout of screen-sized game layers.
++			bNeedsFullComposite |= ( g_DRM.gbm != nullptr && g_DRM.allow_modifiers && cv_drm_gbm_scanout );
+ 			bNeedsFullComposite |= bWasFirstFrame;
+ 			bNeedsFullComposite |= pFrameInfo->useFSRLayer0;
+ 			bNeedsFullComposite |= pFrameInfo->useNISLayer0;

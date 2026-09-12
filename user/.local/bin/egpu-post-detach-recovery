@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# User-session-only post-detach recovery. No PCI, compositor, root, or eGPU action.
+set -euo pipefail
+MODE=${1:-}; RUN=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}; DIR="$RUN/nv-egpu-buddy"; SNAP="$DIR/audio-before-detach.env"
+CARD=alsa_card.pci-0000_c2_00.6; PROFILE=pro-audio
+SINK=alsa_output.pci-0000_c2_00.6.pro-output-0; SOURCE=alsa_input.pci-0000_c2_00.6.pro-input-0
+speaker_card(){
+  local card path
+  for card in /sys/class/sound/card*; do
+    path=$(readlink -f "$card/device" 2>/dev/null || true)
+    case "$path" in *0000:c2:00.6*) printf '%s\n' "${card##*card}"; return 0 ;; esac
+  done
+  return 1
+}
+SPEAKER_CARD=$(speaker_card || true)
+mkdir -p "$DIR"
+case "$MODE" in
+ snapshot)
+  printf 'PROFILE=%q\nSINK=%q\nSOURCE=%q\nSPEAKER_ON=%q\n' \
+   "$(pactl list cards | awk '/Name: alsa_card\.pci-0000_c2_00\.6/{f=1} f&&/Active Profile:/{sub(/^.*: /,"");print;exit}')" \
+   "$(pactl get-default-sink 2>/dev/null || true)" "$(pactl get-default-source 2>/dev/null || true)" \
+   "$(amixer -c "$SPEAKER_CARD" get Speaker 2>/dev/null | grep -q '\[on\]' && echo 1 || echo 0)" >"$SNAP";;
+ recover)
+  [ -n "$SPEAKER_CARD" ] || { echo AUDIO_CARD_UNAVAILABLE; exit 20; }
+  pactl set-card-profile "$CARD" "$PROFILE" || { echo AUDIO_CARD_UNAVAILABLE; exit 20; }
+  pactl set-default-sink "$SINK" && pactl set-default-source "$SOURCE" || { echo AUDIO_NODES_UNAVAILABLE; exit 21; }
+  pactl set-sink-mute "$SINK" 0; pactl set-source-mute "$SOURCE" 0; amixer -c "$SPEAKER_CARD" set Speaker 100% unmute
+  # Only move streams still targeted at an eGPU HDMI/NVIDIA sink/source; do not disturb others.
+  pactl list sink-inputs | awk '/Sink Input #/{id=$3} /node.name = "alsa_.*(NVIDIA|62_00\.1|03_00\.1)/{print id}' | tr -d '#' | while read -r id; do pactl move-sink-input "$id" "$SINK" || true; done
+  pactl list source-outputs | awk '/Source Output #/{id=$3} /node.name = "alsa_.*(NVIDIA|62_00\.1|03_00\.1)/{print id}' | tr -d '#' | while read -r id; do pactl move-source-output "$id" "$SOURCE" || true; done
+  pactl get-default-sink | grep -Fx "$SINK" >/dev/null && pactl get-default-source | grep -Fx "$SOURCE" >/dev/null && amixer -c "$SPEAKER_CARD" get Speaker | grep -q '\[on\]' || { echo INTERNAL_AUDIO_RECOVERY_INCOMPLETE; exit 22; }
+  timeout 3 pw-play /usr/share/sounds/freedesktop/stereo/complete.oga || { echo SPEAKER_PLAYBACK_INCOMPLETE; exit 23; }
+  timeout 2 pw-record --target "$SOURCE" --raw /dev/null || [ "$?" = 124 ] || { echo MICROPHONE_CAPTURE_INCOMPLETE; exit 24; }
+  echo AUDIO_RECOVERY_READY;;
+ steam)
+  envout=$(systemctl --user show-environment)
+  printf '%s\n' "$envout" | grep -q '^DISPLAY=' && printf '%s\n' "$envout" | grep -q '^WAYLAND_DISPLAY=' && printf '%s\n' "$envout" | grep -q '^XAUTHORITY=' || { echo STEAM_DISPLAY_ENV_INCOMPLETE; exit 30; }
+  pgrep -x steamwebhelper >/dev/null || systemd-run --user --collect --quiet --unit=nv-egpu-buddy-steam-recovery-$(date +%s) /home/deck/.local/bin/steam-egpu-vk.sh -silent
+  for _ in $(seq 1 90); do pgrep -x steam >/dev/null && { echo STEAM_RECOVERY_READY; exit 0; }; sleep 1; done
+  echo STEAM_RECOVERY_INCOMPLETE; exit 31;;
+ *) echo 'usage: egpu-post-detach-recovery {snapshot|recover|steam}' >&2; exit 64;;
+esac

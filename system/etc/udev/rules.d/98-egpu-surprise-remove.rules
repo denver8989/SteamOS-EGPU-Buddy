@@ -1,0 +1,2 @@
+# NVIDIA eGPU VGA function vanished from the PCI bus (cable yank / link loss) -> recovery
+ACTION=="remove", SUBSYSTEM=="pci", ENV{PCI_ID}=="10DE:*", ENV{PCI_CLASS}=="30000", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/egpu-surprise-recover"

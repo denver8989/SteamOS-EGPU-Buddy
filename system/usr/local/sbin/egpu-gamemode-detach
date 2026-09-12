@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# NV-EGPU-Buddy — Game Mode safe detach.
+# Stopping gamescope makes plasmalogin (Relogin=true) relaunch Game Mode at once, so the GPU must be removed only
+# AFTER the relaunched session is up on the handheld panel: set the detach marker (the nv-egpu-gamescope-session
+# wrapper then pins the relaunch to the AMD card), hide the NVIDIA userspace, release audio, restart the session,
+# wait for the panel session, then run the root helper's teardown-only path (audio unbind, unload, PCI-remove).
+set -u; U=1000; RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
+ST=/run/nvegpu; mkdir -p $ST; LOG=/var/log/egpu-gamemode.log; log(){ printf '%s detach: %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; echo "$*"; }
+status(){ printf '{"state":"%s","message":"%s"}\n' "$1" "$2" > $ST/gm-status.json; }
+MARK=/run/user/$U/egpu-detach-mode; HELPER=/usr/local/sbin/egpu-safe-detach
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+as_deck(){ runuser -u deck -- env $RUNENV "$@"; }
+gs(){ pgrep -n -x 'gamescope(-wl)?'; }
+gs_on_panel(){ local g; g=$(gs); [ -n "$g" ] || return 1; tr '\0' '\n' </proc/$g/environ 2>/dev/null | grep -q '^OUTPUT_CONNECTOR=\*,' || return 1; ls -l /proc/$g/fd 2>/dev/null | grep -qE 'card0|renderD129|nvidia' && return 1; return 0; }
+finish_fail(){ log "FAILED: $1"; status DO_NOT_UNPLUG "$1"; $HELPER --restore >/dev/null 2>&1; as_deck systemctl --user start gamescope-mangoapp.service >/dev/null 2>&1; rm -f "$MARK" $ST/gm-detach-pending; as_deck systemctl --user start wireplumber >/dev/null 2>&1; exit "${2:-5}"; }
+gpu=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$gpu" ] || { status SAFE_COMPLETE "No eGPU attached."; log "no GPU on bus"; exit 0; }
+[ -n "$(gs)" ] || as_deck systemctl --user is-active gamescope-session.target >/dev/null 2>&1 || { log "not in Game Mode"; exit 2; }
+log "start (gpu=$gpu, gamescope=$(gs))"; status DETACHING "Moving Game Mode to the handheld screen. Do not unplug yet."
+touch "$MARK"; chown deck:deck "$MARK" 2>/dev/null; date +%s > $ST/gm-detach-pending
+$HELPER --prep >/dev/null 2>&1 || finish_fail "Could not hide the NVIDIA userspace." 5
+as_deck bash -c 'pactl set-default-sink "$(pactl list short sinks | awk "!/pci-0000_0[0-9a-f]_00.1/ && /alsa_output/{print \$2; exit}")" >/dev/null 2>&1; p=$(printf %s "'"${gpu%.*}"'" | tr : _); for c in $(pactl list short cards | awk -v p="$p" "index(\$2,p){print \$2}"); do pactl set-card-profile "$c" off; done; systemctl --user stop wireplumber' >/dev/null 2>&1
+G0=$(gs); as_deck systemctl --user stop gamescope-session.target >/dev/null 2>&1 &
+for _ in $(seq 1 60); do sleep 2; g=$(gs); [ -n "$g" ] && [ "$g" != "$G0" ] && gs_on_panel && break; done
+gs_on_panel || finish_fail "Game Mode did not come back on the handheld screen; the eGPU is still attached." 6
+# the MangoHud overlay (gamescope-mangoapp.service) opens /dev/nvidia* through NVML -> stop it for the teardown
+as_deck systemctl --user stop gamescope-mangoapp.service >/dev/null 2>&1
+sleep 4; log "panel session up (gamescope=$(gs)); removing the GPU"; status DETACHING "Game Mode is on the handheld screen. Removing the eGPU. Do not unplug yet."
+{ echo "holders before teardown:"; for hp in $(fuser /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm 2>/dev/null | tr -s ' \n' ' '); do echo "  $hp $(cat /proc/$hp/comm 2>/dev/null) libs=[$(grep -oE '/[^ ]*nvidia[^ ]*\.so[^ ]*' /proc/$hp/maps 2>/dev/null | xargs -n1 basename 2>/dev/null | sort -u | tr '\n' ' ')] cmd=$(tr '\0' ' ' </proc/$hp/cmdline 2>/dev/null | cut -c1-80)"; done; } > $ST/gm-holders.log 2>&1
+if ! $HELPER --teardown-only > $ST/gm-helper.log 2>&1; then finish_fail "eGPU teardown failed; the GPU is still attached. Do not unplug. ($(grep -oE 'still held by:.*|ABORTING.*' $ST/gm-helper.log | head -1 | cut -c1-90))" 7; fi
+$HELPER --restore >/dev/null 2>&1; rm -f "$MARK" $ST/gm-detach-pending; as_deck systemctl --user start wireplumber >/dev/null 2>&1; /usr/local/sbin/egpu-panel on >/dev/null 2>&1; as_deck systemctl --user start gamescope-mangoapp.service >/dev/null 2>&1
+if lspci -Dn 2>/dev/null | grep -qE '0300: 10de:'; then status DO_NOT_UNPLUG "NVIDIA GPU still present after teardown. Do not unplug."; exit 8; fi
+status SAFE_COMPLETE "The eGPU is off the PCI bus. You may unplug it (or Attach again without replugging)."; log "done"; exit 0
