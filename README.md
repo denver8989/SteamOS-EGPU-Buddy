@@ -44,6 +44,15 @@ current scripts.
 
 ## Install
 
+**Easiest: the release installer.** Download `SteamOS-EGPU-Buddy-<version>.run` from
+[Releases](https://github.com/denver8989/SteamOS-EGPU-Buddy/releases), make it executable and run it from the
+desktop (double-click, or `./SteamOS-EGPU-Buddy-<version>.run`). It shows what it detected, lets you tick the
+components (hot-plug core, Game Mode integration, GBM gamescope, Decky plugin, boot policy, patched driver), backs up
+everything it replaces, and adds a "SteamOS EGPU Buddy Uninstaller" entry to the application menu. `--uninstall`
+and `--no-gui` (terminal mode) are accepted. On SteamOS it toggles `steamos-readonly` around the install.
+
+**From a checkout:**
+
 ```
 git clone https://github.com/denver8989/SteamOS-EGPU-Buddy
 cd SteamOS-EGPU-Buddy

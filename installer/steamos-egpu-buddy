@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# SteamOS EGPU Buddy — graphical installer / uninstaller (zenity; falls back to the terminal).
+# Runs from the extracted release (.run) or a git checkout. Usage: steamos-egpu-buddy [--uninstall] [--no-gui]
+set -uo pipefail
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd); ROOT=$(cd "$HERE/.." && pwd)
+VERSION=$(cat "$ROOT/VERSION" 2>/dev/null || echo dev)
+LOG=/tmp/steamos-egpu-buddy-install.log; : > "$LOG"
+GUI=1; ACTION=install
+for a in "$@"; do case "$a" in --uninstall) ACTION=uninstall;; --no-gui) GUI=0;; esac; done
+command -v zenity >/dev/null 2>&1 || GUI=0; [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || GUI=0
+say(){ echo "$*" | tee -a "$LOG"; }
+msg(){ if [ $GUI = 1 ]; then zenity --info --title="SteamOS EGPU Buddy" --width=520 --text="$1"; else echo; echo "$1"; fi; }
+err(){ if [ $GUI = 1 ]; then zenity --error --title="SteamOS EGPU Buddy" --width=520 --text="$1"; else echo "ERROR: $1" >&2; fi; }
+ask(){ if [ $GUI = 1 ]; then zenity --question --title="SteamOS EGPU Buddy" --width=520 --text="$1"; else read -rp "$1 [y/N] " r; [ "${r,,}" = y ]; fi; }
+
+. /etc/os-release 2>/dev/null; DISTRO=${ID:-unknown}; LIKE=${ID_LIKE:-}
+ARCH_LIKE=0; case "$DISTRO $LIKE" in *arch*|*cachyos*|*steamos*) ARCH_LIKE=1;; esac
+IMMUTABLE=0; command -v steamos-readonly >/dev/null 2>&1 && IMMUTABLE=1
+STOCK_SESSION=""; for s in /usr/lib/steamos/gamescope-session /usr/bin/gamescope-session /usr/bin/gamescope-session-plus; do [ -f "$s" ] && { STOCK_SESSION=$s; break; }; done
+HAS_TOOLCHAIN=0; command -v meson >/dev/null && command -v ninja >/dev/null && command -v cc >/dev/null && command -v cmake >/dev/null && HAS_TOOLCHAIN=1
+HAS_DECKY=0; [ -d "$HOME/homebrew/plugins" ] && HAS_DECKY=1
+HAS_PLASMALOGIN=0; [ -f /etc/plasmalogin.conf ] && HAS_PLASMALOGIN=1
+GPU=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}')
+
+banner="SteamOS EGPU Buddy $VERSION
+Distro: $DISTRO (${LIKE:-no ID_LIKE})   immutable root: $([ $IMMUTABLE = 1 ] && echo yes || echo no)
+Game Mode session script: ${STOCK_SESSION:-NOT FOUND}
+NVIDIA GPU on the bus now: ${GPU:-none}
+Build toolchain: $([ $HAS_TOOLCHAIN = 1 ] && echo present || echo missing)   Decky Loader: $([ $HAS_DECKY = 1 ] && echo present || echo missing)
+
+Tested only on CachyOS Deckify + Legion Go 2 + RTX 5060 Ti. SteamOS and Bazzite are UNTESTED.
+This changes udev, systemd, sudoers and your Game Mode session. Everything replaced is backed up.
+Log: $LOG"
+
+# ---------------------------------------------------------------- uninstall
+if [ "$ACTION" = uninstall ]; then
+  ask "$banner
+
+Remove SteamOS EGPU Buddy and restore the backed-up originals?" || exit 0
+  [ $IMMUTABLE = 1 ] && sudo steamos-readonly disable
+  if bash "$ROOT/uninstall.sh" >>"$LOG" 2>&1; then msg "Uninstalled. Reboot to return to the stock session."; else err "Uninstall reported errors; see $LOG"; fi
+  [ $IMMUTABLE = 1 ] && sudo steamos-readonly enable
+  exit 0
+fi
+
+# ---------------------------------------------------------------- component choice
+if [ $GUI = 1 ]; then
+  zenity --info --title="SteamOS EGPU Buddy" --width=560 --text="$banner" || exit 0
+  sel=$(zenity --list --checklist --title="SteamOS EGPU Buddy — choose components" --width=760 --height=420 \
+      --column=Install --column=Key --column=Component --column=Notes --hide-column=2 --print-column=2 --separator=, \
+      TRUE  core      "eGPU hot-plug core"              "attach/detach scripts, udev, units, modprobe, sudoers rule" \
+      TRUE  session   "Game Mode session integration"   "gamescope wrapper, shim, Steam env fix, UI scale clamp, HDR opt-in" \
+      TRUE  gamescope "GBM-scanout gamescope (UI corruption fix)" "$([ $HAS_TOOLCHAIN = 1 ] && echo 'built from source' || echo 'prebuilt binary; falls back to distro gamescope if it cannot run')" \
+      $([ $HAS_DECKY = 1 ] && echo TRUE || echo FALSE) decky "EGPU Buddy Decky plugin" "$([ $HAS_DECKY = 1 ] && echo 'Decky Loader found' || echo 'Decky Loader not found')" \
+      $([ $HAS_PLASMALOGIN = 1 ] && echo TRUE || echo FALSE) bootpolicy "Boot into Game Mode with the eGPU attached" "$([ $HAS_PLASMALOGIN = 1 ] && echo 'plasmalogin autologin policy' || echo 'CachyOS/plasmalogin only')" \
+      FALSE driver    "Patched nvidia-open driver (surprise-unplug fix)" "$([ $ARCH_LIKE = 1 ] && echo 'builds DKMS modules; Arch-based only; needs kernel headers' || echo 'not available on this distro')") || exit 0
+else
+  echo "$banner"; echo; echo "Components: core session gamescope decky bootpolicy driver"; read -rp "Install which? (comma list, default core,session,gamescope,decky,bootpolicy): " sel; sel=${sel:-core,session,gamescope,decky,bootpolicy}
+fi
+want(){ case ",$sel," in *",$1,"*) return 0;; *) return 1;; esac; }
+want driver && [ $ARCH_LIKE = 0 ] && { err "The patched driver can only be built on Arch-based distros. Deselect it."; exit 1; }
+[ -z "$STOCK_SESSION" ] && want session && { err "No gamescope-session script found; the Game Mode integration cannot be installed here."; exit 1; }
+
+# ---------------------------------------------------------------- install with progress
+run_install(){
+  say "== SteamOS EGPU Buddy $VERSION install: $sel"
+  [ $IMMUTABLE = 1 ] && { say "disabling read-only root"; sudo steamos-readonly disable; }
+  export EGPU_COMPONENTS="$sel" STOCK_GAMESCOPE_SESSION="$STOCK_SESSION" EGPU_PREBUILT_GAMESCOPE="$ROOT/prebuilt/gamescope-gbm"
+  args=(); want gamescope || args+=(--no-gamescope); want driver && args+=(--with-driver)
+  bash "$ROOT/install.sh" "${args[@]}"; rc=$?
+  [ $IMMUTABLE = 1 ] && sudo steamos-readonly enable
+  # keep a copy so the uninstaller works without the release file
+  mkdir -p "$HOME/.local/share/steamos-egpu-buddy" && cp -a "$ROOT"/. "$HOME/.local/share/steamos-egpu-buddy/" 2>/dev/null
+  mkdir -p "$HOME/.local/share/applications"
+  printf '[Desktop Entry]\nType=Application\nName=SteamOS EGPU Buddy Uninstaller\nExec=%s/.local/share/steamos-egpu-buddy/installer/steamos-egpu-buddy --uninstall\nIcon=dialog-warning\nCategories=System;\n' "$HOME" > "$HOME/.local/share/applications/steamos-egpu-buddy-uninstall.desktop"
+  return $rc
+}
+if [ $GUI = 1 ]; then
+  ( run_install ) 2>&1 | tee -a "$LOG" | zenity --progress --pulsate --auto-close --no-cancel --title="SteamOS EGPU Buddy" --width=560 --text="Installing… (log: $LOG)"
+  rc=${PIPESTATUS[0]}
+else
+  run_install; rc=$?
+fi
+if [ "$rc" = 0 ]; then
+  msg "Installed: $sel
+
+Next: reboot (or log out and back into Game Mode). Plug the eGPU in after the session is up the first time.
+Uninstaller: application menu → 'SteamOS EGPU Buddy Uninstaller'.
+Read TESTED.md for what is verified and what is not."
+else
+  err "Install failed (exit $rc). Nothing is half-applied without a backup; see $LOG"
+fi

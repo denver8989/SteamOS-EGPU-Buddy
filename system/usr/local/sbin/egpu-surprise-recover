@@ -68,7 +68,7 @@ for _ in $(seq 1 30); do pgrep -x Xwayland >/dev/null && pgrep -x plasmashell >/
 # 5. internal panel back on + failover watcher promotes eDP-1; audio to internal
 /usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
 runuser -u deck -- env $RUNENV bash -c 'pactl set-default-sink alsa_output.pci-0000_c2_00.6.pro-output-0' >/dev/null 2>&1
-runuser -u deck -- env $RUNENV bash -c 'pgrep -f "[g]o-hub-remix-native" >/dev/null || systemd-run --user --collect --quiet --unit=egpu-surprise-gohub-$(date +%s) /home/deck/.local/bin/go-hub' >/dev/null 2>&1
+command -v go-hub >/dev/null 2>&1 && runuser -u deck -- env $RUNENV bash -c 'pgrep -f "[g]o-hub-remix-native" >/dev/null || systemd-run --user --collect --quiet --unit=egpu-surprise-gohub-$(date +%s) /home/deck/.local/bin/go-hub' >/dev/null 2>&1
 [ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-surprise-steam-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1   # plain steam on the iGPU session (old instance is dead/zombie)
 runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 notify-send -a NV-EGPU-Buddy "eGPU disconnected" "Desktop moved to the internal screen." >/dev/null 2>&1 || true
 log "DONE"
