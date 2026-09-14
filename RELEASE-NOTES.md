@@ -1,3 +1,5 @@
+0.1.2 — installer warns about missing runtime tools (setpci, modetest, jq, xxd, perl, qdbus6, kscreen-doctor, xprop, boltctl, nvidia-smi); README states what is and is not required (no Go Hub, no LACT, no desktop tray app). No script changes.
+
 0.1.1 — two hot-plug regressions found the day after 0.1.0, both on the tested machine.
 
 - **Desktop Safe Detach re-logged into Game Mode with a dark handheld panel.** The KWin restart ends the login and

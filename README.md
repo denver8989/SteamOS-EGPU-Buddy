@@ -95,6 +95,14 @@ components (hot-plug core, Game Mode integration, GBM gamescope, Decky plugin, b
 everything it replaces, and adds a "SteamOS EGPU Buddy Uninstaller" entry to the application menu. `--uninstall`
 and `--no-gui` (terminal mode) are accepted. On SteamOS it toggles `steamos-readonly` around the install.
 
+**What it needs on the machine.** Beyond systemd, udev and `pciutils`, the scripts call `setpci`, `modetest`
+(libdrm), `fuser` (psmisc), `jq`, `xxd`, `perl`, `python3`, `qdbus6`, `kscreen-doctor`, `xprop`, `boltctl` and
+`nvidia-smi`; the installer warns about any that are missing. Nothing else is required: Go Hub, LACT and the
+desktop tray app used during development are **not** part of this project and are not needed. The only hooks
+that mention them are guarded (`command -v go-hub`, `systemctl stop lactd` on a unit that may not exist).
+Desktop-mode Safe Detach is the `egpu-safe-detach-ui` command (or `sudo egpu-safe-detach`); there is no desktop
+icon for it in this package. The Decky plugin talks only to the shipped helpers.
+
 **From a checkout:**
 
 ```

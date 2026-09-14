@@ -27,6 +27,10 @@ say(){ printf '\033[1m%s\033[0m\n' "$*"; }
 say "== preflight ($COMPONENTS)"
 for c in sudo systemctl udevadm lspci; do command -v $c >/dev/null || { echo "missing $c"; exit 1; }; done
 lspci -Dn | grep -qE '0300: 10de:' || echo "note: no NVIDIA GPU on the bus right now (fine, it is hot-pluggable)"
+# runtime tools the scripts call (package names are Arch/SteamOS; Bazzite equivalents are similar)
+miss=""; for c in setpci:pciutils modetest:libdrm fuser:psmisc jq:jq xxd:vim perl:perl python3:python qdbus6:qt6-tools kscreen-doctor:libkscreen xprop:xorg-xprop boltctl:bolt nvidia-smi:nvidia-utils; do
+  command -v "${c%%:*}" >/dev/null 2>&1 || miss="$miss ${c%%:*}(${c#*:})"; done
+[ -z "$miss" ] || echo "warning: missing tools, some paths will degrade:$miss"
 STOCK=${STOCK_GAMESCOPE_SESSION:-}; [ -n "$STOCK" ] || for s in /usr/lib/steamos/gamescope-session /usr/bin/gamescope-session /usr/bin/gamescope-session-plus; do [ -f "$s" ] && { STOCK=$s; break; }; done
 [ -n "$STOCK" ] || echo "warning: no gamescope-session script found; Game Mode pieces will be inert"
 grep -qw nvidia-drm.modeset=1 /proc/cmdline || echo "warning: kernel cmdline lacks nvidia-drm.modeset=1 (see README 'Kernel command line')"
