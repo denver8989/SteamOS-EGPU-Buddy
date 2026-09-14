@@ -1,6 +1,6 @@
 # EGPU Buddy (Decky plugin)
 
-Attach and safely detach a Thunderbolt/USB4 NVIDIA eGPU from Steam Game Mode, see live eGPU details, set the
+Part of SteamOS EGPU Buddy; installed from the project's release page (Decky "Install from URL"). Attach and safely detach a Thunderbolt/USB4 NVIDIA eGPU from Steam Game Mode, see live eGPU details, set the
 power limit, and install the whole [SteamOS EGPU Buddy](https://github.com/denver8989/SteamOS-EGPU-Buddy) system
 integration from the Setup tab (hot-plug scripts, udev/systemd/modprobe/sudoers rules, Game Mode session
 integration with the GBM-scanout gamescope, boot policy, desktop app). The plugin fetches the matching release

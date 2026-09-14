@@ -61,4 +61,3 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 - Decky Setup tab install route: **tested** on the tested machine (root-mode installer, files owned by the login
   user, `install.sh --check` clean afterwards). Uninstall from the tab: **not exercised**.
-- Decky store: not submitted (the store needs the plugin as its own repository; kept inside this project instead).
