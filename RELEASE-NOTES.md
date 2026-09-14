@@ -1,10 +1,14 @@
-0.3.0 — one build, two ways in.
+0.3.1 — one build, two ways in.
 
-- **Decky plugin can install everything.** New Setup tab: "Install system integration" fetches this release's
-  tarball from GitHub, verifies the SHA-256, and runs `install.sh` as root (core, session, prebuilt GBM gamescope,
-  boot policy, desktop app). Uninstall from the same tab. The installer gained a root mode for this
+- **Decky plugin can install everything.** New Setup tab: "Install system integration" runs `install.sh` as root
+  from the payload bundled inside the plugin (no internet needed), with a progress bar driven by the installer's
+  stages (core, session, prebuilt GBM gamescope, boot policy, desktop app, optional patched-driver build on
+  Arch-based systems). Uninstall from the same tab. The installer gained a root mode for this
   (`EGPU_TARGET_USER`), creating user files as the login user. `EGPU-Buddy-Decky-0.3.0.zip` is the plugin for
   Decky's "Install from URL". The plugin is part of this repository (`decky-plugin/egpu-buddy`).
+- **Driver install fixed.** The `--with-driver` step (and the plugin's driver toggle) now builds the
+  `nvidia-open-egpu-dkms` package from the shipped PKGBUILD with makepkg and installs it with pacman. The 0.1.x–0.3.0
+  script only copied modules that existed on the maintainer's machine and would have failed anywhere else.
 - Plugin: GPU detection generalised to any NVIDIA VGA device (was pinned to one device ID); the Desktop hint no
   longer names another project.
 - Desktop app icon: the eGPU box as a blue duotone illustration with the hot-plug bolt.

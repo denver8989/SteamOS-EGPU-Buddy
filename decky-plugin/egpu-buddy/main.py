@@ -23,13 +23,18 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.3.0"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.3.1"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
 VERSION_FILE = "/etc/nv-egpu-buddy/version"
 SETUP_COMPONENTS = "core,session,gamescope,bootpolicy,desktopapp"   # no decky (already here), no driver build
-_setup = {"busy": False, "step": "", "rc": None}
+_setup = {"busy": False, "step": "", "rc": None, "progress": 0}
+STAGES = (("== preflight", 8), ("== installing user files", 20), ("== installing system files", 40),
+          ("== building GBM-scanout gamescope", 55), ("== no build toolchain", 60), ("== installing the EGPU Buddy desktop app", 75),
+          ("== building the patched nvidia-open", 82), ("== patched driver not installed", 90), ("== done", 100),
+          ("restored ", 50), ("removed  ", 50), ("done. The stock", 100))
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 ST = "/run/nvegpu"
 GM_STATUS = f"{ST}/gm-status.json"
@@ -138,8 +143,10 @@ def _audio_sink():
     return out if rc == 0 else ""
 
 
-def _slog(msg):
+def _slog(msg, progress=None):
     _setup["step"] = msg
+    if progress is not None:
+        _setup["progress"] = progress
     try:
         with open(SETUP_LOG, "a") as f:
             f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
@@ -152,11 +159,11 @@ def _fetch_payload():
     name = f"SteamOS-EGPU-Buddy-{PAYLOAD_VERSION}.tar.gz"
     local = os.path.join(PLUGIN_DIR, "payload", name)
     if os.path.exists(local):
-        _slog(f"using bundled payload {name}")
+        _slog(f"using bundled payload {name}", 3)
         return local
     base = f"https://github.com/{REPO}/releases/download/v{PAYLOAD_VERSION}/"
     dst = f"/tmp/{name}"
-    _slog(f"downloading {name}")
+    _slog(f"downloading {name} (no bundled payload)", 2)
     urllib.request.urlretrieve(base + name, dst)
     sums = urllib.request.urlopen(base + "SHA256SUMS", timeout=30).read().decode()
     want = next((l.split()[0] for l in sums.splitlines() if l.strip().endswith(name)), "")
@@ -167,35 +174,47 @@ def _fetch_payload():
     return dst
 
 
-def _setup_worker(action):
+def _run_logged(cmd, env, cwd):
+    """Run the installer, stream its output into the log, and turn its stage lines into progress."""
+    with open(SETUP_LOG, "a") as log:
+        pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd, text=True)
+        for line in pr.stdout:
+            clean = ANSI.sub("", line.rstrip())
+            log.write(clean + "\n"); log.flush()
+            for marker, pct in STAGES:
+                if clean.startswith(marker):
+                    _setup["step"] = clean.lstrip("= ").strip()[:90]; _setup["progress"] = max(_setup["progress"], pct)
+        return pr.wait()
+
+
+def _setup_worker(action, with_driver=False):
     env = dict(os.environ, EGPU_TARGET_USER=USER, HOME=USER_HOME)
     ro = shutil.which("steamos-readonly")
     try:
         if action == "install":
             tgz = _fetch_payload()
-            _slog(f"extracting to {SYSDIR}")
+            _slog(f"extracting to {SYSDIR}", 5)
             shutil.rmtree(SYSDIR, ignore_errors=True); os.makedirs(os.path.dirname(SYSDIR), exist_ok=True)
             with tarfile.open(tgz) as t:
                 top = t.getnames()[0].split("/")[0]; t.extractall(os.path.dirname(SYSDIR))
             os.rename(os.path.join(os.path.dirname(SYSDIR), top), SYSDIR)
             subprocess.run(["chown", "-R", USER, SYSDIR])
-            env.update(EGPU_COMPONENTS=SETUP_COMPONENTS, EGPU_PREBUILT_GAMESCOPE=f"{SYSDIR}/prebuilt/gamescope-gbm")
+            comps = SETUP_COMPONENTS + (",driver" if with_driver and shutil.which("pacman") else "")
+            env.update(EGPU_COMPONENTS=comps, EGPU_PREBUILT_GAMESCOPE=f"{SYSDIR}/prebuilt/gamescope-gbm")
             if ro: subprocess.run([ro, "disable"])
-            _slog("running install.sh")
-            with open(SETUP_LOG, "a") as log:
-                rc = subprocess.run(["bash", f"{SYSDIR}/install.sh"], stdout=log, stderr=subprocess.STDOUT, env=env, cwd=SYSDIR).returncode
+            _slog("running install.sh", 6)
+            rc = _run_logged(["bash", f"{SYSDIR}/install.sh"], env, SYSDIR)
             if ro: subprocess.run([ro, "enable"])
         else:
             if not os.path.exists(f"{SYSDIR}/uninstall.sh"):
                 raise RuntimeError("no installed copy to uninstall from")
             env.update(EGPU_KEEP_PLUGIN="1")
             if ro: subprocess.run([ro, "disable"])
-            _slog("running uninstall.sh")
-            with open(SETUP_LOG, "a") as log:
-                rc = subprocess.run(["bash", f"{SYSDIR}/uninstall.sh"], stdout=log, stderr=subprocess.STDOUT, env=env, cwd=SYSDIR).returncode
+            _slog("running uninstall.sh", 10)
+            rc = _run_logged(["bash", f"{SYSDIR}/uninstall.sh"], env, SYSDIR)
             if ro: subprocess.run([ro, "enable"])
         _setup["rc"] = rc
-        _slog(f"{action} finished rc={rc}" + ("" if rc == 0 else " (see log)"))
+        _slog(f"{action} finished rc={rc}" + ("" if rc == 0 else " (see log)"), 100)
     except Exception as ex:  # noqa: BLE001
         _setup["rc"] = 1
         _slog(f"{action} failed: {ex}")
@@ -203,15 +222,15 @@ def _setup_worker(action):
         _setup["busy"] = False
 
 
-def _start_setup(action):
+def _start_setup(action, with_driver=False):
     if _setup["busy"]:
         return {"ok": False, "message": "Setup is already running."}
-    _setup.update(busy=True, rc=None, step="starting")
+    _setup.update(busy=True, rc=None, step="starting", progress=0)
     try:
         os.remove(SETUP_LOG)
     except OSError:
         pass
-    threading.Thread(target=_setup_worker, args=(action,), daemon=True).start()
+    threading.Thread(target=_setup_worker, args=(action, with_driver), daemon=True).start()
     return {"ok": True, "message": f"{action} started"}
 
 
@@ -225,10 +244,11 @@ class Plugin:
             pass
         return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION,
                 "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
-                "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "log": tail}
+                "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "progress": _setup["progress"],
+                "can_build_driver": bool(shutil.which("pacman")), "log": tail}
 
-    async def install_system(self):
-        return _start_setup("install")
+    async def install_system(self, with_driver: bool = False):
+        return _start_setup("install", bool(with_driver))
 
     async def uninstall_system(self):
         return _start_setup("uninstall")

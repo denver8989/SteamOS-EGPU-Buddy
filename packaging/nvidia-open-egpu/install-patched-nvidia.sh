@@ -1,18 +1,18 @@
 #!/bin/bash
-# Install the author-rebased PR#985+#984 610.57.04 modules (AUR nvidia-open-egpu patches 160+170) over the DKMS-built
-# stock ones (backup kept), swap the DKMS source for the patched tree so kernel updates rebuild it, and force is_external_gpu.
+# Build the patched nvidia-open-egpu-dkms package from this directory's PKGBUILD (stock source + the nine patches)
+# and install it with pacman. Arch-based distros only. Works as root (Decky plugin / EGPU_TARGET_USER) or as a user
+# with sudo; makepkg itself always runs as the login user. Needs the -headers package matching the running kernel.
 set -e
-W=/tmp/claude-1000/-home-deck/3eb55c40-0a54-4c36-b960-c4246162247f/scratchpad; S=$W/nvsrc2
-K=$(uname -r); D=/usr/lib/modules/$K/updates/dkms; B=/var/lib/nvegpu/stock-modules-610.57.04-$K
-[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
-for m in nvidia nvidia-modeset nvidia-drm nvidia-uvm nvidia-peermem; do [ -f $S/kernel-open/$m.ko ] || { echo "missing $m.ko"; exit 2; }; done
-mkdir -p $B; [ -n "$(ls $B 2>/dev/null)" ] || cp -a $D/nvidia*.ko.zst $B/
-for m in nvidia nvidia-modeset nvidia-drm nvidia-uvm nvidia-peermem; do zstd -q -f -19 $S/kernel-open/$m.ko -o $D/$m.ko.zst; done
-depmod -a $K
-[ -d /usr/src/nvidia-610.57.04.stock ] || mv /usr/src/nvidia-610.57.04 /usr/src/nvidia-610.57.04.stock
-rm -rf /usr/src/nvidia-610.57.04; cp -a $S /usr/src/nvidia-610.57.04; rm -rf /usr/src/nvidia-610.57.04/kernel-open/*.ko /usr/src/nvidia-610.57.04/kernel-open/*.o /usr/src/nvidia-610.57.04/kernel-open/.*.cmd /usr/src/nvidia-610.57.04/src/nvidia/_out /usr/src/nvidia-610.57.04/src/nvidia-modeset/_out 2>/dev/null
-cp /usr/src/nvidia-610.57.04.stock/dkms.conf /usr/src/nvidia-610.57.04/dkms.conf; chown -R root:root /usr/src/nvidia-610.57.04
-printf '%s\n' '# NV-EGPU-Buddy: PR #984 registry key (patched module) — treat the TB5 eGPU as external on this AMD USB4 host' 'options nvidia NVreg_RegistryDwords="RmForceExternalGpu=1"' > /etc/modprobe.d/zz-nvidia-egpu-external.conf
-echo "installed srcversion: $(modinfo -F srcversion $D/nvidia.ko.zst) (stock $(modinfo -F srcversion $B/nvidia.ko.zst))"
-echo "depmod ok: $(modinfo -n nvidia_modeset) ; patched src marker: $(grep -c gpuLost /usr/src/nvidia-610.57.04/src/nvidia-modeset/include/nvkms-types.h)"
-echo "modprobe option: $(cat /etc/modprobe.d/zz-nvidia-egpu-external.conf | tail -1)"
+HERE=$(cd "$(dirname "$0")" && pwd)
+if [ "$(id -u)" = 0 ]; then U=${EGPU_TARGET_USER:-${SUDO_USER:-}}; [ -n "$U" ] && [ "$U" != root ] || { echo "running as root: set EGPU_TARGET_USER=<login user>"; exit 1; }; R=""; else U=$USER; R=sudo; fi
+command -v makepkg >/dev/null && command -v pacman >/dev/null || { echo "makepkg/pacman not found: the patched driver is Arch-based only"; exit 1; }
+K=$(uname -r); [ -f "/usr/lib/modules/$K/build/Makefile" ] || echo "warning: no kernel headers for $K; install the matching -headers package or the DKMS build will fail"
+$R pacman -S --needed --noconfirm dkms base-devel >/dev/null
+B=$(getent passwd "$U" | cut -d: -f6)/.cache/egpu-buddy/driver-build
+rm -rf "$B"; mkdir -p "$B"; cp "$HERE"/PKGBUILD "$HERE"/*.patch "$HERE"/nvidia-egpu-hotplug.* "$B"/; [ "$(id -u)" = 0 ] && chown -R "$U" "$B"
+if [ "$(id -u)" = 0 ]; then runuser -u "$U" -- bash -c "cd '$B' && makepkg -f --noconfirm"; else (cd "$B" && makepkg -f --noconfirm); fi
+PKG=$(ls -t "$B"/nvidia-open-egpu-dkms-*.pkg.tar.* | head -1)
+# --ask 4 answers "yes" to removing the conflicting stock nvidia-open / nvidia-open-dkms package
+$R pacman -U --noconfirm --ask 4 "$PKG"
+echo "installed: $(pacman -Q nvidia-open-egpu-dkms 2>/dev/null); dkms: $(dkms status 2>/dev/null | grep -i nvidia | head -1)"
+echo "reboot to load the patched modules"

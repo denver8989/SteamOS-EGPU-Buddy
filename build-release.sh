@@ -6,17 +6,17 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd); cd "$ROOT"
 VER=$(cat VERSION); NAME="SteamOS-EGPU-Buddy-$VER"
 rm -rf dist && mkdir -p dist/stage/"$NAME"
-# Decky plugin: pin the payload version it fetches, build the frontend, zip it for "install from URL"
-P=decky-plugin/egpu-buddy
-sed -i "s/^PAYLOAD_VERSION = \"[^\"]*\"/PAYLOAD_VERSION = \"$VER\"/" "$P/main.py"
-(cd "$P" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1)
-mkdir -p dist/plugin/EGPU-Buddy && cp -r "$P/dist" "$P/main.py" "$P/plugin.json" "$P/package.json" "$P/README.md" "$P/LICENSE" dist/plugin/EGPU-Buddy/
-(cd dist/plugin && python3 -c "import shutil,sys; shutil.make_archive(sys.argv[1], 'zip', '.', 'EGPU-Buddy')" "../EGPU-Buddy-Decky-$VER")
 git ls-files -z | grep -zvE '^(dist/|\.github/|build-release\.sh|decky-plugin/egpu-buddy/(src|node_modules|pnpm-lock|rollup|tsconfig|\.gitignore))' | xargs -0 -I{} cp --parents {} dist/stage/"$NAME"/
 # prebuilt gamescope is not tracked (binary); ship it in the artifacts
 cp -a prebuilt dist/stage/"$NAME"/ 2>/dev/null || true
 chmod +x dist/stage/"$NAME"/install.sh dist/stage/"$NAME"/uninstall.sh dist/stage/"$NAME"/installer/steamos-egpu-buddy
 tar -C dist/stage -czf "dist/$NAME.tar.gz" "$NAME"
+# Decky plugin: pin the payload version it fetches, build the frontend, zip it for "install from URL"
+P=decky-plugin/egpu-buddy
+sed -i "s/^PAYLOAD_VERSION = \"[^\"]*\"/PAYLOAD_VERSION = \"$VER\"/" "$P/main.py"
+(cd "$P" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1)
+mkdir -p dist/plugin/EGPU-Buddy/payload && cp "dist/$NAME.tar.gz" dist/plugin/EGPU-Buddy/payload/ && cp -r "$P/dist" "$P/main.py" "$P/plugin.json" "$P/package.json" "$P/README.md" "$P/LICENSE" dist/plugin/EGPU-Buddy/
+(cd dist/plugin && python3 -c "import shutil,sys; shutil.make_archive(sys.argv[1], 'zip', '.', 'EGPU-Buddy')" "../EGPU-Buddy-Decky-$VER")
 # self-extracting: shell header + tarball
 {
 cat <<'HDR'

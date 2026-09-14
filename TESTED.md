@@ -57,7 +57,11 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
   the GTK/WebKit window and the Safe Detach / Re-attach buttons from the app **not yet exercised**.
 - hooks.d mechanism: **untested** with a real hook by anyone but the maintainer (their hooks live outside this repo).
 
-## 0.3.0 (2026-09-14)
+## 0.3.1 (2026-09-14)
 
-- Decky Setup tab install route: **tested** on the tested machine (root-mode installer, files owned by the login
-  user, `install.sh --check` clean afterwards). Uninstall from the tab: **not exercised**.
+- Decky Setup tab install route: **tested** on the tested machine (bundled payload, root-mode installer, progress
+  reaches 100, files owned by the login user, `install.sh --check` clean afterwards). Uninstall from the tab and
+  the optional driver build from the tab: **not exercised**.
+- Patched driver package: the PKGBUILD builds on the tested machine and its DKMS source is byte-identical to the one
+  installed here (same package, `pacman -Qkk` clean); the makepkg-based install script itself was not run to completion
+  on a second machine.

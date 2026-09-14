@@ -37,13 +37,13 @@ sha256sums=('0be1ce1905f579e68c1701c1286e15ddf02f5243e625773f5a997a8325dc856d'
             'b0f62a78f749ff3a104197c12b6d885352adcf35fb5ecf00c4cd4c51b4195e45'
             '5340f33cdd19024a4501fee3d475af152c39f277d44422c65d447db263a0d501'
             'b498128faffe3b7ccdf210b5cdbb8da75b8e3a381d2c9b82355c344405e4e916'
-        'bb776663f3627e0f8db2758aa00f43bb67c89729a6add92b3c3378a772b65f24'
-        'fb18cacdf323f985208dae3fcd174c9f6aad42a77d06229be082849a9d7d9f42'
-        'f502e8062d6458792a08d54479eb82d16592e1981e46f3e9e3838cd7a3bd03eb'
-        '31a057be4dce6e4e9587adf317cf2ed9df1dd2968e1e2866bad4e9fd7a6f47eb'
-            'SKIP'
-            'SKIP'
-            'SKIP')
+            'bb776663f3627e0f8db2758aa00f43bb67c89729a6add92b3c3378a772b65f24'
+            'fb18cacdf323f985208dae3fcd174c9f6aad42a77d06229be082849a9d7d9f42'
+            'fd98775269c4497605aaf34a3df704011d049b5ae214a4dda977b825ee3235b8'
+            'e74208e75a96334e7950425ee3121b3a8480d4353111b139822868325210ecce'
+            '3004f5bd76de3db63b379bc62008a2eb756e302937413e68eaa34d17976f3cde'
+            'f502e8062d6458792a08d54479eb82d16592e1981e46f3e9e3838cd7a3bd03eb'
+            '31a057be4dce6e4e9587adf317cf2ed9df1dd2968e1e2866bad4e9fd7a6f47eb')
 
 prepare() {
     patch -d "NVIDIA-kernel-module-source-${pkgver}" -Np1 -i "${srcdir}/110-nvidia-open-change-dkms-conf.patch"

@@ -113,9 +113,10 @@ attach, drop an executable into `/etc/nv-egpu-buddy/hooks.d/{pre-unload,post-att
 
 **From Game Mode: the Decky plugin.** Install `EGPU-Buddy-Decky-<version>.zip` from the release page through
 Decky's "Install from URL" (developer mode). Its **Setup** tab installs
-the whole system integration: it downloads the matching release tarball, verifies the SHA-256, and runs the same
-installer as root (hot-plug core, session integration, prebuilt GBM gamescope, boot policy, desktop app; not the
-patched driver). Reboot afterwards. The same tab uninstalls it again.
+the whole system integration with a progress bar: the release payload ships inside the plugin (no internet needed)
+and the same installer runs as root (hot-plug core, session integration, prebuilt GBM gamescope, boot policy,
+desktop app, and optionally the patched driver build on Arch-based systems). Reboot afterwards. The same tab
+uninstalls it again.
 
 **From a checkout:**
 
@@ -124,11 +125,11 @@ git clone https://github.com/denver8989/SteamOS-EGPU-Buddy
 cd SteamOS-EGPU-Buddy
 ./install.sh --check        # shows what would change on this machine
 ./install.sh                # user + system files, GBM gamescope build, Decky plugin
-./install.sh --with-driver  # additionally builds and installs the patched nvidia-open modules
+./install.sh --with-driver  # additionally builds the patched nvidia-open-egpu-dkms package with makepkg and installs it
 ```
 
-`./uninstall.sh` puts the backed-up originals back. The patched driver and the private gamescope build are left for
-you to remove by hand (the uninstaller tells you how).
+`./uninstall.sh` puts the backed-up originals back. The patched driver package (`pacman -R nvidia-open-egpu-dkms`, then
+reinstall `nvidia-open-dkms`) and the private gamescope build are left for you to remove by hand.
 
 ### Kernel command line
 

@@ -1,4 +1,4 @@
-import { ButtonItem, Field, PanelSection, PanelSectionRow, SliderField, Router, staticClasses } from "@decky/ui";
+import { ButtonItem, Field, PanelSection, PanelSectionRow, ProgressBarWithInfo, SliderField, ToggleField, Router, staticClasses } from "@decky/ui";
 import { callable, definePlugin, useQuickAccessVisible } from "@decky/api";
 import { useEffect, useState } from "react";
 import { FaPlug } from "react-icons/fa";
@@ -18,9 +18,9 @@ const safeDetach = callable<[], Result>("safe_detach");
 const setPowerLimit = callable<[number], Result>("set_power_limit");
 const setCoreOffset = callable<[number], Result>("set_core_offset");
 const resetClocks = callable<[], Result>("reset_clocks");
-type Setup = { installed_version: string; payload_version: string; helpers_present: boolean; busy: boolean; step: string; rc: number | null; log: string };
+type Setup = { installed_version: string; payload_version: string; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; log: string };
 const getSetup = callable<[], Setup>("get_setup_status");
-const installSystem = callable<[], Result>("install_system");
+const installSystem = callable<[boolean], Result>("install_system");
 const uninstallSystem = callable<[], Result>("uninstall_system");
 
 const Row = ({ k, v }: { k: string; v: string }) => (
@@ -38,6 +38,7 @@ function Content() {
   const [tab, setTab] = useState<"main" | "details" | "setup">("main");
   const [su, setSu] = useState<Setup | null>(null);
   const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall">("");
+  const [withDriver, setWithDriver] = useState(false);
   const [s, setS] = useState<Status | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -45,7 +46,7 @@ function Content() {
   const [off, setOff] = useState(0);
 
   const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); } catch (e) { setMsg(`status error: ${e}`); } };
-  useEffect(() => { if (!visible) return; refresh(); const t = setInterval(refresh, 3000); return () => clearInterval(t); }, [visible]);
+  useEffect(() => { if (!visible) return; refresh(); const t = setInterval(refresh, su?.busy ? 1000 : 3000); return () => clearInterval(t); }, [visible, su?.busy]);
 
   const gameUp = !!(s?.game_running || Router.MainRunningApp);
   const run = async (fn: () => Promise<Result>) => { setBusy(true); try { const r = await fn(); setMsg(r.message); } catch (e) { setMsg(`${e}`); } finally { setBusy(false); refresh(); } };
@@ -119,11 +120,12 @@ function Content() {
           <PanelSectionRow><div style={{ fontSize: "12px" }}>
             {su ? (su.installed_version ? `Installed: ${su.installed_version}` : "Not installed") + ` · this plugin carries ${su.payload_version}` : "…"}
           </div></PanelSectionRow>
-          <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installs the hot-plug scripts, udev/systemd/modprobe/sudoers rules, the Game Mode session integration, the GBM gamescope (prebuilt), the boot policy and the desktop app. Everything replaced is backed up. Needs internet. The patched driver is not built here (use the .run installer on the Desktop for that).</div></PanelSectionRow>
-          {su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Working: {su.step}</div></PanelSectionRow>}
+          <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installs the hot-plug scripts, udev/systemd/modprobe/sudoers rules, the Game Mode session integration, the GBM gamescope (prebuilt), the boot policy and the desktop app. Everything replaced is backed up. The payload ships inside this plugin (no internet needed).</div></PanelSectionRow>
+          {su?.busy && <PanelSectionRow><ProgressBarWithInfo nProgress={su.progress} sOperationText={su.step} label="Installing" focusable={false} /></PanelSectionRow>}
+          {su?.can_build_driver && !su.busy && <PanelSectionRow><ToggleField label="Also build the patched hot-unplug driver" description="Arch-based only. Compiles nvidia-open DKMS modules; several minutes." checked={withDriver} onChange={setWithDriver} /></PanelSectionRow>}
           {su && !su.busy && su.rc !== null && <PanelSectionRow><div style={{ fontSize: "12px", color: su.rc === 0 ? "#4caf50" : "#ff6b6b" }}>{su.rc === 0 ? "Finished. Reboot to activate." : `Failed (rc ${su.rc}); log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => { if (confirmSetup === "install") { setConfirmSetup(""); run(installSystem); } else setConfirmSetup("install"); }}>
+            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => { if (confirmSetup === "install") { setConfirmSetup(""); run(() => installSystem(withDriver)); } else setConfirmSetup("install"); }}>
               {confirmSetup === "install" ? "Press again to confirm install" : (su?.installed_version ? "Reinstall / update system integration" : "Install system integration")}
             </ButtonItem>
           </PanelSectionRow>
