@@ -1,3 +1,13 @@
+0.5.0 — survives OS updates that wipe /usr (SteamOS-style).
+
+- **Self-heal.** The install keeps the whole release, a pacman package cache (nvidia-utils, lib32, bolt, dkms, the
+  patched driver package) and the patched modules for the running kernel under `~/.local/share/steamos-egpu-buddy`,
+  and enables `egpu-buddy-selfheal.service` (unit in /etc, script in /home). At boot it re-applies the root-side
+  integration when missing or outdated, restores cached packages, rebuilds or restores the kernel modules, and
+  re-applies the kernel parameters. The plugin offers **Repair system integration** for the same on demand.
+- SteamOS is therefore installable again (experimental, untested on a real update); the 0.4.2 refusal is gone.
+- The uninstaller disables the self-heal unit and removes the kept copy.
+
 0.4.2 — surviving updates, and the truth about SteamOS.
 
 - **pacman hook** `egpu-buddy-post-upgrade`: after every transaction it checks the private GBM gamescope against the

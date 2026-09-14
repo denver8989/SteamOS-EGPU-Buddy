@@ -1,0 +1,12 @@
+[Unit]
+Description=SteamOS EGPU Buddy: re-apply the eGPU integration after an OS update (script lives in the user home)
+After=local-fs.target
+Before=egpu-boot-enumerate.service
+ConditionPathExists=/home/deck/.local/share/steamos-egpu-buddy/selfheal.sh
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/deck/.local/share/steamos-egpu-buddy/selfheal.sh
+
+[Install]
+WantedBy=multi-user.target

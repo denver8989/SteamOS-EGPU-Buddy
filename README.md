@@ -105,10 +105,16 @@ not the default.
 - If a new kernel refuses to build the pinned 610.57.04 modules, hold the kernel (`IgnorePkg`) until a release
   with a newer driver exists; `dkms status` and the system journal (`egpu-buddy-post-upgrade`) tell you.
 
-**SteamOS itself: not supported.** Its A/B updates replace `/usr` wholesale, including `/usr/local` and anything
-installed with pacman, it ships no NVIDIA driver, and no kernel headers, so the patched driver cannot be built.
-The installer and the plugin refuse on SteamOS unless overridden. The name refers to the SteamOS-style Game Mode
-session this integrates with, which CachyOS Deckify and Bazzite provide.
+**SteamOS (experimental, self-healing).** SteamOS A/B updates replace `/usr` wholesale, which takes `/usr/local`
+and every pacman-installed package with it, while `/etc` and `/home` persist. So the install keeps a complete copy of
+the release under `~/.local/share/steamos-egpu-buddy`, together with a cache of the pacman packages it installed and
+of the patched kernel modules for the running kernel, and enables `egpu-buddy-selfheal.service`: a unit in `/etc`
+whose script lives in that home directory. At every boot it checks the root-side integration and, after an update
+has wiped it, re-applies it from the copy, restores the cached packages, rebuilds the driver with DKMS if the new
+kernel's headers exist or restores the cached modules if the kernel is unchanged, re-applies the kernel parameters,
+and logs what it could not do (a new kernel without headers means no eGPU until a release with modules for it). The
+plugin's first page shows **Repair system integration** for the same job on demand. None of this has been exercised
+on a real SteamOS update yet.
 
 **Bazzite (rpm-ostree): untested.** `/usr/local` and `/etc` persist there, kernel parameters go through
 `rpm-ostree kargs` (handled), but the patched driver is an Arch package and cannot be layered, so a cable yank may

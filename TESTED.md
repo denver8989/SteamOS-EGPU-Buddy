@@ -87,3 +87,7 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 - Post-upgrade hook: script **tested** here (no breakage to repair; reports clean); an actual rebuild after a breaking library update **not exercised**.
 - Update survival on CachyOS: reasoned from file locations and pacman/DKMS behaviour; this machine has been through kernel/package updates with the same layout since June 2026 (private repo era), but no update was run today to prove the new hook.
+
+## 0.5.0 (2026-09-14)
+
+- Self-heal: quick path and a forced repair **tested** on the tested machine (files, packages, modules already present); a real SteamOS update **not tested**; module restore into a fresh /usr **not exercised**.

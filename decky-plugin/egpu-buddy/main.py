@@ -229,7 +229,7 @@ def _unsupported():
     except OSError:
         return ""
     if osr.get("ID", "").strip('"') == "steamos":
-        return "SteamOS itself is not supported: its updates wipe /usr and it has no NVIDIA driver or kernel headers. Use an Arch-based handheld distro (CachyOS tested)."
+        return ""
     return ""
 
 

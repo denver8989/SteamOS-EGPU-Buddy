@@ -16,10 +16,12 @@ pin=""; for pkg in nvidia-utils lib32-nvidia-utils; do
   [ "$cur" = "$PV-1" ] || pin="$pin $ALA/${pkg:0:1}/$pkg/$pkg-$PV-1-x86_64.pkg.tar.zst"
 done
 [ -z "$pin" ] || { echo "pinning NVIDIA userspace to $PV:$pin"; $R pacman -U --noconfirm --ask 4 $pin; }
-B=$(getent passwd "$U" | cut -d: -f6)/.cache/egpu-buddy/driver-build
+UH=$(getent passwd "$U" | cut -d: -f6); B=$UH/.cache/egpu-buddy/driver-build
+PERSIST=$UH/.local/share/steamos-egpu-buddy; mkdir -p "$PERSIST/pkgcache" "$PERSIST/srccache"; [ "$(id -u)" = 0 ] && chown -R "$U" "$PERSIST/pkgcache" "$PERSIST/srccache"
+export SRCDEST=$PERSIST/srccache   # makepkg keeps the downloaded NVIDIA source tarball here (offline rebuilds)
 rm -rf "$B"; mkdir -p "$B"; cp "$HERE"/PKGBUILD "$HERE"/*.patch "$HERE"/nvidia-egpu-hotplug.* "$B"/; [ "$(id -u)" = 0 ] && chown -R "$U" "$B"
 if [ "$(id -u)" = 0 ]; then runuser -u "$U" -- bash -c "cd '$B' && makepkg -f --noconfirm"; else (cd "$B" && makepkg -f --noconfirm); fi
-PKG=$(ls -t "$B"/nvidia-open-egpu-dkms-*.pkg.tar.* | head -1)
+PKG=$(ls -t "$B"/nvidia-open-egpu-dkms-*.pkg.tar.* | head -1); cp -f "$PKG" "$PERSIST/pkgcache/" 2>/dev/null || true
 # --ask 4 answers "yes" to removing the conflicting stock nvidia-open / nvidia-open-dkms package
 $R pacman -U --noconfirm --ask 4 "$PKG"
 echo "installed: $(pacman -Q nvidia-open-egpu-dkms 2>/dev/null); dkms: $(dkms status 2>/dev/null | grep -i nvidia | head -1)"

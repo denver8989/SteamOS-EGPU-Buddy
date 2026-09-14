@@ -37,10 +37,8 @@ say(){ printf '\033[1m%s\033[0m\n' "$*"; }
 say "== preflight ($COMPONENTS)"
 . /etc/os-release 2>/dev/null || true
 if [ "${ID:-}" = steamos ] && [ "$MODE" = install ]; then
-  echo "WARNING: SteamOS itself is not supported: its A/B updates wipe /usr (including /usr/local and anything pacman installs),"
-  echo "         it ships no NVIDIA driver and no kernel headers, so the patched driver cannot be built. Everything installed here"
-  echo "         would be gone after the next SteamOS update. This tool targets Arch-based handheld distros (CachyOS tested)."
-  [ "${EGPU_ALLOW_UNSUPPORTED:-0}" = 1 ] || { echo "         Set EGPU_ALLOW_UNSUPPORTED=1 to install anyway."; exit 1; }
+  echo "note: SteamOS (experimental): OS updates replace /usr; the self-heal service re-applies this integration at the next boot"
+  echo "      from the copy kept in your home, restores cached packages and kernel modules, and rebuilds the driver if headers exist."
 fi
 for c in systemctl udevadm lspci; do command -v $c >/dev/null || { echo "missing $c"; exit 1; }; done
 lspci -Dn | grep -qE '0300: 10de:' || echo "note: no NVIDIA GPU on the bus right now (fine, it is hot-pluggable)"
@@ -114,12 +112,12 @@ chmod 0755 /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* /usr/local/bin
 mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/version
 udevadm control --reload; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
 systemctl daemon-reload
-for u in egpu-mount egpu-boot-enumerate egpu-conditional-session; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
+for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
 if [ -f /etc/pacman.conf ]; then
   # pin the NVIDIA userspace to the patched modules' version: append to an existing IgnorePkg line, never replace it
   for pk in nvidia-utils lib32-nvidia-utils opencl-nvidia lib32-opencl-nvidia; do
-    grep -qE "^IgnorePkg\\s*=.*\\b$pk\\b" /etc/pacman.conf && continue
-    if grep -qE '^IgnorePkg\\s*=' /etc/pacman.conf; then sed -i -E "0,/^IgnorePkg\\s*=.*/s//& $pk/" /etc/pacman.conf; else sed -i -E "0,/^#\\s*IgnorePkg\\s*=.*/s//IgnorePkg = $pk/" /etc/pacman.conf; fi
+    grep -qE '^IgnorePkg\\s*=.*\\b'\$pk'\\b' /etc/pacman.conf && continue
+    if grep -qE '^IgnorePkg\\s*=' /etc/pacman.conf; then sed -i -E '0,/^IgnorePkg\\s*=.*/s//& '\$pk'/' /etc/pacman.conf; else sed -i -E '0,/^#\\s*IgnorePkg\\s*=.*/s//IgnorePkg = '\$pk'/' /etc/pacman.conf; fi
   done
 fi
 true
@@ -173,6 +171,26 @@ else
   say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
 fi
 
+# ---- persistent payload + caches (what the self-heal service repairs from after an OS update) --------------
+PERSIST="$USER_HOME/.local/share/steamos-egpu-buddy"
+if [ "$(readlink -f "$ROOT")" != "$(readlink -f "$PERSIST")" ]; then
+  say "== keeping a copy of this release in $PERSIST (self-heal source)"
+  umkdir "$PERSIST"; rm -rf "$PERSIST"/{system,user,packaging,prebuilt,desktop-app,decky-plugin,docs,installer}
+  cp -a "$ROOT"/{system,user,packaging,desktop-app,decky-plugin,docs,installer,install.sh,uninstall.sh,selfheal.sh,VERSION,README.md,TESTED.md,CREDITS.md,LICENSE} "$PERSIST"/ 2>/dev/null || true
+  [ -d "$ROOT/prebuilt" ] && cp -a "$ROOT/prebuilt" "$PERSIST"/
+fi
+if command -v pacman >/dev/null 2>&1; then
+  umkdir "$PERSIST/pkgcache" "$PERSIST/modcache/$(uname -r)"
+  # cache the exact installed versions for an offline restore: pacman cache -> our build dir -> Arch Linux Archive
+  for pk in nvidia-utils lib32-nvidia-utils bolt dkms nvidia-open-egpu-dkms; do v=$(pacman -Q "$pk" 2>/dev/null | awk '{print $2}'); [ -n "$v" ] || continue
+    ls "$PERSIST"/pkgcache/"$pk"-"$v"-*.pkg.tar.* >/dev/null 2>&1 && continue
+    f=$( { ls /var/cache/pacman/pkg/"$pk"-"$v"-*.pkg.tar.* "$USER_HOME"/.cache/egpu-buddy/driver-build/"$pk"-"$v"-*.pkg.tar.* 2>/dev/null || true; } | grep -v '\.sig$' | head -1 || true)
+    if [ -n "$f" ]; then cp -n "$f" "$PERSIST/pkgcache/" 2>/dev/null || true
+    else for arch in x86_64 any; do curl -fsSL -o "$PERSIST/pkgcache/$pk-$v-$arch.pkg.tar.zst" "https://archive.archlinux.org/packages/${pk:0:1}/$pk/$pk-$v-$arch.pkg.tar.zst" 2>/dev/null && break; rm -f "$PERSIST/pkgcache/$pk-$v-$arch.pkg.tar.zst"; done; fi
+  done
+  ls /usr/lib/modules/"$(uname -r)"/updates/dkms/nvidia*.ko* >/dev/null 2>&1 && cp -a /usr/lib/modules/"$(uname -r)"/updates/dkms/nvidia*.ko* "$PERSIST/modcache/$(uname -r)/" 2>/dev/null || true
+fi
+uown "$PERSIST"
 if [ "${CMDLINE_MISSING:-0}" = 1 ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "Write the missing kernel parameters into the bootloader configuration now? (backup kept) [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== writing the kernel parameters"; sudo /usr/local/sbin/egpu-kernel-cmdline --apply || echo "warning: could not write the kernel parameters; see README 'Kernel command line'"; fi
