@@ -145,13 +145,14 @@ say "      audio driver: $([ -L /sys/bus/pci/devices/$HDA/driver ] && echo still
 
 # ---- 3. release every /dev/nvidia* user, then FULLY unload the nvidia stack ----
 say "[3/5] releasing NVIDIA users + unloading the driver stack…"
-systemctl stop nvidia-persistenced 2>/dev/null; systemctl stop lactd 2>/dev/null
+systemctl stop nvidia-persistenced 2>/dev/null; systemctl stop lactd 2>/dev/null   # LACT, if installed
+for h in /etc/nv-egpu-buddy/hooks.d/pre-unload/*; do [ -x "$h" ] && "$h" >/dev/null 2>&1; done
 runuser -u deck -- env $RUNENV systemd-run --user --collect --quiet --wait --unit=egpu-steam-shutdown-$(date +%s) /usr/bin/steam -shutdown >/dev/null 2>&1; for _ in $(seq 1 15); do pgrep -x steam >/dev/null || break; sleep 1; done
 for _ in 1 2 3; do
   held=$(fuser /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm $(nv_drm_nodes) 2>/dev/null | tr -s ' \n' ' ')
   [ -n "$held" ] || break
   for p in $held; do cmd=$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null)
-    case "$cmd" in *steam*|*--type=gpu-process*|*--type=broker*|*--type=utility*|*go-hub*|*gohub*|*legohub*|*lact*|*nvidia-smi*|*zenity*|*python3*|*WebKit*|*xdg-dbus-proxy*|*panel2-overlay*) kill "$p" 2>/dev/null ;; esac
+    case "$cmd" in *steam*|*--type=gpu-process*|*--type=broker*|*--type=utility*|*lact*|*nvidia-smi*|*zenity*|*python3*) kill "$p" 2>/dev/null ;; esac
   done; sleep 2
 done
 held=$(fuser -v /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm $(nv_drm_nodes) 2>&1 | awk 'NR>1&&NF>=3{print $NF"("$2")"}' | sort -u | tr '\n' ' ')

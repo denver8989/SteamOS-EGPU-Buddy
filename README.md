@@ -41,6 +41,7 @@ current scripts.
   reboot loop if the link misbehaves.
 - **EGPU Buddy Decky plugin**: attach, safe detach, status, and power/clock controls (only when Game Mode runs on
   the eGPU; the handheld's own power management is left alone on the iGPU).
+- **EGPU Buddy desktop app**: the same controls for the docked Desktop, in a window (see *Desktop app*).
 
 ## How it works
 
@@ -86,22 +87,29 @@ iGPU, the panel is re-enabled and the compositor takes it over again. The eGPU d
 docked; that is the tested mode. A both-screens desktop layout is possible with `egpu-display-profile.sh` but is
 not the default.
 
+## Desktop app
+
+`egpu-buddy` (application menu: **EGPU Buddy**) is a small desktop window for the docked desktop: live GPU
+telemetry from nvidia-smi, tunnel/driver/mode badges, the power limit slider, reset clocks, Safe Detach and
+Re-attach. It is the stripped-down successor of the eGPU page from a private hub app; it talks only to the helpers
+in this repository, has no side panel and no LACT dependency. GTK 4 + WebKitGTK 6.0 window when `python-gobject`
+provides them, otherwise it opens in your browser at `http://127.0.0.1:8772/`.
+
 ## Install
 
 **Easiest: the release installer.** Download `SteamOS-EGPU-Buddy-<version>.run` from
 [Releases](https://github.com/denver8989/SteamOS-EGPU-Buddy/releases), make it executable and run it from the
 desktop (double-click, or `./SteamOS-EGPU-Buddy-<version>.run`). It shows what it detected, lets you tick the
-components (hot-plug core, Game Mode integration, GBM gamescope, Decky plugin, boot policy, patched driver), backs up
+components (hot-plug core, Game Mode integration, GBM gamescope, Decky plugin, boot policy, desktop app, patched driver), backs up
 everything it replaces, and adds a "SteamOS EGPU Buddy Uninstaller" entry to the application menu. `--uninstall`
 and `--no-gui` (terminal mode) are accepted. On SteamOS it toggles `steamos-readonly` around the install.
 
 **What it needs on the machine.** Beyond systemd, udev and `pciutils`, the scripts call `setpci`, `modetest`
 (libdrm), `fuser` (psmisc), `jq`, `xxd`, `perl`, `python3`, `qdbus6`, `kscreen-doctor`, `xprop`, `boltctl` and
-`nvidia-smi`; the installer warns about any that are missing. Nothing else is required: Go Hub, LACT and the
-desktop tray app used during development are **not** part of this project and are not needed. The only hooks
-that mention them are guarded (`command -v go-hub`, `systemctl stop lactd` on a unit that may not exist).
-Desktop-mode Safe Detach is the `egpu-safe-detach-ui` command (or `sudo egpu-safe-detach`); there is no desktop
-icon for it in this package. The Decky plugin talks only to the shipped helpers.
+`nvidia-smi`; the installer warns about any that are missing. The desktop app wants `python-gobject` with GTK 4 and
+WebKitGTK 6.0 for its window and falls back to your browser without them. Nothing else is required and no other
+project is referenced: if you run something of your own that must stop before the driver unloads or start after an
+attach, drop an executable into `/etc/nv-egpu-buddy/hooks.d/{pre-unload,post-attach,post-detach}/`.
 
 **From a checkout:**
 

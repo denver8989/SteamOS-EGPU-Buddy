@@ -40,7 +40,8 @@ runuser -u deck -- env $RUNENV bash -c '
     for _ in $(seq 1 60); do pgrep -x steamwebhelper >/dev/null && break; sleep 1; done
     pgrep -x steamwebhelper >/dev/null && break
   done
-  command -v go-hub >/dev/null 2>&1 && { pgrep -f "[g]o-hub" >/dev/null || systemd-run --user --collect --quiet --unit=egpu-reattach-gohub-$(date +%s) /home/deck/.local/bin/go-hub >/dev/null 2>&1; }' 2>/dev/null
+  for h in /etc/nv-egpu-buddy/hooks.d/post-attach/*; do [ -x "$h" ] && systemd-run --user --collect --quiet --unit=egpu-hook-$(basename "$h")-$(date +%s) "$h" >/dev/null 2>&1; done   # user hooks (none shipped)
+' 2>/dev/null
 say "      steam: $(pgrep -x steam >/dev/null && echo up || echo DOWN) webhelper: $(pgrep -x steamwebhelper >/dev/null && echo up || echo DOWN)"
 # Plasma helpers race the new Wayland socket on every compositor restart -> start any that failed
 runuser -u deck -- env $RUNENV bash -c 'systemctl --user reset-failed 2>/dev/null; for u in plasma-kded6 plasma-powerdevil plasma-polkit-agent plasma-xdg-desktop-portal-kde plasma-kaccess plasma-gmenudbusmenuproxy plasma-xembedsniproxy; do systemctl --user is-active $u.service >/dev/null 2>&1 || systemctl --user start $u.service 2>/dev/null; done'

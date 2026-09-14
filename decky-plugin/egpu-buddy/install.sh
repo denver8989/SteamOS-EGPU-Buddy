@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install EGPU Buddy into Decky (run as root). Backs up and retires the legacy NV-EGPU-Buddy/Lego Hub plugin.
+# Install EGPU Buddy into Decky (run as root). Backs up and retires the legacy NV-EGPU-Buddy plugin.
 set -eu
 SRC=$(cd "$(dirname "$0")" && pwd); DEST=${DECKY_PLUGIN_DEST:-/home/deck/homebrew/plugins/EGPU-Buddy}; OLD=/home/deck/homebrew/plugins/NV-EGPU-Buddy
 [ -s "$SRC/dist/index.js" ] || { echo "build first: npm install && npm run build"; exit 1; }

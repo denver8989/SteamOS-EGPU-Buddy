@@ -37,7 +37,8 @@ log "kwin=$(pgrep -x kwin_wayland | head -1) on $(k=$(pgrep -x kwin_wayland|head
 # 3. unload the orphaned nvidia stack (no device behind it) once nothing holds it; retry up to 60s, kill respawners
 systemctl stop nvidia-persistenced 2>/dev/null; systemctl stop lactd 2>/dev/null
 # old-session Go Hub (python3 WebKit) survives the session end and keeps dmabufs exported by the removed card -> pins nvidia_drm
-pkill -9 -f '[g]o-hub-remix-native|[l]egohub-backend|[p]anel2-overlay' 2>/dev/null; sleep 1
+for h in /etc/nv-egpu-buddy/hooks.d/pre-unload/*; do [ -x "$h" ] && "$h" >/dev/null 2>&1; done   # e.g. stop apps holding /dev/nvidia*
+sleep 1
 # pre-removal user processes still holding dmabufs (e.g. a Steam Proton helper) keep NVIDIA-exported buffers -> pin nvidia_drm
 for p in $(pgrep -u 1000); do
   st=$(stat -c %Y /proc/$p 2>/dev/null); [ -n "$st" ] && [ "$st" -lt "$T0" ] || continue
@@ -68,7 +69,7 @@ for _ in $(seq 1 30); do pgrep -x Xwayland >/dev/null && pgrep -x plasmashell >/
 # 5. internal panel back on + failover watcher promotes eDP-1; audio to internal
 /usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
 runuser -u deck -- env $RUNENV bash -c 'pactl set-default-sink alsa_output.pci-0000_c2_00.6.pro-output-0' >/dev/null 2>&1
-command -v go-hub >/dev/null 2>&1 && runuser -u deck -- env $RUNENV bash -c 'pgrep -f "[g]o-hub-remix-native" >/dev/null || systemd-run --user --collect --quiet --unit=egpu-surprise-gohub-$(date +%s) /home/deck/.local/bin/go-hub' >/dev/null 2>&1
+runuser -u deck -- env $RUNENV bash -c 'for h in /etc/nv-egpu-buddy/hooks.d/post-detach/*; do [ -x "$h" ] && systemd-run --user --collect --quiet --unit=egpu-hook-$(basename "$h")-$(date +%s) "$h" >/dev/null 2>&1; done' >/dev/null 2>&1   # user hooks (none shipped)
 [ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-surprise-steam-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1   # plain steam on the iGPU session (old instance is dead/zombie)
 runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 notify-send -a NV-EGPU-Buddy "eGPU disconnected" "Desktop moved to the internal screen." >/dev/null 2>&1 || true
 log "DONE"

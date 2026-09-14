@@ -1,2 +1,7 @@
-# SteamOS-EGPU-Buddy: the Decky plugin / user tools call the privileged helper without a password
+# SteamOS-EGPU-Buddy: the Decky plugin, the desktop app and the Safe Detach tool call these without a password
 deck ALL=(root) NOPASSWD: /usr/local/sbin/nv-egpu-buddy-privileged *
+deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-safe-detach, /usr/local/sbin/egpu-safe-detach *
+deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-reattach
+deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-gamemode-switch, /usr/local/sbin/egpu-gamemode-switch --force
+deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-gamemode-detach
+deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-rearm

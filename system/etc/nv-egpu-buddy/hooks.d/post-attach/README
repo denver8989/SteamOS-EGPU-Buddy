@@ -1,0 +1,1 @@
+# Drop executables here; EGPU Buddy runs them as the user (systemd-run) after a re-attach.

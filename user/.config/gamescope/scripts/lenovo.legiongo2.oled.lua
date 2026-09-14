@@ -1,4 +1,4 @@
--- LEGO HUB display fix — source: InnoVision-Games/SteamOS-Utils (LegionGo2BrightnessSlider.py)
+-- Legion Go 2 OLED panel definition for gamescope — source: InnoVision-Games/SteamOS-Utils (LegionGo2BrightnessSlider.py)
 local lenovo_go2_oled_colorimetry = {
   r = { x = 0.6835, y = 0.3154 },
   g = { x = 0.2402, y = 0.7138 },

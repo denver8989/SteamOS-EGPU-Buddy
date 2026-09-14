@@ -1,3 +1,20 @@
+0.2.0 — standalone.
+
+- **No references to any other project.** The Go Hub tray-app hooks that were guarded in 0.1.x are gone from the
+  attach/detach scripts. In their place: `/etc/nv-egpu-buddy/hooks.d/{pre-unload,post-attach,post-detach}/`, where
+  anyone can drop their own executables. Nothing is shipped there.
+- **EGPU Buddy desktop app** (`desktop-app/`, component `desktopapp`, on by default): telemetry, power limit, reset
+  clocks, Safe Detach, Re-attach for the docked Desktop. GTK 4/WebKitGTK window with browser fallback. Backend on
+  127.0.0.1:8772 uses only the shipped helpers. New icon, `EGPU Buddy` menu entry, removed by the uninstaller.
+- **sudoers fix.** 0.1.x only whitelisted the privileged helper, so the Desktop Safe Detach tool (`sudo -n
+  egpu-safe-detach`) would have asked for a password or failed on a fresh install. The rule now covers
+  egpu-safe-detach, egpu-reattach, egpu-gamemode-switch/-detach and egpu-rearm.
+- Holder kill list before driver unload no longer names foreign apps; use a `pre-unload` hook for yours.
+
+Tested on the tested machine: desktop app backend (status + guards) and the installer component; the GTK window
+was not opened by the maintainer's automation (launch it yourself). Scripts otherwise unchanged from 0.1.2.
+SteamOS and Bazzite untested.
+
 0.1.2 — installer warns about missing runtime tools (setpci, modetest, jq, xxd, perl, qdbus6, kscreen-doctor, xprop, boltctl, nvidia-smi); README states what is and is not required (no Go Hub, no LACT, no desktop tray app). No script changes.
 
 0.1.1 — two hot-plug regressions found the day after 0.1.0, both on the tested machine.

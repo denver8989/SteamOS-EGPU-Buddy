@@ -53,9 +53,10 @@ if [ $GUI = 1 ]; then
       TRUE  gamescope "GBM-scanout gamescope (UI corruption fix)" "$([ $HAS_TOOLCHAIN = 1 ] && echo 'built from source' || echo 'prebuilt binary; falls back to distro gamescope if it cannot run')" \
       $([ $HAS_DECKY = 1 ] && echo TRUE || echo FALSE) decky "EGPU Buddy Decky plugin" "$([ $HAS_DECKY = 1 ] && echo 'Decky Loader found' || echo 'Decky Loader not found')" \
       $([ $HAS_PLASMALOGIN = 1 ] && echo TRUE || echo FALSE) bootpolicy "Boot into Game Mode with the eGPU attached" "$([ $HAS_PLASMALOGIN = 1 ] && echo 'plasmalogin autologin policy' || echo 'CachyOS/plasmalogin only')" \
+      TRUE  desktopapp "EGPU Buddy desktop app"          "status, power limit, safe detach, re-attach (GTK/WebKit window, browser fallback)" \
       FALSE driver    "Patched nvidia-open driver (surprise-unplug fix)" "$([ $ARCH_LIKE = 1 ] && echo 'builds DKMS modules; Arch-based only; needs kernel headers' || echo 'not available on this distro')") || exit 0
 else
-  echo "$banner"; echo; echo "Components: core session gamescope decky bootpolicy driver"; read -rp "Install which? (comma list, default core,session,gamescope,decky,bootpolicy): " sel; sel=${sel:-core,session,gamescope,decky,bootpolicy}
+  echo "$banner"; echo; echo "Components: core session gamescope decky bootpolicy desktopapp driver"; read -rp "Install which? (comma list, default core,session,gamescope,decky,bootpolicy,desktopapp): " sel; sel=${sel:-core,session,gamescope,decky,bootpolicy,desktopapp}
 fi
 want(){ case ",$sel," in *",$1,"*) return 0;; *) return 1;; esac; }
 want driver && [ $ARCH_LIKE = 0 ] && { err "The patched driver can only be built on Arch-based distros. Deselect it."; exit 1; }

@@ -5,7 +5,7 @@
 #   ./install.sh --with-driver   also build + install the patched nvidia-open kernel modules (Arch-based only)
 #   ./install.sh --check         only report what differs between this repo and the live system
 #   ./install.sh --no-gamescope  skip the GBM-scanout gamescope
-#   EGPU_COMPONENTS=core,session,gamescope,decky,bootpolicy,driver   (env) subset to install
+#   EGPU_COMPONENTS=core,session,gamescope,decky,bootpolicy,desktopapp,driver   (env) subset to install
 #   STOCK_GAMESCOPE_SESSION=/path  (env) the distro's gamescope-session script the wrapper should call
 #   EGPU_PREBUILT_GAMESCOPE=dir     (env) prebuilt gamescope tree (usr/bin, usr/share) used when no toolchain is present
 #
@@ -16,7 +16,7 @@ ROOT=$(cd "$(dirname "$0")" && pwd)
 TS=$(date +%Y%m%d-%H%M%S)
 USER_NAME=${SUDO_USER:-$USER}
 USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
-COMPONENTS=${EGPU_COMPONENTS:-core,session,gamescope,decky,bootpolicy}
+COMPONENTS=${EGPU_COMPONENTS:-core,session,gamescope,decky,bootpolicy,desktopapp}
 MODE=install
 for a in "$@"; do case "$a" in --check) MODE=check;; --with-driver) COMPONENTS="$COMPONENTS,driver";; --no-gamescope) COMPONENTS=${COMPONENTS//gamescope/};; *) echo "unknown option $a"; exit 1;; esac; done
 want(){ case ",$COMPONENTS," in *",$1,"*) return 0;; *) return 1;; esac; }
@@ -104,6 +104,15 @@ if want gamescope; then
   else
     echo "no toolchain and no prebuilt gamescope; skipping (UI corruption stays on NVIDIA)"
   fi
+fi
+
+# ---- desktop app ----------------------------------------------------------------------------------
+if want desktopapp; then
+  say "== installing the EGPU Buddy desktop app"
+  D="$USER_HOME/.local/share/egpu-buddy"; mkdir -p "$D" "$USER_HOME/.local/bin" "$USER_HOME/.local/share/applications"
+  cp "$ROOT"/desktop-app/egpu-buddy "$ROOT"/desktop-app/egpu-buddy-server.py "$ROOT"/desktop-app/egpu-buddy-window.py "$ROOT"/desktop-app/index.html "$ROOT"/desktop-app/egpu-buddy.png "$D/"
+  chmod +x "$D/egpu-buddy" "$D"/*.py; ln -sf "$D/egpu-buddy" "$USER_HOME/.local/bin/egpu-buddy"
+  sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/egpu-buddy.desktop" > "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
 fi
 
 # ---- Decky plugin --------------------------------------------------------------------------------

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=EGPU Buddy
+GenericName=eGPU control
+Comment=NVIDIA eGPU status, power limit, safe detach and re-attach
+Exec=/home/deck/.local/bin/egpu-buddy
+Icon=/home/deck/.local/share/egpu-buddy/egpu-buddy.png
+Terminal=false
+Categories=Settings;System;
+StartupWMClass=io.github.denver8989.EGPUBuddy
+Keywords=egpu;nvidia;thunderbolt;detach;

@@ -1,0 +1,66 @@
+<!doctype html><html><head><meta charset="utf-8"><title>EGPU Buddy</title>
+<style>
+:root{--bg:#0A0E13;--surface:#121821;--surface2:#0F141C;--border:#28313E;--text:#fff;--dim:#ffffff99;--accent:#57b7ff;--danger:#ff5a5a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,"Segoe UI",Roboto,sans-serif;padding:22px 28px}
+.hd{display:flex;align-items:baseline;gap:14px;margin-bottom:14px}.hd .t{font-size:26px;font-weight:700}.hd .n{color:var(--dim);font-weight:600}
+.badges{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}.bdg{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;padding:3px 10px;border-radius:99px;border:1px solid var(--border);color:var(--dim)}
+.bdg.on{color:var(--accent);border-color:#57b7ff66;background:#57b7ff14}.bdg.warn{color:#ffb340;border-color:#ffb34066}
+.tele{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface2);margin-bottom:12px}
+.cell{padding:14px 6px;text-align:center;border-right:1px solid var(--border);border-bottom:1px solid var(--border)}.cell .v{font-size:22px;font-weight:700}.cell .v small{font-size:12px;color:var(--dim);font-weight:600;margin-left:2px}.cell .l{font-size:10px;letter-spacing:1px;color:var(--dim);text-transform:uppercase;margin-top:3px}
+.info{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.chip{font-size:12px;color:var(--dim);background:var(--surface);border:1px solid var(--border);border-radius:99px;padding:4px 12px}.chip b{color:var(--text);font-weight:600}
+.st{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--dim);margin:16px 0 8px}
+.row{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 18px;margin-bottom:8px}.row .lab{min-width:140px}.row .val{color:var(--accent);font-weight:600;min-width:80px;text-align:right}
+input[type=range]{flex:1;accent-color:var(--accent)}
+.btn{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;cursor:pointer;color:var(--text);font:inherit}.btn:hover{border-color:var(--accent);background:#57b7ff0d}.btn.danger:hover{border-color:var(--danger);background:#ff5a5a12;color:#ff8a8a}.btn:disabled{opacity:.4;cursor:default}
+.acts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.msg{margin-top:14px;padding:10px 14px;border-left:3px solid var(--accent);background:#101720;font-size:13px;min-height:20px;border-radius:4px}.msg.err{border-left-color:var(--danger)}
+.foot{margin-top:18px;font-size:11px;color:var(--dim)}
+</style></head><body>
+<div class="hd"><span class="t">EGPU Buddy</span><span class="n" id="name">—</span>
+ <span class="badges"><span class="bdg" id="b-gpu">No eGPU</span><span class="bdg" id="b-tun">No tunnel</span><span class="bdg" id="b-drv">Driver unloaded</span><span class="bdg" id="b-mode">Desktop</span></span></div>
+<div class="tele">
+ <div class="cell"><div class="v"><span id="t-temp">–</span><small>°C</small></div><div class="l">GPU temp</div></div>
+ <div class="cell"><div class="v"><span id="t-pow">–</span><small id="t-cap">W</small></div><div class="l">Power</div></div>
+ <div class="cell"><div class="v"><span id="t-util">–</span><small>%</small></div><div class="l">GPU util</div></div>
+ <div class="cell"><div class="v"><span id="t-vram">–</span></div><div class="l">VRAM</div></div>
+ <div class="cell"><div class="v"><span id="t-clk">–</span><small>MHz</small></div><div class="l">GPU clock</div></div>
+ <div class="cell"><div class="v"><span id="t-mclk">–</span><small>MHz</small></div><div class="l">Memory clock</div></div>
+ <div class="cell"><div class="v"><span id="t-fan">–</span><small>%</small></div><div class="l">Fan</div></div>
+ <div class="cell"><div class="v" id="t-pcie" style="font-size:16px">–</div><div class="l">PCIe link</div></div>
+</div>
+<div class="info"><span class="chip">Driver <b id="i-drv">—</b></span><span class="chip">Bus <b id="i-bdf">—</b></span><span class="chip">VRAM <b id="i-vt">—</b></span><span class="chip">Displays <b id="i-disp">—</b></span><span class="chip">Handheld panel <b id="i-panel">—</b></span></div>
+<div class="st">Power</div>
+<div class="row"><div class="lab">Power limit</div><input type="range" id="pl" min="100" max="320" step="5" value="320"><div class="val" id="pl-v">– W</div><button class="btn" id="pl-apply">Apply</button></div>
+<div class="st">Lifecycle</div>
+<div class="acts"><button class="btn danger" id="a-detach">Safe Detach</button><button class="btn" id="a-attach">Re-attach</button><button class="btn" id="a-reset">Reset clocks</button></div>
+<div class="msg" id="msg">Ready.</div>
+<div class="foot">EGPU Buddy desktop app — part of SteamOS EGPU Buddy. Safe Detach moves the desktop back to the handheld and removes the card; only then unplug.</div>
+<script>
+const $=id=>document.getElementById(id), S=(id,v)=>{$(id).textContent=v};
+const n=(v,d=0)=>{const x=parseFloat(v);return isNaN(x)?"–":x.toFixed(d)};
+let userTouched=false; $("pl").oninput=()=>{userTouched=true;S("pl-v",$("pl").value+" W")};
+async function post(action,extra){const r=await fetch("/api/action",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(Object.assign({action},extra||{}))}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
+ const m=$("msg"); m.className="msg"+(r.ok?"":" err"); m.textContent=r.ok?(r.started?("Started: "+r.started):(r.out||"Done.")):("Failed: "+(r.error||r.out||"?")); return r;}
+$("pl-apply").onclick=()=>post("power-limit",{watts:+$("pl").value}).then(()=>{userTouched=false});
+$("a-detach").onclick=()=>{if(confirm("Safe Detach: the session moves back to the handheld and the eGPU is removed from the bus. Continue?")) post("safe-detach")};
+$("a-attach").onclick=()=>post("attach"); $("a-reset").onclick=()=>post("reset-clocks");
+async function refresh(){let s; try{s=await(await fetch("/api/status")).json()}catch(e){return}
+ const g=s.gpu||{}, on=s.present&&s.driver_loaded&&g.name;
+ S("name",g.name||(s.present?"NVIDIA GPU (driver not loaded)":"not detected"));
+ $("b-gpu").textContent=s.present?"On the bus":"No eGPU"; $("b-gpu").className="bdg"+(s.present?" on":"");
+ $("b-tun").textContent=s.tunnel?"Tunnel up":"No tunnel"; $("b-tun").className="bdg"+(s.tunnel?" on":"");
+ $("b-drv").textContent=s.driver_loaded?"Driver loaded":"Driver unloaded"; $("b-drv").className="bdg"+(s.driver_loaded?" on":"");
+ $("b-mode").textContent=s.game_mode?"Game Mode":"Desktop"; $("b-mode").className="bdg on";
+ S("t-temp",n(g["temperature.gpu"])); S("t-pow",n(g["power.draw"])); S("t-cap",g["power.limit"]?("/"+n(g["power.limit"])+"W"):"W");
+ S("t-util",n(g["utilization.gpu"])); S("t-vram",g["memory.used"]?(n(g["memory.used"]/1024,1)+"G"):"–");
+ S("t-clk",n(g["clocks.gr"])); S("t-mclk",n(g["clocks.mem"])); S("t-fan",n(g["fan.speed"]));
+ S("t-pcie",g["pcie.link.gen.current"]?("Gen"+g["pcie.link.gen.current"]+" x"+g["pcie.link.width.current"]):"–");
+ S("i-drv",g.driver_version||"—"); S("i-bdf",s.bdf||"—"); S("i-vt",g["memory.total"]?(n(g["memory.total"]/1024,0)+" GB"):"—");
+ S("i-disp",(s.displays||[]).map(d=>d.name+(d.enabled?"":" (off)")).join(", ")||"none"); S("i-panel",s.panel_enabled==null?"—":(s.panel_enabled?"on":"off"));
+ if(on&&!userTouched){const mn=Math.round(+g["power.min_limit"]||100), mx=Math.round(+g["power.max_limit"]||320), cur=Math.round(+g["power.limit"]||mx);
+  $("pl").min=Math.max(100,mn); $("pl").max=Math.min(320,mx); $("pl").value=cur; S("pl-v",cur+" W");}
+ $("pl-apply").disabled=!on; $("a-reset").disabled=!on; $("a-detach").disabled=!s.present; $("a-attach").disabled=!!(s.present&&s.driver_loaded);
+ const d=s.detach, gm=s.gm; if(d&&d.state&&d.state!=="IDLE"){$("msg").className="msg"+(/FAIL|DO_NOT|INCOMPLETE/.test(d.state)?" err":""); $("msg").textContent=d.state+": "+(d.message||"")}
+ else if(gm&&gm.state&&gm.state!=="ATTACHED"){$("msg").textContent=gm.state+": "+(gm.message||"")}}
+refresh(); setInterval(refresh,2000);
+</script></body></html>

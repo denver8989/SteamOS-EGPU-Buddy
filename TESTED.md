@@ -50,3 +50,9 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 - Desktop Safe Detach returning to the Desktop: **changed, not yet re-run**.
 - Re-login panel watchdog (`vt-bounce`): the manual VT bounce was verified to recover the dark panel; the automatic
   watchdog path is **not yet exercised**.
+
+## 0.2.0 (2026-09-14)
+
+- Desktop app: backend `/api/status` and action guards **tested** on the tested machine (eGPU attached, Desktop);
+  the GTK/WebKit window and the Safe Detach / Re-attach buttons from the app **not yet exercised**.
+- hooks.d mechanism: **untested** with a real hook by anyone but the maintainer (their hooks live outside this repo).
