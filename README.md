@@ -5,7 +5,8 @@ moves to the monitor, unplug (safely or by yanking the cable) and it falls back 
 it comes back. Includes the fixes for the three things that made this unusable before: the NVIDIA scan-out
 corruption in gamescope, the driver hang on surprise removal, and games freezing at the loading screen.
 
-**Status: works on exactly one machine (mine). Everything else is untested. Read [TESTED.md](TESTED.md) before you
+**Status: works on exactly one machine (mine). Claude (Anthropic) and Codex (OpenAI) were used as development assistants
+throughout; every change was tested on that machine as recorded in TESTED.md, and nothing is claimed beyond that. Everything else is untested. Read [TESTED.md](TESTED.md) before you
 run anything. This touches the kernel driver, boot configuration, udev, sudoers and your Game Mode session. Use at
 your own risk, keep a way to boot without the eGPU, and read the scripts before running them.**
 
