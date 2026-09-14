@@ -97,7 +97,20 @@ provides them, otherwise it opens in your browser at `http://127.0.0.1:8772/`.
 
 ## Install
 
-There are two install methods that give the same result, plus a checkout for developers. Pick one.
+**Before you start, whichever method you pick:**
+
+- **Do not have the eGPU connected** while installing, and reboot once with it disconnected before the first plug-in.
+  Connecting it before the fixes are in place can crash or shut the machine down: the stock path auto-loads the
+  driver on a half-initialised link and lets the compositor pick the wrong card. After the install the plug-in goes
+  through the controlled attach path instead.
+- **NVIDIA packages must be installed** (`nvidia-open-dkms` or `nvidia-open`, plus `nvidia-utils`; Arch-based
+  package names). The installer offers to install them with pacman if they are missing.
+- **Kernel command line.** The parameters under *Kernel command line* below are required. The installer checks the
+  running kernel and offers to write them into your bootloader configuration (rpm-ostree, Limine, GRUB or
+  systemd-boot; backup kept), or you add them by hand. Reboot afterwards, still with the eGPU disconnected.
+- The tool assumes the eGPU is the machine's only NVIDIA GPU (the modprobe rules stop `nvidia` from auto-loading).
+
+There are two install methods that give the same result, plus a one-line installer. Pick one.
 
 ### Method 1 — from Game Mode, with the Decky plugin
 
@@ -107,7 +120,8 @@ There are two install methods that give the same result, plus a checkout for dev
    shows one button: **Install system integration**. Press it once.
 3. A progress bar reports each stage (user files, system files, GBM gamescope, desktop app) until it is done. The
    payload ships inside the plugin, so no internet is needed. Everything replaced is backed up.
-4. Press **Reboot now**. Plug the eGPU in after Game Mode is up the first time.
+4. If the page reports missing kernel parameters, press **Apply kernel parameters** (backup kept).
+5. Press **Reboot now**, with the eGPU disconnected. Plug it in once Game Mode is up.
 
 When everything is already installed and current, that page shows only the eGPU controls. The **Setup** tab
 (two presses of the top button) has the optional patched-driver build and **Uninstall system integration**.
@@ -119,7 +133,7 @@ When everything is already installed and current, that page shows only the eGPU 
 3. It shows what it detected (distro, immutable root, Game Mode session script, NVIDIA GPU, build toolchain, Decky).
 4. Tick the components: hot-plug core, Game Mode session integration, GBM-scanout gamescope, Decky plugin, boot
    policy, desktop app, patched driver. Confirm.
-5. Reboot. Plug the eGPU in after the session is up the first time.
+5. If kernel parameters are missing it offers to write them. Reboot with the eGPU disconnected, then plug it in.
 
 `--uninstall` and `--no-gui` (terminal mode) are accepted. On SteamOS it toggles `steamos-readonly` around the
 install. A "SteamOS EGPU Buddy Uninstaller" entry is added to the application menu.
@@ -146,7 +160,9 @@ your own that must stop before the driver unloads or start after an attach, drop
 
 ### Kernel command line
 
-The tested machine boots with these parameters (Limine; put them in your bootloader's cmdline):
+The tested machine boots with these parameters. `sudo egpu-kernel-cmdline --check` reports which are missing from the running
+kernel; `sudo egpu-kernel-cmdline --apply` writes them for rpm-ostree, Limine (`/etc/default/limine`), GRUB (`/etc/default/grub`)
+or systemd-boot entries, keeping a backup, and regenerates the boot config:
 
 ```
 nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=16G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native

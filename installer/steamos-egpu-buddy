@@ -9,6 +9,11 @@ GUI=1; ACTION=install
 for a in "$@"; do case "$a" in --uninstall) ACTION=uninstall;; --no-gui) GUI=0;; esac; done
 command -v zenity >/dev/null 2>&1 || GUI=0; [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || GUI=0
 say(){ echo "$*" | tee -a "$LOG"; }
+# sudo without a terminal: ask the password with zenity (sudo -A) and reuse it for the whole run
+if [ $GUI = 1 ]; then
+  ASKPASS=$(mktemp); printf '#!/bin/sh\nzenity --password --title="SteamOS EGPU Buddy needs your password"\n' > "$ASKPASS"; chmod +x "$ASKPASS"; export SUDO_ASKPASS=$ASKPASS
+  sudo(){ command sudo -A "$@"; }; export -f sudo
+fi
 msg(){ if [ $GUI = 1 ]; then zenity --info --title="SteamOS EGPU Buddy" --width=520 --text="$1"; else echo; echo "$1"; fi; }
 err(){ if [ $GUI = 1 ]; then zenity --error --title="SteamOS EGPU Buddy" --width=520 --text="$1"; else echo "ERROR: $1" >&2; fi; }
 ask(){ if [ $GUI = 1 ]; then zenity --question --title="SteamOS EGPU Buddy" --width=520 --text="$1"; else read -rp "$1 [y/N] " r; [ "${r,,}" = y ]; fi; }
@@ -66,7 +71,7 @@ want driver && [ $ARCH_LIKE = 0 ] && { err "The patched driver can only be built
 run_install(){
   say "== SteamOS EGPU Buddy $VERSION install: $sel"
   [ $IMMUTABLE = 1 ] && { say "disabling read-only root"; sudo steamos-readonly disable; }
-  export EGPU_COMPONENTS="$sel" STOCK_GAMESCOPE_SESSION="$STOCK_SESSION" EGPU_PREBUILT_GAMESCOPE="$ROOT/prebuilt/gamescope-gbm"
+  export EGPU_COMPONENTS="$sel" STOCK_GAMESCOPE_SESSION="$STOCK_SESSION" EGPU_PREBUILT_GAMESCOPE="$ROOT/prebuilt/gamescope-gbm" EGPU_AUTO_YES="${EGPU_AUTO_YES:-0}"
   args=(); want gamescope || args+=(--no-gamescope); want driver && args+=(--with-driver)
   bash "$ROOT/install.sh" "${args[@]}"; rc=$?
   [ $IMMUTABLE = 1 ] && sudo steamos-readonly enable
@@ -76,16 +81,26 @@ run_install(){
   printf '[Desktop Entry]\nType=Application\nName=SteamOS EGPU Buddy Uninstaller\nExec=%s/.local/share/steamos-egpu-buddy/installer/steamos-egpu-buddy --uninstall\nIcon=dialog-warning\nCategories=System;\n' "$HOME" > "$HOME/.local/share/applications/steamos-egpu-buddy-uninstall.desktop"
   return $rc
 }
+if ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then
+  ask "NVIDIA packages are missing. Install nvidia-open-dkms + nvidia-utils with pacman as part of this install? (needed before the eGPU is plugged in)" && export EGPU_AUTO_YES=1
+fi
 if [ $GUI = 1 ]; then
   ( run_install ) 2>&1 | tee -a "$LOG" | zenity --progress --pulsate --auto-close --no-cancel --title="SteamOS EGPU Buddy" --width=560 --text="Installing… (log: $LOG)"
   rc=${PIPESTATUS[0]}
 else
   run_install; rc=$?
 fi
+if [ "$rc" = 0 ] && ! /usr/local/sbin/egpu-kernel-cmdline --check >/dev/null 2>&1; then
+  if ask "$(/usr/local/sbin/egpu-kernel-cmdline --check 2>&1)
+
+Add the required kernel parameters to your bootloader configuration now? (backup kept; you must reboot before plugging the eGPU in)"; then
+    sudo /usr/local/sbin/egpu-kernel-cmdline --apply >>"$LOG" 2>&1 && msg "Kernel parameters written. Reboot before connecting the eGPU." || err "Could not write the kernel parameters; see $LOG and README 'Kernel command line'."
+  fi
+fi
 if [ "$rc" = 0 ]; then
   msg "Installed: $sel
 
-Next: reboot (or log out and back into Game Mode). Plug the eGPU in after the session is up the first time.
+Next: reboot with the eGPU DISCONNECTED, then plug it in once the session is up.
 Uninstaller: application menu → 'SteamOS EGPU Buddy Uninstaller'.
 Read TESTED.md for what is verified and what is not."
 else

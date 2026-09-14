@@ -70,3 +70,9 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 - One-line installer: download + checksum + dry run **tested** on the tested machine; the Decky Loader prompt path **not exercised** (Decky is already installed here).
 - Plugin first-page Install button: backend route unchanged from 0.3.1 (tested); the new button flow **not exercised** in the Quick Access UI by the maintainer's automation.
+
+## 0.3.3 (2026-09-14)
+
+- `egpu-kernel-cmdline --check` **tested** here (reports ok); `--apply --dry-run` **tested** against this machine's Limine config; a real `--apply` on GRUB, systemd-boot or rpm-ostree **untested**.
+- GUI installer sudo-via-dialog: mechanism **tested** (sudo -A with an askpass helper); the dialog flow itself not clicked through by the maintainer's automation.
+- Fresh-machine flow (no NVIDIA packages, no eGPU ever connected): **untested**; this machine already had everything.

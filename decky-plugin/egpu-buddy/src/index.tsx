@@ -18,11 +18,12 @@ const safeDetach = callable<[], Result>("safe_detach");
 const setPowerLimit = callable<[number], Result>("set_power_limit");
 const setCoreOffset = callable<[number], Result>("set_core_offset");
 const resetClocks = callable<[], Result>("reset_clocks");
-type Setup = { installed_version: string; payload_version: string; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; log: string };
+type Setup = { installed_version: string; payload_version: string; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; log: string };
 const getSetup = callable<[], Setup>("get_setup_status");
 const installSystem = callable<[boolean], Result>("install_system");
 const uninstallSystem = callable<[], Result>("uninstall_system");
 const rebootSystem = callable<[], Result>("reboot_system");
+const applyCmdline = callable<[], Result>("apply_kernel_cmdline");
 
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
@@ -78,6 +79,12 @@ function Content() {
             <>
               <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. Reboot to activate it.</div></PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" onClick={() => run(rebootSystem)}>Reboot now</ButtonItem></PanelSectionRow>
+            </>
+          )}
+          {su && !su.busy && su.helpers_present && su.cmdline_missing && (
+            <>
+              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Kernel parameters missing: {su.cmdline_missing}. Without them the eGPU can fail to enumerate or crash the boot. One press writes them to the bootloader (backup kept); reboot before plugging the eGPU in.</div></PanelSectionRow>
+              <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(applyCmdline)}>Apply kernel parameters</ButtonItem></PanelSectionRow>
             </>
           )}
           {su && !su.busy && su.rc !== null && su.rc !== 0 && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>Install failed (rc {su.rc}). Log: /tmp/egpu-buddy-setup.log</div></PanelSectionRow>}

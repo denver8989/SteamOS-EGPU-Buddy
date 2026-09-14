@@ -23,7 +23,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.3.1"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.3.2"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -188,7 +188,7 @@ def _run_logged(cmd, env, cwd):
 
 
 def _setup_worker(action, with_driver=False):
-    env = dict(os.environ, EGPU_TARGET_USER=USER, HOME=USER_HOME)
+    env = dict(os.environ, EGPU_TARGET_USER=USER, HOME=USER_HOME, EGPU_AUTO_YES="1")
     ro = shutil.which("steamos-readonly")
     try:
         if action == "install":
@@ -242,10 +242,16 @@ class Plugin:
                 tail = "".join(f.readlines()[-6:])
         except OSError:
             pass
+        rc, out, _ = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--check"], 5) if os.path.exists("/usr/local/sbin/egpu-kernel-cmdline") else (0, "", "")
         return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION,
+                "cmdline_missing": out.replace("missing kernel parameters: ", "") if rc != 0 else "",
                 "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
                 "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "progress": _setup["progress"],
                 "can_build_driver": bool(shutil.which("pacman")), "log": tail}
+
+    async def apply_kernel_cmdline(self):
+        rc, out, err = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--apply"], 120)
+        return {"ok": rc == 0, "message": (out or err)[-300:]}
 
     async def reboot_system(self):
         subprocess.Popen(["systemctl", "reboot"]); return {"ok": True, "message": "Rebooting"}

@@ -1,3 +1,14 @@
+0.3.3 — safe first plug-in on a fresh machine.
+
+- **Kernel command line is now handled.** New `egpu-kernel-cmdline --check/--apply` (rpm-ostree, Limine, GRUB,
+  systemd-boot; backups kept). The installer reports what is missing and offers to write it; the plugin's first
+  page shows an Apply button when the running kernel lacks the parameters. Earlier releases only documented them.
+- **NVIDIA packages.** The installer offers to install `nvidia-open-dkms` + `nvidia-utils` with pacman when
+  nvidia-smi is missing (the plugin route does it automatically).
+- **Graphical installer fixed.** The `.run` GUI path ran `sudo` without a terminal, so on any machine that asks
+  for a password it would have failed; it now asks with a dialog once and reuses it.
+- README: a "Before you start" block: install and reboot with the eGPU disconnected, why, and what is assumed.
+
 0.3.2 — simpler ways in.
 
 - **Decky plugin: one press.** When the system integration is missing or outdated, the plugin's first page shows a
