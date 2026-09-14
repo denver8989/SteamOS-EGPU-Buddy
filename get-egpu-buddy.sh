@@ -9,6 +9,10 @@ say(){ printf '\033[1m%s\033[0m\n' "$*"; }
 ask(){ read -rp "$1 [y/N] " r </dev/tty; [ "${r,,}" = y ]; }
 [ "$(id -u)" = 0 ] && { echo "run this as your normal user (sudo is asked for when needed)"; exit 1; }
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
+if [ "$(passwd -S "$USER" 2>/dev/null | awk '{print $2}')" != P ]; then
+  say "== your account has no password (SteamOS default); sudo needs one. Set it now (typed twice, nothing is shown):"
+  passwd </dev/tty; [ "$(passwd -S "$USER" 2>/dev/null | awk '{print $2}')" = P ] || { echo "no password set; cannot continue"; exit 1; }
+fi
 say "== SteamOS EGPU Buddy: looking up the latest release"
 TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
 [ -n "$TAG" ] || { echo "could not determine the latest release"; exit 1; }

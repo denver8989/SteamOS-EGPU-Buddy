@@ -97,6 +97,10 @@ provides them, otherwise it opens in your browser at `http://127.0.0.1:8772/`.
 
 ## Install
 
+**SteamOS note.** The `deck` account normally has no password, and without one `sudo` cannot work. The Decky plugin
+route (Method 1) does not need a password at all: Decky runs the plugin as root. The `.run` and the one-line installer
+ask you to set a password first if none exists.
+
 **Before you start, whichever method you pick:** have the eGPU **disconnected** while installing and for the
 reboot that follows. Connecting it before the fixes are in place can crash or shut the machine down: the stock
 path auto-loads the driver on a half-initialised link and lets the compositor pick the wrong card. The install

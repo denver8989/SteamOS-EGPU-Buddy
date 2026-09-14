@@ -37,6 +37,22 @@ Tested only on CachyOS Deckify + Legion Go 2 + RTX 5060 Ti. SteamOS and Bazzite 
 This changes udev, systemd, sudoers and your Game Mode session. Everything replaced is backed up.
 Log: $LOG"
 
+# ---------------------------------------------------------------- SteamOS: the account may have no password
+# sudo cannot work without one. Detect it (passwd -S: NP = no password, L = locked) and have the user set one first.
+if [ "$(id -u)" != 0 ] && [ "$(passwd -S "$USER" 2>/dev/null | awk '{print $2}')" != P ]; then
+  if [ $GUI = 1 ]; then
+    msg "Your user account has no password, so the installer cannot get administrator rights (sudo).
+
+A terminal will open now: type a new password twice at the prompts (nothing is shown while typing), then this installer continues. The Decky plugin route does not need this step."
+    for term in konsole gnome-terminal xterm; do command -v $term >/dev/null 2>&1 && { T=$term; break; }; done
+    [ -n "${T:-}" ] || { err "No terminal emulator found. Open one, run: passwd   then run this installer again."; exit 1; }
+    case "$T" in konsole) konsole -e bash -c 'echo "Set a password for $USER (needed for sudo):"; passwd';; gnome-terminal) gnome-terminal --wait -- bash -c 'passwd';; *) xterm -e bash -c 'passwd';; esac
+  else
+    echo "Your user account has no password, so sudo cannot work. Set one now:"; passwd </dev/tty
+  fi
+  [ "$(passwd -S "$USER" 2>/dev/null | awk '{print $2}')" = P ] || { err "Still no password set; cannot continue."; exit 1; }
+fi
+
 # ---------------------------------------------------------------- uninstall
 if [ "$ACTION" = uninstall ]; then
   ask "$banner

@@ -1,3 +1,7 @@
+0.4.1 — SteamOS accounts without a password: the `.run` and the one-line installer detect it and have you set one
+first (terminal prompt); the Decky plugin route never needed one, since Decky runs the plugin's backend as root and the
+installer in root mode does not call sudo. README says which route needs what.
+
 0.4.0 — one press, no choices.
 
 - **The plugin's Install button and the `.run` install everything**: hot-plug core, session integration, GBM
