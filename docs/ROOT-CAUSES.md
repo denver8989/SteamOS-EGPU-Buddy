@@ -63,6 +63,37 @@ stays on the desktop.
 (`/etc/nv-egpu-buddy/boot-desktop` as opt-out). `egpu-boot-enumerate.sh` brings the card up before login, with a
 flood lockout so a bad link cannot loop the boot.
 
+## 6. eGPU slower than the iGPU, corruption and page-flip timeouts while docked (AMD crosstalk)
+
+**Cause.** The AMD iGPU owns `boot_vga`, so KWin/gamescope composite on it and copy each frame over the USB4
+tunnel to the NVIDIA connector. The copy saturates the tunnel and the NVIDIA side sees late, cross-device buffers.
+
+**Fix here.** The whole docked session is made NVIDIA-only: `boot_vga` bind-mounted (eGPU=1, iGPU=0),
+`KWIN_DRM_DEVICES`/`OUTPUT_CONNECTOR` restricted to the NVIDIA card, Vulkan/GL pinned to the NVIDIA ICD, and the
+session restarted on hot plug because a running compositor cannot be re-routed. See README, *How it works*.
+
+## 7. Handheld panel stays dark after a re-login into Game Mode
+
+**Symptom.** After a session ends and autologin starts Game Mode again (Desktop safe-detach, session restart),
+gamescope selects `eDP-1` and a mode, but never commits: the CRTC stays off and the panel is black. Nothing is
+logged; libseat never reports "Enabling seat" / "Session resumed".
+
+**Cause.** gamescope started with an inactive libseat seat, and it only re-evaluates its paused state on a
+seat event that never came.
+
+**Fix here.** The session wrapper watches the panel for 12 s after gamescope starts; if it is still disabled and
+no eGPU is on the bus it asks the privileged helper for `vt-bounce` (`chvt 2; chvt 1`), which makes logind
+re-activate the session. The Desktop safe-detach additionally pins the re-login to the desktop, where the eject
+tool expects KWin.
+
+## 8. Handheld panel keeps a frozen image next to the eGPU display (Desktop hot plug)
+
+**Cause.** After the NVIDIA-only re-login KWin never opens the AMD card, so it cannot disable `eDP-1`; the panel
+keeps scanning out the last frame of the previous compositor.
+
+**Fix here.** `egpu-hotplug-mount.sh` waits for the NVIDIA-only KWin and then runs `egpu-panel off`, which
+disables the unowned CRTC directly.
+
 ## Appendix: the exact recipe for the Game Mode UI fix
 
 1. Source: `https://github.com/NightHammer1000/gamescope.git`, branch `poc/gamescope-gbm-route`, commit `2bfc18c`

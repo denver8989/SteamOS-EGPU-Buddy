@@ -43,3 +43,10 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
   break games on the NVIDIA card in ways that look like driver bugs. Remove them before blaming anything here.
 - **No warranty**. This project replaces kernel modules and boot configuration. If you cannot recover a machine that
   does not boot, do not install it.
+
+## 0.1.1 (2026-09-14)
+
+- Hot plug while on the Desktop: **tested** after the change (external display primary, handheld panel off).
+- Desktop Safe Detach returning to the Desktop: **changed, not yet re-run**.
+- Re-login panel watchdog (`vt-bounce`): the manual VT bounce was verified to recover the dark panel; the automatic
+  watchdog path is **not yet exercised**.

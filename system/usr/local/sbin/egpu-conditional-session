@@ -7,6 +7,7 @@ CONF=/etc/plasmalogin.conf
 sess=gamescope-session.desktop
 [ -e /etc/nv-egpu-buddy/boot-desktop ] && sess=plasma.desktop
 [ -f "$CONF" ] || exit 0
-if grep -q "^Session=$sess\$" "$CONF"; then logger -t egpu-cond-session "boot session already $sess"; exit 0; fi
+if grep -q "^Session=$sess\$" "$CONF" && grep -qs "^Session=$sess\$" /etc/plasmalogin.conf.d/zz-steamos-autologin.conf; then logger -t egpu-cond-session "boot session already $sess"; exit 0; fi
 sed -i "s/^Session=.*/Session=$sess/" "$CONF"
+install -d -m 0755 /etc/plasmalogin.conf.d; printf '[Autologin]\nSession=%s\n' "$sess" > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
 logger -t egpu-cond-session "boot session -> $sess"

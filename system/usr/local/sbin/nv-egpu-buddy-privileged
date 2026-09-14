@@ -440,6 +440,13 @@ case "$action" in
     install -d -m 0755 /etc/plasmalogin.conf.d
     printf '[Autologin]\nSession=egpu-bigpicture.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
     ;;
+  vt-bounce)
+    # gamescope started paused after a relogin (libseat seat inactive: no "Session resumed", CRTC never enabled).
+    # A VT round-trip makes logind re-activate the session -> "Enabling seat" -> gamescope modesets.
+    [ "$#" -eq 0 ] || die "vt-bounce takes no arguments"
+    cur=$(cat /sys/class/tty/tty0/active 2>/dev/null); cur=${cur#tty}
+    chvt 2; sleep 1; chvt "${cur:-1}"
+    ;;
   emergency-console)
     # eGPU yank lifeboat: switch the foreground VT to tty3 (fbcon deferred-takeover fires on
     # first visible output -> console appears on the AMD/eDP panel, untouched by the dead eGPU).

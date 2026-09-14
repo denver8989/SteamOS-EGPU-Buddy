@@ -272,7 +272,13 @@ relogin_session(){
 }
 
 egpu_external_only(){
-  local ext="" t
+  local ext="" t k
+  # wait for the NVIDIA-only KWin of the relogin (up to 60s); before that kscreen talks to the dying session
+  for t in $(seq 1 30); do
+    k=$(pgrep -x kwin_wayland | head -1)
+    [ -n "$k" ] && tr '\0' '\n' </proc/"$k"/environ 2>/dev/null | grep -q "KWIN_DRM_DEVICES=/dev/dri/$nvcard\$" && break
+    sleep 2
+  done
   sleep 4
   for t in 1 2 3 4 5 6 7 8; do
     ext=$(runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor -o 2>/dev/null \
@@ -281,7 +287,8 @@ egpu_external_only(){
     sleep 2
   done
   if [ -z "$ext" ]; then
-    log "EXTERNAL-ONLY: no eGPU output found; leaving eDP-1 on"
+    log "EXTERNAL-ONLY: no eGPU output found via kscreen"
+    /usr/local/sbin/egpu-panel off >/dev/null 2>&1 && log "EXTERNAL-ONLY: eDP-1 CRTC off (panel unowned)"
     return 0
   fi
   runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor \
@@ -293,6 +300,9 @@ egpu_external_only(){
   else
     log "EXTERNAL-ONLY: failed to disable eDP-1 -> DPMS off via egpu-panel"; /usr/local/sbin/egpu-panel off >/dev/null 2>&1
   fi
+  # KWin pinned to the NVIDIA card never lists eDP-1, so kscreen cannot turn it off: the panel keeps the previous
+  # compositor's last frame. egpu-panel is a no-op when a compositor owns card1.
+  /usr/local/sbin/egpu-panel off >/dev/null 2>&1 && log "EXTERNAL-ONLY: eDP-1 CRTC off (panel unowned after NVIDIA-only relogin)"
 }
 set_autologin_plasma(){
   printf '[Autologin]\nRelogin=true\nSession=plasma.desktop\nUser=deck\n' > /etc/plasmalogin.conf 2>/dev/null || true

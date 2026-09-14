@@ -183,7 +183,7 @@ egpu_native_ready() {
 wait_for_egpu_native_ready() {
   local elapsed=0 requested=0 announced=0
 
-  egpu_requested_by_env_file && requested=1
+  egpu_requested_by_env_file && egpu_pci_present && requested=1   # a stale env file must not cost 25s when no eGPU is on the bus
   while [ "$elapsed" -lt "$EGPU_WAIT_SECONDS" ]; do
     if egpu_native_ready; then
       if [ "$announced" -eq 1 ]; then
@@ -211,6 +211,11 @@ wait_for_egpu_native_ready() {
   refresh_egpu_state
   if [ "$requested" -eq 1 ]; then
     log "eGPU wait timed out; falling back to handheld gamescope routing"
+  fi
+  if ! lspci -Dn 2>/dev/null | grep -qE '0300: 10de:'; then
+    # no eGPU on the bus: drop attach-time routing left in the user manager (would pin the next desktop login to a missing card)
+    systemctl --user unset-environment KWIN_DRM_DEVICES KWIN_RENDER_NODES VK_DRIVER_FILES VK_ICD_FILENAMES \
+      __EGL_VENDOR_LIBRARY_FILENAMES __GLX_VENDOR_LIBRARY_NAME OUTPUT_CONNECTOR >/dev/null 2>&1 || true
   fi
   return 1
 }
@@ -569,4 +574,14 @@ fi
 
 # diagnostics: NV_EGPU_DIAG=1 in /run/nvegpu/diag turns on Proton + Vulkan loader logging for every game of this session
 if [ -e /run/nvegpu/diag ]; then export PROTON_LOG=1 VK_LOADER_DEBUG=error,warn WINEDEBUG=-all,+vulkan; fi   # NV_EGPU_DIAG_PROTON_LOG
+# panel watchdog: after a relogin gamescope can start with an inactive libseat seat (no modeset, handheld stays dark).
+# If the panel is still disabled 12s in and no eGPU is on the bus (on the eGPU the panel is meant to be off), bounce the VT once.
+(
+  sleep 12
+  pgrep -x gamescope-wl >/dev/null 2>&1 || exit 0
+  lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && exit 0
+  [ "$(cat /sys/class/drm/card*-eDP-1/enabled 2>/dev/null | head -1)" = disabled ] || exit 0
+  log "panel still disabled 12s after gamescope start -> vt-bounce (paused libseat seat)"
+  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged vt-bounce >/dev/null 2>&1 || true
+) &
 exec "$stock_session"
