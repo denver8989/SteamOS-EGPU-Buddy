@@ -135,7 +135,9 @@ if want gamescope; then
     HOME="$USER_HOME" "$ROOT/packaging/gamescope-gbm/build.sh" || echo "build failed; the session shim falls back to /usr/bin/gamescope"
   elif [ -d "$PRE/usr/bin" ]; then
     say "== no build toolchain; installing the prebuilt GBM-scanout gamescope (falls back to the distro gamescope if it cannot run here)"
-    umkdir "$USER_HOME/.local/gamescope-gbm" && cp -a "$PRE/usr" "$USER_HOME/.local/gamescope-gbm/"; uown "$USER_HOME/.local/gamescope-gbm"
+    # atomic swap: a running gamescope keeps the old binary busy (ETXTBSY), so never copy over it in place
+    G="$USER_HOME/.local/gamescope-gbm"; umkdir "$G"; rm -rf "$G/usr.new" "$G/usr.old"; cp -a "$PRE/usr" "$G/usr.new"
+    [ -d "$G/usr" ] && mv "$G/usr" "$G/usr.old"; mv "$G/usr.new" "$G/usr"; rm -rf "$G/usr.old"; uown "$G"
     ldd "$USER_HOME/.local/gamescope-gbm/usr/bin/gamescope" | grep -q 'not found' && echo "warning: prebuilt gamescope has missing libraries on this distro; the shim will fall back" || true
   else
     echo "no toolchain and no prebuilt gamescope; skipping (UI corruption stays on NVIDIA)"
