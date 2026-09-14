@@ -181,6 +181,14 @@ docs/                        the root-cause notes
 Paths inside the scripts say `/home/deck`; the installer rewrites them to your home, and the sudoers rule to your
 user name.
 
+## Reporting problems
+
+Open an issue with: your distro and kernel, the eGPU enclosure and GPU, the installed version (`cat
+/etc/nv-egpu-buddy/version`), and the relevant log: `/var/log/egpu-hotplug-mount.log` (attach), `/var/log/egpu-gamemode.log`
+(Game Mode switch), `/tmp/egpu-buddy-setup.log` (plugin install), `journalctl -k -b` around the time of the problem, and for
+Game Mode issues `journalctl --user -u gamescope-session.service -b`. Say whether the eGPU was connected at boot or
+plugged in later.
+
 ## Credits
 Nothing in this repository would work without the people below. Where a fix is vendored, the file names in this repo
 say where it came from. The same list is kept in [CREDITS.md](CREDITS.md) and ships inside every installer.
