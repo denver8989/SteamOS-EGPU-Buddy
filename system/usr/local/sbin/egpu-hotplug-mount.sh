@@ -69,7 +69,19 @@ fi
 log "=== hotplug-mount triggered ==="
 # wait for boltd to authorize the dock (udev add fires before authorization)
 dock=""
-for _ in $(seq 1 20); do dock=$(authorized_dock || true); [ -n "$dock" ] && break; sleep 1; done
+for _ in $(seq 1 6); do dock=$(authorized_dock || true); [ -n "$dock" ] && break; sleep 1; done
+if [ -z "$dock" ]; then
+  # first-ever connection on a fresh machine: boltd only auto-authorizes with an IOMMU policy, and Game Mode has no
+  # consent prompt. With security level "user" (or "none") root may authorize the device directly, as boltd would.
+  sec=$(cat /sys/bus/thunderbolt/devices/domain0/security 2>/dev/null)
+  for tb in /sys/bus/thunderbolt/devices/*-*; do
+    [ -e "$tb/device_name" ] && [ "$(cat "$tb/authorized" 2>/dev/null)" = 0 ] || continue
+    case "$sec" in user|none|dponly) echo 1 > "$tb/authorized" 2>/dev/null && log "authorized $(cat "$tb/device_name") ourselves (security=$sec)";;
+      *) log "dock $(cat "$tb/device_name") is not authorized and security level is '$sec' (needs a key): authorize it once from the desktop (boltctl enroll)";; esac
+  done
+  command -v boltctl >/dev/null 2>&1 && for tb in /sys/bus/thunderbolt/devices/*-*; do [ -e "$tb/unique_id" ] && boltctl enroll --policy auto "$(cat "$tb/unique_id")" >/dev/null 2>&1 || true; done
+  for _ in $(seq 1 14); do dock=$(authorized_dock || true); [ -n "$dock" ] && break; sleep 1; done
+fi
 [ -n "$dock" ] || { log "no authorized dock within 20s — exit"; exit 0; }
 log "dock authorized: $dock"
 

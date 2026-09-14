@@ -48,6 +48,13 @@ if ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "NVIDIA packages are missing. Install nvidia-open-dkms + nvidia-utils now with pacman? [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== installing nvidia-open-dkms nvidia-utils lib32-nvidia-utils"; sudo pacman -S --needed --noconfirm nvidia-open-dkms nvidia-utils lib32-nvidia-utils || echo "warning: NVIDIA package install failed; install them by hand"; else echo "warning: no nvidia-smi; install nvidia-open-dkms + nvidia-utils before plugging the eGPU in"; fi
 fi
+# USB4 / Thunderbolt stack: the eGPU arrives over it (AMD USB4 and Intel Thunderbolt share the kernel driver + boltd)
+if [ "$MODE" = install ]; then
+  if ! command -v boltctl >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then say "== installing bolt (Thunderbolt/USB4 device manager)"; sudo pacman -S --needed --noconfirm bolt >/dev/null || echo "warning: could not install bolt"; fi
+  sudo modprobe thunderbolt 2>/dev/null || true
+  if [ -d /sys/bus/thunderbolt/devices/domain0 ]; then say "== USB4/Thunderbolt controller present ($(cat /sys/bus/thunderbolt/devices/domain0/security 2>/dev/null || echo ?) security level)"
+  else echo "WARNING: no USB4/Thunderbolt controller is visible to the kernel. Enable USB4 / Thunderbolt in the firmware (BIOS) settings, then reboot; the eGPU cannot attach without it."; fi
+fi
 if m=$(bash "$ROOT/system/usr/local/sbin/egpu-kernel-cmdline" --check 2>/dev/null); then :; else
   echo "warning: $m"; echo "         run 'sudo egpu-kernel-cmdline --apply' after this install (edits the bootloader config, backup kept), then reboot BEFORE plugging the eGPU in"
   CMDLINE_MISSING=1
@@ -148,9 +155,13 @@ fi
 
 # ---- patched NVIDIA driver (optional, Arch-based) ------------------------------------------------
 if want driver; then
-  if command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules"; "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
+  if command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
 else
   say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
 fi
 
-say "== done. Reboot, or log out and back into Game Mode. Read TESTED.md before relying on any of this."
+if [ "${CMDLINE_MISSING:-0}" = 1 ]; then
+  yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "Write the missing kernel parameters into the bootloader configuration now? (backup kept) [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
+  if [ "$yes" = 1 ]; then say "== writing the kernel parameters"; sudo /usr/local/sbin/egpu-kernel-cmdline --apply || echo "warning: could not write the kernel parameters; see README 'Kernel command line'"; fi
+fi
+say "== done. Reboot with the eGPU disconnected, then plug it in. Read TESTED.md before relying on any of this."

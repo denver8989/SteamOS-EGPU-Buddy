@@ -1,3 +1,18 @@
+0.4.0 — one press, no choices.
+
+- **The plugin's Install button and the `.run` install everything**: hot-plug core, session integration, GBM
+  gamescope, boot policy, desktop app, the patched hot-unplug driver (Arch-based), the NVIDIA userspace pinned to the
+  exact version the patched modules are built for (from the Arch Linux Archive, kept by IgnorePkg), and the kernel
+  parameters written to the bootloader. No driver toggle, no questions. `--advanced` on the `.run` keeps the
+  component checklist for people who want it.
+- **First-ever connection on a fresh machine**: the hot-plug script now authorizes the Thunderbolt dock itself
+  when boltd has not (Game Mode has no consent prompt), for security levels user/none/dponly, and enrols it with an
+  auto policy; higher security levels are reported and need a one-time enrol from the desktop.
+- **USB4/Thunderbolt stack**: the installer loads the `thunderbolt` driver at boot (modules-load.d), installs bolt where
+  missing, and warns when no USB4/Thunderbolt controller is visible (firmware setting).
+- The patched driver package now requires `nvidia-utils` of exactly its version, so a mismatched userspace cannot
+  be left behind.
+
 0.3.3 — safe first plug-in on a fresh machine.
 
 - **Kernel command line is now handled.** New `egpu-kernel-cmdline --check/--apply` (rpm-ostree, Limine, GRUB,

@@ -97,46 +97,36 @@ provides them, otherwise it opens in your browser at `http://127.0.0.1:8772/`.
 
 ## Install
 
-**Before you start, whichever method you pick:**
-
-- **Do not have the eGPU connected** while installing, and reboot once with it disconnected before the first plug-in.
-  Connecting it before the fixes are in place can crash or shut the machine down: the stock path auto-loads the
-  driver on a half-initialised link and lets the compositor pick the wrong card. After the install the plug-in goes
-  through the controlled attach path instead.
-- **NVIDIA packages must be installed** (`nvidia-open-dkms` or `nvidia-open`, plus `nvidia-utils`; Arch-based
-  package names). The installer offers to install them with pacman if they are missing.
-- **Kernel command line.** The parameters under *Kernel command line* below are required. The installer checks the
-  running kernel and offers to write them into your bootloader configuration (rpm-ostree, Limine, GRUB or
-  systemd-boot; backup kept), or you add them by hand. Reboot afterwards, still with the eGPU disconnected.
-- The tool assumes the eGPU is the machine's only NVIDIA GPU (the modprobe rules stop `nvidia` from auto-loading).
+**Before you start, whichever method you pick:** have the eGPU **disconnected** while installing and for the
+reboot that follows. Connecting it before the fixes are in place can crash or shut the machine down: the stock
+path auto-loads the driver on a half-initialised link and lets the compositor pick the wrong card. The install
+puts the NVIDIA packages, the patched driver with its userspace pinned to the same version, and the kernel
+parameters in place itself; you choose nothing. The tool assumes the eGPU is the machine's only NVIDIA GPU. USB4 / Thunderbolt must be enabled in the
+firmware (BIOS) settings; the installer loads the kernel's Thunderbolt driver at boot, installs bolt, and tells you
+if no USB4/Thunderbolt controller is visible.
 
 There are two install methods that give the same result, plus a one-line installer. Pick one.
 
 ### Method 1 — from Game Mode, with the Decky plugin
 
-1. With [Decky Loader](https://decky.xyz) installed, add the plugin: Decky settings → Developer → **Install plugin
-   from URL** → the `EGPU-Buddy-Decky-<version>.zip` link from [Releases](https://github.com/denver8989/SteamOS-EGPU-Buddy/releases).
-2. Open **EGPU Buddy** in the Quick Access menu. If the system integration is missing or outdated, its first page
-   shows one button: **Install system integration**. Press it once.
-3. A progress bar reports each stage (user files, system files, GBM gamescope, desktop app) until it is done. The
-   payload ships inside the plugin, so no internet is needed. Everything replaced is backed up.
-4. If the page reports missing kernel parameters, press **Apply kernel parameters** (backup kept).
-5. Press **Reboot now**, with the eGPU disconnected. Plug it in once Game Mode is up.
+1. With [Decky Loader](https://decky.xyz) installed: Decky settings → Developer → **Install plugin from URL** →
+   the `EGPU-Buddy-Decky-<version>.zip` link from [Releases](https://github.com/denver8989/SteamOS-EGPU-Buddy/releases).
+2. Open **EGPU Buddy** in the Quick Access menu and press **Install system integration**. A progress bar reports
+   each stage until it is done (the driver build takes a few minutes).
+3. Press **Reboot now**, with the eGPU disconnected. Plug it in once Game Mode is up.
 
-When everything is already installed and current, that page shows only the eGPU controls. The **Setup** tab
-(two presses of the top button) has the optional patched-driver build and **Uninstall system integration**.
+When everything is installed and current that page shows only the eGPU controls; **Setup** (two presses of the
+top button) reinstalls or uninstalls.
 
 ### Method 2 — from the Desktop, with the graphical installer
 
-1. Download `SteamOS-EGPU-Buddy-<version>.run` from [Releases](https://github.com/denver8989/SteamOS-EGPU-Buddy/releases).
-2. Make it executable and run it (double-click, or `./SteamOS-EGPU-Buddy-<version>.run`).
-3. It shows what it detected (distro, immutable root, Game Mode session script, NVIDIA GPU, build toolchain, Decky).
-4. Tick the components: hot-plug core, Game Mode session integration, GBM-scanout gamescope, Decky plugin, boot
-   policy, desktop app, patched driver. Confirm.
-5. If kernel parameters are missing it offers to write them. Reboot with the eGPU disconnected, then plug it in.
+1. Download `SteamOS-EGPU-Buddy-<version>.run` from [Releases](https://github.com/denver8989/SteamOS-EGPU-Buddy/releases),
+   make it executable and run it.
+2. It shows what it detected and asks once: install everything now? Yes.
+3. Reboot with the eGPU disconnected, then plug it in.
 
-`--uninstall` and `--no-gui` (terminal mode) are accepted. On SteamOS it toggles `steamos-readonly` around the
-install. A "SteamOS EGPU Buddy Uninstaller" entry is added to the application menu.
+`--advanced` shows a component checklist instead; `--uninstall` and `--no-gui` are accepted. On SteamOS it toggles
+`steamos-readonly` around the install. A "SteamOS EGPU Buddy Uninstaller" entry is added to the application menu.
 
 ### Method 3 — one line in a terminal
 

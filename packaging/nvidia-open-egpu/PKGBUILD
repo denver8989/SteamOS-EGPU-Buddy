@@ -103,7 +103,7 @@ package_nvidia-open-egpu() {
     depends=(
         'libglvnd'
         'linux'
-        "nvidia-utils>=${pkgver}")
+        "nvidia-utils=${pkgver}")
     provides=("nvidia-open=${pkgver}" 'NVIDIA-MODULE')
     conflicts=('nvidia-open' 'nvidia-open-dkms' 'nvidia-open-egpu-dkms' 'NVIDIA-MODULE')
     
@@ -132,7 +132,7 @@ package_nvidia-open-egpu-dkms() {
     depends=(
         'dkms'
         'libglvnd'
-        "nvidia-utils>=${pkgver}")
+        "nvidia-utils=${pkgver}")
     provides=("nvidia-open=${pkgver}" 'NVIDIA-MODULE')
     conflicts=('nvidia-open' 'nvidia-open-dkms' 'nvidia-open-egpu' 'NVIDIA-MODULE')
     

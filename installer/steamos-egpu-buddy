@@ -5,8 +5,8 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd); ROOT=$(cd "$HERE/.." && pwd)
 VERSION=$(cat "$ROOT/VERSION" 2>/dev/null || echo dev)
 LOG=/tmp/steamos-egpu-buddy-install.log; : > "$LOG"
-GUI=1; ACTION=install
-for a in "$@"; do case "$a" in --uninstall) ACTION=uninstall;; --no-gui) GUI=0;; esac; done
+GUI=1; ACTION=install; ADV=0
+for a in "$@"; do case "$a" in --uninstall) ACTION=uninstall;; --no-gui) GUI=0;; --advanced) ADV=1;; esac; done
 command -v zenity >/dev/null 2>&1 || GUI=0; [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || GUI=0
 say(){ echo "$*" | tee -a "$LOG"; }
 # sudo without a terminal: ask the password with zenity (sudo -A) and reuse it for the whole run
@@ -49,7 +49,13 @@ Remove SteamOS EGPU Buddy and restore the backed-up originals?" || exit 0
 fi
 
 # ---------------------------------------------------------------- component choice
-if [ $GUI = 1 ]; then
+ALL="core,session,gamescope,decky,bootpolicy,desktopapp$([ $ARCH_LIKE = 1 ] && echo ,driver)"
+if [ $ADV = 0 ]; then
+  ask "$banner
+
+Install everything now? Hot-plug core, Game Mode session integration, GBM-scanout gamescope, Decky plugin$([ $HAS_DECKY = 1 ] || echo ' (skipped: Decky Loader not found)'), boot policy, desktop app$([ $ARCH_LIKE = 1 ] && echo ', the patched hot-unplug driver (built with makepkg, several minutes) with the NVIDIA userspace pinned to the matching version'). Missing NVIDIA packages and kernel parameters are written automatically (backups kept). Afterwards: reboot with the eGPU disconnected, then plug it in." || exit 0
+  sel=$ALL; export EGPU_AUTO_YES=1
+elif [ $GUI = 1 ]; then
   zenity --info --title="SteamOS EGPU Buddy" --width=560 --text="$banner" || exit 0
   sel=$(zenity --list --checklist --title="SteamOS EGPU Buddy — choose components" --width=760 --height=420 \
       --column=Install --column=Key --column=Component --column=Notes --hide-column=2 --print-column=2 --separator=, \
@@ -81,7 +87,7 @@ run_install(){
   printf '[Desktop Entry]\nType=Application\nName=SteamOS EGPU Buddy Uninstaller\nExec=%s/.local/share/steamos-egpu-buddy/installer/steamos-egpu-buddy --uninstall\nIcon=dialog-warning\nCategories=System;\n' "$HOME" > "$HOME/.local/share/applications/steamos-egpu-buddy-uninstall.desktop"
   return $rc
 }
-if ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then
+if [ $ADV = 1 ] && ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then
   ask "NVIDIA packages are missing. Install nvidia-open-dkms + nvidia-utils with pacman as part of this install? (needed before the eGPU is plugged in)" && export EGPU_AUTO_YES=1
 fi
 if [ $GUI = 1 ]; then
@@ -90,7 +96,7 @@ if [ $GUI = 1 ]; then
 else
   run_install; rc=$?
 fi
-if [ "$rc" = 0 ] && ! /usr/local/sbin/egpu-kernel-cmdline --check >/dev/null 2>&1; then
+if [ "$rc" = 0 ] && [ $ADV = 1 ] && ! /usr/local/sbin/egpu-kernel-cmdline --check >/dev/null 2>&1; then
   if ask "$(/usr/local/sbin/egpu-kernel-cmdline --check 2>&1)
 
 Add the required kernel parameters to your bootloader configuration now? (backup kept; you must reboot before plugging the eGPU in)"; then

@@ -23,16 +23,17 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.3.2"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.4.0"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
 VERSION_FILE = "/etc/nv-egpu-buddy/version"
-SETUP_COMPONENTS = "core,session,gamescope,bootpolicy,desktopapp"   # no decky (already here), no driver build
+SETUP_COMPONENTS = os.environ.get("EGPU_SETUP_COMPONENTS", "core,session,gamescope,bootpolicy,desktopapp")   # no decky (already here); driver added where pacman exists
 _setup = {"busy": False, "step": "", "rc": None, "progress": 0}
 STAGES = (("== preflight", 8), ("== installing user files", 20), ("== installing system files", 40),
           ("== building GBM-scanout gamescope", 55), ("== no build toolchain", 60), ("== installing the EGPU Buddy desktop app", 75),
-          ("== building the patched nvidia-open", 82), ("== patched driver not installed", 90), ("== done", 100),
+          ("== building the patched nvidia-open", 78), ("pinning NVIDIA userspace", 80), ("==> Making package", 82), ("==> Starting build()", 84),
+          ("==> Entering fakeroot", 88), ("==> Finished making", 90), ("installed: nvidia-open-egpu-dkms", 94), ("== patched driver not installed", 94), ("== writing the kernel parameters", 97), ("== done", 100),
           ("restored ", 50), ("removed  ", 50), ("done. The stock", 100))
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -199,7 +200,7 @@ def _setup_worker(action, with_driver=False):
                 top = t.getnames()[0].split("/")[0]; t.extractall(os.path.dirname(SYSDIR))
             os.rename(os.path.join(os.path.dirname(SYSDIR), top), SYSDIR)
             subprocess.run(["chown", "-R", USER, SYSDIR])
-            comps = SETUP_COMPONENTS + (",driver" if with_driver and shutil.which("pacman") else "")
+            comps = SETUP_COMPONENTS + (",driver" if shutil.which("pacman") and "driver" not in SETUP_COMPONENTS and os.environ.get("EGPU_SETUP_NO_DRIVER") != "1" else "")
             env.update(EGPU_COMPONENTS=comps, EGPU_PREBUILT_GAMESCOPE=f"{SYSDIR}/prebuilt/gamescope-gbm")
             if ro: subprocess.run([ro, "disable"])
             _slog("running install.sh", 6)

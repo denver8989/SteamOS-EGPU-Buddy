@@ -76,3 +76,9 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 - `egpu-kernel-cmdline --check` **tested** here (reports ok); `--apply --dry-run` **tested** against this machine's Limine config; a real `--apply` on GRUB, systemd-boot or rpm-ostree **untested**.
 - GUI installer sudo-via-dialog: mechanism **tested** (sudo -A with an askpass helper); the dialog flow itself not clicked through by the maintainer's automation.
 - Fresh-machine flow (no NVIDIA packages, no eGPU ever connected): **untested**; this machine already had everything.
+
+## 0.4.0 (2026-09-14)
+
+- Dock self-authorization: **untested** (the dock here was enrolled long ago; bolt policy iommu).
+- Userspace pinning from the Arch Linux Archive: URLs verified to exist; the pin step **not exercised** here (already at the pinned version).
+- Plugin one-press route re-run here without the driver step (it is the same package already installed).

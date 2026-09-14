@@ -1,4 +1,4 @@
-import { ButtonItem, Field, PanelSection, PanelSectionRow, ProgressBarWithInfo, SliderField, ToggleField, Router, staticClasses } from "@decky/ui";
+import { ButtonItem, Field, PanelSection, PanelSectionRow, ProgressBarWithInfo, SliderField, Router, staticClasses } from "@decky/ui";
 import { callable, definePlugin, useQuickAccessVisible } from "@decky/api";
 import { useEffect, useState } from "react";
 import { FaPlug } from "react-icons/fa";
@@ -40,7 +40,6 @@ function Content() {
   const [tab, setTab] = useState<"main" | "details" | "setup">("main");
   const [su, setSu] = useState<Setup | null>(null);
   const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall">("");
-  const [withDriver, setWithDriver] = useState(false);
   const [s, setS] = useState<Status | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -70,14 +69,14 @@ function Content() {
           <PanelSectionRow><div className={staticClasses.Text}>{s ? stateLine(s) : "Loading…"}</div></PanelSectionRow>
           {su && (!su.helpers_present || su.installed_version !== su.payload_version) && !su.busy && su.rc !== 0 && (
             <>
-              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version ? `System integration ${su.installed_version} is installed; this plugin carries ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything (hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app). Backups are kept.</div></PanelSectionRow>
+              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version ? `System integration ${su.installed_version} is installed; this plugin carries ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept. Several minutes.</div></PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(() => installSystem(false))}>{su.installed_version ? "Update system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>
             </>
           )}
           {su?.busy && <PanelSectionRow><ProgressBarWithInfo nProgress={su.progress} sOperationText={su.step} label="Installing" focusable={false} /></PanelSectionRow>}
           {su && !su.busy && su.rc === 0 && (
             <>
-              <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. Reboot to activate it.</div></PanelSectionRow>
+              <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. Reboot with the eGPU disconnected, then plug it in.</div></PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" onClick={() => run(rebootSystem)}>Reboot now</ButtonItem></PanelSectionRow>
             </>
           )}
@@ -141,12 +140,11 @@ function Content() {
           <PanelSectionRow><div style={{ fontSize: "12px" }}>
             {su ? (su.installed_version ? `Installed: ${su.installed_version}` : "Not installed") + ` · this plugin carries ${su.payload_version}` : "…"}
           </div></PanelSectionRow>
-          <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installs the hot-plug scripts, udev/systemd/modprobe/sudoers rules, the Game Mode session integration, the GBM gamescope (prebuilt), the boot policy and the desktop app. Everything replaced is backed up. The payload ships inside this plugin (no internet needed).</div></PanelSectionRow>
+          <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Reinstalls everything the first page installs. Everything replaced is backed up. The payload ships inside this plugin; the driver build needs the Arch mirrors.</div></PanelSectionRow>
           {su?.busy && <PanelSectionRow><ProgressBarWithInfo nProgress={su.progress} sOperationText={su.step} label="Installing" focusable={false} /></PanelSectionRow>}
-          {su?.can_build_driver && !su.busy && <PanelSectionRow><ToggleField label="Also build the patched hot-unplug driver" description="Arch-based only. Compiles nvidia-open DKMS modules; several minutes." checked={withDriver} onChange={setWithDriver} /></PanelSectionRow>}
           {su && !su.busy && su.rc !== null && <PanelSectionRow><div style={{ fontSize: "12px", color: su.rc === 0 ? "#4caf50" : "#ff6b6b" }}>{su.rc === 0 ? "Finished. Reboot to activate." : `Failed (rc ${su.rc}); log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => { if (confirmSetup === "install") { setConfirmSetup(""); run(() => installSystem(withDriver)); } else setConfirmSetup("install"); }}>
+            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => { if (confirmSetup === "install") { setConfirmSetup(""); run(() => installSystem(false)); } else setConfirmSetup("install"); }}>
               {confirmSetup === "install" ? "Press again to confirm install" : (su?.installed_version ? "Reinstall / update system integration" : "Install system integration")}
             </ButtonItem>
           </PanelSectionRow>
