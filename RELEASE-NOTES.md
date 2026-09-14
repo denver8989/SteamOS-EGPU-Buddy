@@ -1,3 +1,13 @@
+0.4.2 — surviving updates, and the truth about SteamOS.
+
+- **pacman hook** `egpu-buddy-post-upgrade`: after every transaction it checks the private GBM gamescope against the
+  updated libraries and rebuilds it (or logs the fallback), and reports when the patched DKMS modules are missing
+  for the newest kernel.
+- **IgnorePkg** is appended to, never replaced (0.4.1 and earlier overwrote an existing line).
+- **SteamOS itself is declared unsupported** and the installer/plugin refuse there unless overridden: its updates wipe
+  `/usr`, it has no NVIDIA driver and no kernel headers. Targets are Arch-based handheld distros (CachyOS tested);
+  Bazzite untested and without the patched driver. README has a "Surviving OS updates" section.
+
 0.4.1 — SteamOS accounts without a password: the `.run` and the one-line installer detect it and have you set one
 first (terminal prompt); the Decky plugin route never needed one, since Decky runs the plugin's backend as root and the
 installer in root mode does not call sudo. README says which route needs what.

@@ -35,6 +35,13 @@ say(){ printf '\033[1m%s\033[0m\n' "$*"; }
 
 # ---- preflight -----------------------------------------------------------------------------------
 say "== preflight ($COMPONENTS)"
+. /etc/os-release 2>/dev/null || true
+if [ "${ID:-}" = steamos ] && [ "$MODE" = install ]; then
+  echo "WARNING: SteamOS itself is not supported: its A/B updates wipe /usr (including /usr/local and anything pacman installs),"
+  echo "         it ships no NVIDIA driver and no kernel headers, so the patched driver cannot be built. Everything installed here"
+  echo "         would be gone after the next SteamOS update. This tool targets Arch-based handheld distros (CachyOS tested)."
+  [ "${EGPU_ALLOW_UNSUPPORTED:-0}" = 1 ] || { echo "         Set EGPU_ALLOW_UNSUPPORTED=1 to install anyway."; exit 1; }
+fi
 for c in systemctl udevadm lspci; do command -v $c >/dev/null || { echo "missing $c"; exit 1; }; done
 lspci -Dn | grep -qE '0300: 10de:' || echo "note: no NVIDIA GPU on the bus right now (fine, it is hot-pluggable)"
 # runtime tools the scripts call (package names are Arch/SteamOS; Bazzite equivalents are similar)
@@ -108,7 +115,13 @@ mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/ve
 udevadm control --reload; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
 systemctl daemon-reload
 for u in egpu-mount egpu-boot-enumerate egpu-conditional-session; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
-if [ -f /etc/pacman.conf ]; then grep -q '^IgnorePkg.*nvidia-utils' /etc/pacman.conf || sed -i 's/^#\\?IgnorePkg *=.*/IgnorePkg   = nvidia-utils lib32-nvidia-utils nvidia-open-dkms opencl-nvidia lib32-opencl-nvidia/' /etc/pacman.conf; fi
+if [ -f /etc/pacman.conf ]; then
+  # pin the NVIDIA userspace to the patched modules' version: append to an existing IgnorePkg line, never replace it
+  for pk in nvidia-utils lib32-nvidia-utils opencl-nvidia lib32-opencl-nvidia; do
+    grep -qE "^IgnorePkg\\s*=.*\\b$pk\\b" /etc/pacman.conf && continue
+    if grep -qE '^IgnorePkg\\s*=' /etc/pacman.conf; then sed -i -E "0,/^IgnorePkg\\s*=.*/s//& $pk/" /etc/pacman.conf; else sed -i -E "0,/^#\\s*IgnorePkg\\s*=.*/s//IgnorePkg = $pk/" /etc/pacman.conf; fi
+  done
+fi
 true
 "
 fi

@@ -223,7 +223,19 @@ def _setup_worker(action, with_driver=False):
         _setup["busy"] = False
 
 
+def _unsupported():
+    try:
+        osr = dict(l.split("=", 1) for l in open("/etc/os-release").read().splitlines() if "=" in l)
+    except OSError:
+        return ""
+    if osr.get("ID", "").strip('"') == "steamos":
+        return "SteamOS itself is not supported: its updates wipe /usr and it has no NVIDIA driver or kernel headers. Use an Arch-based handheld distro (CachyOS tested)."
+    return ""
+
+
 def _start_setup(action, with_driver=False):
+    if action == "install" and _unsupported():
+        return {"ok": False, "message": _unsupported()}
     if _setup["busy"]:
         return {"ok": False, "message": "Setup is already running."}
     _setup.update(busy=True, rc=None, step="starting", progress=0)
@@ -245,6 +257,7 @@ class Plugin:
             pass
         rc, out, _ = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--check"], 5) if os.path.exists("/usr/local/sbin/egpu-kernel-cmdline") else (0, "", "")
         return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION,
+                "unsupported": _unsupported(),
                 "cmdline_missing": out.replace("missing kernel parameters: ", "") if rc != 0 else "",
                 "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
                 "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "progress": _setup["progress"],

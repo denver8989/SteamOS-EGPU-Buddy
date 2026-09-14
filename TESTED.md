@@ -82,3 +82,8 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 - Dock self-authorization: **untested** (the dock here was enrolled long ago; bolt policy iommu).
 - Userspace pinning from the Arch Linux Archive: URLs verified to exist; the pin step **not exercised** here (already at the pinned version).
 - Plugin one-press route re-run here without the driver step (it is the same package already installed).
+
+## 0.4.2 (2026-09-14)
+
+- Post-upgrade hook: script **tested** here (no breakage to repair; reports clean); an actual rebuild after a breaking library update **not exercised**.
+- Update survival on CachyOS: reasoned from file locations and pacman/DKMS behaviour; this machine has been through kernel/package updates with the same layout since June 2026 (private repo era), but no update was run today to prove the new hook.

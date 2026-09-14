@@ -18,7 +18,7 @@ const safeDetach = callable<[], Result>("safe_detach");
 const setPowerLimit = callable<[number], Result>("set_power_limit");
 const setCoreOffset = callable<[number], Result>("set_core_offset");
 const resetClocks = callable<[], Result>("reset_clocks");
-type Setup = { installed_version: string; payload_version: string; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; log: string };
+type Setup = { installed_version: string; payload_version: string; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
 const getSetup = callable<[], Setup>("get_setup_status");
 const installSystem = callable<[boolean], Result>("install_system");
 const uninstallSystem = callable<[], Result>("uninstall_system");
@@ -67,7 +67,8 @@ function Content() {
       {tab === "main" && (
         <PanelSection title="eGPU">
           <PanelSectionRow><div className={staticClasses.Text}>{s ? stateLine(s) : "Loading…"}</div></PanelSectionRow>
-          {su && (!su.helpers_present || su.installed_version !== su.payload_version) && !su.busy && su.rc !== 0 && (
+          {su?.unsupported && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>{su.unsupported}</div></PanelSectionRow>}
+          {su && !su.unsupported && (!su.helpers_present || su.installed_version !== su.payload_version) && !su.busy && su.rc !== 0 && (
             <>
               <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version ? `System integration ${su.installed_version} is installed; this plugin carries ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept. Several minutes.</div></PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(() => installSystem(false))}>{su.installed_version ? "Update system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>

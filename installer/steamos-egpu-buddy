@@ -53,6 +53,12 @@ A terminal will open now: type a new password twice at the prompts (nothing is s
   [ "$(passwd -S "$USER" 2>/dev/null | awk '{print $2}')" = P ] || { err "Still no password set; cannot continue."; exit 1; }
 fi
 
+if [ "$DISTRO" = steamos ] && [ "$ACTION" = install ]; then
+  ask "SteamOS itself is NOT supported: its updates replace /usr (this tool's scripts and any pacman package), and it ships no NVIDIA driver or kernel headers, so the patched driver cannot be built. Everything would be gone after the next SteamOS update. Supported: Arch-based handheld distros (CachyOS tested).
+
+Install anyway, knowing this?" && export EGPU_ALLOW_UNSUPPORTED=1 || exit 0
+fi
+
 # ---------------------------------------------------------------- uninstall
 if [ "$ACTION" = uninstall ]; then
   ask "$banner

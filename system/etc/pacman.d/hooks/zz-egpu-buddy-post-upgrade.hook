@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Upgrade
+Operation = Install
+Type = Package
+Target = *
+
+[Action]
+Description = SteamOS EGPU Buddy: checking the GBM gamescope build and the patched NVIDIA DKMS modules
+When = PostTransaction
+Exec = /usr/local/sbin/egpu-buddy-post-upgrade

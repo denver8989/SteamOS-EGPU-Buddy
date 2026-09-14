@@ -88,6 +88,32 @@ iGPU, the panel is re-enabled and the compositor takes it over again. The eGPU d
 docked; that is the tested mode. A both-screens desktop layout is possible with `egpu-display-profile.sh` but is
 not the default.
 
+## Surviving OS updates
+
+**CachyOS and other mutable Arch-based distros (the target):**
+
+- Scripts live in `/usr/local`, configuration in `/etc` (udev, modprobe, modules-load, systemd units, sudoers,
+  pacman hook), the session pieces in your home. pacman never touches any of these on an update.
+- The patched driver is a DKMS package (`nvidia-open-egpu-dkms`); kernel updates rebuild its modules
+  automatically. It conflicts with the stock `nvidia-open-dkms`, so an update cannot silently swap it back. The
+  NVIDIA userspace is held at the matching version through `IgnorePkg`; the installer appends to any existing
+  `IgnorePkg` line rather than replacing it.
+- The private GBM-scanout gamescope links against system libraries. After every pacman transaction a hook runs
+  `egpu-buddy-post-upgrade`: if a library update broke the binary it rebuilds it from the kept source tree
+  (toolchain present) or logs that the session shim will fall back to the distro gamescope until you re-run the
+  installer. The same hook reports when no patched module is installed for the newest kernel.
+- If a new kernel refuses to build the pinned 610.57.04 modules, hold the kernel (`IgnorePkg`) until a release
+  with a newer driver exists; `dkms status` and the system journal (`egpu-buddy-post-upgrade`) tell you.
+
+**SteamOS itself: not supported.** Its A/B updates replace `/usr` wholesale, including `/usr/local` and anything
+installed with pacman, it ships no NVIDIA driver, and no kernel headers, so the patched driver cannot be built.
+The installer and the plugin refuse on SteamOS unless overridden. The name refers to the SteamOS-style Game Mode
+session this integrates with, which CachyOS Deckify and Bazzite provide.
+
+**Bazzite (rpm-ostree): untested.** `/usr/local` and `/etc` persist there, kernel parameters go through
+`rpm-ostree kargs` (handled), but the patched driver is an Arch package and cannot be layered, so a cable yank may
+still hang; safe detach does not need it.
+
 ## Desktop app
 
 `egpu-buddy` (application menu: **EGPU Buddy**) is a small desktop window for the docked desktop: live GPU

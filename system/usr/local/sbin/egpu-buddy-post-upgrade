@@ -1,0 +1,24 @@
+#!/bin/bash
+# Runs after every pacman transaction (hook). Keeps the two update-sensitive pieces honest:
+#  1. the private GBM-scanout gamescope links against system libraries; if an update broke it, rebuild it from the
+#     kept source tree (toolchain present) or log that the session shim will fall back to the distro gamescope;
+#  2. the patched driver is a DKMS package; report if no module is installed for the newest kernel.
+set -u
+log(){ logger -t egpu-buddy-post-upgrade "$*"; echo "egpu-buddy: $*"; }
+for home in $(getent passwd | awk -F: '$3>=1000 && $3<60000 {print $6}'); do
+  gs="$home/.local/gamescope-gbm/usr/bin/gamescope"; [ -x "$gs" ] || continue
+  if ldd "$gs" 2>/dev/null | grep -q 'not found'; then
+    user=$(stat -c %U "$home"); src="$home/.local/share/steamos-egpu-buddy/packaging/gamescope-gbm/build.sh"
+    if [ -x "$src" ] && command -v meson >/dev/null && command -v ninja >/dev/null; then
+      log "GBM gamescope broken by a library update; rebuilding for $user"
+      runuser -u "$user" -- env HOME="$home" bash "$src" >"/tmp/egpu-buddy-gamescope-rebuild.log" 2>&1 && log "rebuilt OK" || log "rebuild FAILED (see /tmp/egpu-buddy-gamescope-rebuild.log); the eGPU session falls back to the distro gamescope (UI corruption may return)"
+    else
+      log "GBM gamescope broken by a library update and no toolchain/source to rebuild; the eGPU session falls back to the distro gamescope (UI corruption may return). Re-run the installer."
+    fi
+  fi
+done
+if command -v dkms >/dev/null && pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1; then
+  newest=$(ls -1 /usr/lib/modules | sort -V | tail -1)
+  dkms status 2>/dev/null | grep -q "nvidia/.*$newest.*installed" || log "patched NVIDIA modules are NOT installed for kernel $newest (dkms status); the eGPU will not attach on that kernel until 'dkms autoinstall -k $newest' succeeds"
+fi
+exit 0
