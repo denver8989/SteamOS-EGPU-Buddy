@@ -159,8 +159,9 @@ user name.
 
 ## Credits
 
-This project stands on other people's work; see [CREDITS.md](CREDITS.md) for every upstream fix, patch and
-analysis it depends on.
+This project stands on other people's work: the scan-out fix analysis and gamescope branch, the hot-unplug driver
+patches, and [LACT](https://github.com/ilya-zlobintsev/LACT) (MIT), whose fork was the base of the eGPU power and
+telemetry controls. See [CREDITS.md](CREDITS.md) for every upstream fix, patch and analysis it depends on.
 
 ## License
 

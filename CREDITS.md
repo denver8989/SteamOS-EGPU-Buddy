@@ -28,6 +28,16 @@ say where it came from.
 - Patches 165, 166 and 167 (deferred mode-config cleanup, software-only atomic commits during removal, detaching
   NVKMS kapi events on surprise removal) were written for this project on top of those.
 
+## LACT — the base of the eGPU control side
+
+- **Ilya Zlobintsev — [LACT](https://github.com/ilya-zlobintsev/LACT)** (MIT). This project's GPU control side grew out
+  of a private fork of LACT ("LegionLACT") that was extended with eGPU management: the power-limit and clock-offset
+  controls, the apply / keep / revert safety for pending GPU settings, the telemetry collection and the eGPU status
+  reporting were first built inside that fork, and the first version of the Decky plugin talked to its daemon. The
+  code shipped here was since rewritten to call nvidia-smi and NVML directly so that nothing depends on a running
+  `lactd`, but the design and parts of the control logic derive from LACT and its NVIDIA backend.
+  LACT's license: MIT, Copyright (c) 2023 Ilya Zlobintsev.
+
 ## Everything else this leans on
 
 - **Valve** — gamescope (BSD-2-Clause), the Steam Linux Runtime, Proton, the `gamescope-session` scripts this
