@@ -3,16 +3,34 @@
 Talks only to the NV-EGPU-Buddy system helpers; no Go Hub, no LACT daemon.
 """
 import asyncio
+import hashlib
 import json
 import os
+import pwd
 import re
+import shutil
 import subprocess
+import tarfile
+import threading
 import time
+import urllib.request
 
 import decky  # type: ignore
 
-UID = 1000
+USER = getattr(decky, "DECKY_USER", "") or "deck"
+USER_HOME = getattr(decky, "DECKY_USER_HOME", "") or f"/home/{USER}"
+UID = pwd.getpwnam(USER).pw_uid
+PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
+# ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
+PAYLOAD_VERSION = "0.3.0"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+REPO = "denver8989/SteamOS-EGPU-Buddy"
+SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
+SETUP_LOG = "/tmp/egpu-buddy-setup.log"
+VERSION_FILE = "/etc/nv-egpu-buddy/version"
+SETUP_COMPONENTS = "core,session,gamescope,bootpolicy,desktopapp"   # no decky (already here), no driver build
+_setup = {"busy": False, "step": "", "rc": None}
+
 ST = "/run/nvegpu"
 GM_STATUS = f"{ST}/gm-status.json"
 GM_PENDING = f"{ST}/gm-attach-pending"
@@ -21,7 +39,7 @@ PRIV = "/usr/local/sbin/nv-egpu-buddy-privileged"
 SWITCH = "/usr/local/sbin/egpu-gamemode-switch"
 DETACH = "/usr/local/sbin/egpu-gamemode-detach"
 REATTACH = "/usr/local/sbin/egpu-reattach"
-GPU_ID = "10de:2d04"
+GPU_RE = re.compile(r"^(\S+) 0300: 10de:")   # any NVIDIA VGA-class device
 
 
 def _sh(cmd, timeout=15, env=None):
@@ -55,8 +73,9 @@ def _json(path):
 def _gpu_bdf():
     _, out, _ = _sh(["lspci", "-Dn"], 5)
     for line in out.splitlines():
-        if GPU_ID in line:
-            return line.split()[0]
+        m = GPU_RE.match(line)
+        if m:
+            return m.group(1)
     return ""
 
 
@@ -115,11 +134,105 @@ def _displays(bdf):
 
 
 def _audio_sink():
-    rc, out, _ = _sh(["runuser", "-u", "deck", "--", "env", *[f"{k}={v}" for k, v in RUNENV.items()], "pactl", "get-default-sink"], 5)
+    rc, out, _ = _sh(["runuser", "-u", USER, "--", "env", *[f"{k}={v}" for k, v in RUNENV.items()], "pactl", "get-default-sink"], 5)
     return out if rc == 0 else ""
 
 
+def _slog(msg):
+    _setup["step"] = msg
+    try:
+        with open(SETUP_LOG, "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except OSError:
+        pass
+
+
+def _fetch_payload():
+    """Return the path of the verified release tarball: bundled payload/ if present, else downloaded."""
+    name = f"SteamOS-EGPU-Buddy-{PAYLOAD_VERSION}.tar.gz"
+    local = os.path.join(PLUGIN_DIR, "payload", name)
+    if os.path.exists(local):
+        _slog(f"using bundled payload {name}")
+        return local
+    base = f"https://github.com/{REPO}/releases/download/v{PAYLOAD_VERSION}/"
+    dst = f"/tmp/{name}"
+    _slog(f"downloading {name}")
+    urllib.request.urlretrieve(base + name, dst)
+    sums = urllib.request.urlopen(base + "SHA256SUMS", timeout=30).read().decode()
+    want = next((l.split()[0] for l in sums.splitlines() if l.strip().endswith(name)), "")
+    got = hashlib.sha256(open(dst, "rb").read()).hexdigest()
+    if not want or want != got:
+        raise RuntimeError("checksum mismatch on the downloaded payload")
+    _slog("checksum ok")
+    return dst
+
+
+def _setup_worker(action):
+    env = dict(os.environ, EGPU_TARGET_USER=USER, HOME=USER_HOME)
+    ro = shutil.which("steamos-readonly")
+    try:
+        if action == "install":
+            tgz = _fetch_payload()
+            _slog(f"extracting to {SYSDIR}")
+            shutil.rmtree(SYSDIR, ignore_errors=True); os.makedirs(os.path.dirname(SYSDIR), exist_ok=True)
+            with tarfile.open(tgz) as t:
+                top = t.getnames()[0].split("/")[0]; t.extractall(os.path.dirname(SYSDIR))
+            os.rename(os.path.join(os.path.dirname(SYSDIR), top), SYSDIR)
+            subprocess.run(["chown", "-R", USER, SYSDIR])
+            env.update(EGPU_COMPONENTS=SETUP_COMPONENTS, EGPU_PREBUILT_GAMESCOPE=f"{SYSDIR}/prebuilt/gamescope-gbm")
+            if ro: subprocess.run([ro, "disable"])
+            _slog("running install.sh")
+            with open(SETUP_LOG, "a") as log:
+                rc = subprocess.run(["bash", f"{SYSDIR}/install.sh"], stdout=log, stderr=subprocess.STDOUT, env=env, cwd=SYSDIR).returncode
+            if ro: subprocess.run([ro, "enable"])
+        else:
+            if not os.path.exists(f"{SYSDIR}/uninstall.sh"):
+                raise RuntimeError("no installed copy to uninstall from")
+            env.update(EGPU_KEEP_PLUGIN="1")
+            if ro: subprocess.run([ro, "disable"])
+            _slog("running uninstall.sh")
+            with open(SETUP_LOG, "a") as log:
+                rc = subprocess.run(["bash", f"{SYSDIR}/uninstall.sh"], stdout=log, stderr=subprocess.STDOUT, env=env, cwd=SYSDIR).returncode
+            if ro: subprocess.run([ro, "enable"])
+        _setup["rc"] = rc
+        _slog(f"{action} finished rc={rc}" + ("" if rc == 0 else " (see log)"))
+    except Exception as ex:  # noqa: BLE001
+        _setup["rc"] = 1
+        _slog(f"{action} failed: {ex}")
+    finally:
+        _setup["busy"] = False
+
+
+def _start_setup(action):
+    if _setup["busy"]:
+        return {"ok": False, "message": "Setup is already running."}
+    _setup.update(busy=True, rc=None, step="starting")
+    try:
+        os.remove(SETUP_LOG)
+    except OSError:
+        pass
+    threading.Thread(target=_setup_worker, args=(action,), daemon=True).start()
+    return {"ok": True, "message": f"{action} started"}
+
+
 class Plugin:
+    async def get_setup_status(self):
+        tail = ""
+        try:
+            with open(SETUP_LOG) as f:
+                tail = "".join(f.readlines()[-6:])
+        except OSError:
+            pass
+        return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION,
+                "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
+                "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "log": tail}
+
+    async def install_system(self):
+        return _start_setup("install")
+
+    async def uninstall_system(self):
+        return _start_setup("uninstall")
+
     async def get_status(self):
         bdf = _gpu_bdf()
         game_mode = _gamescope_running()

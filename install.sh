@@ -14,18 +14,28 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd)
 TS=$(date +%Y%m%d-%H%M%S)
-USER_NAME=${SUDO_USER:-$USER}
-USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
+VER=$(cat "$ROOT/VERSION" 2>/dev/null || echo dev)
+# Normal use: run as the login user, sudo is requested for system files. Root use (the Decky plugin's
+# "Install system integration"): EGPU_TARGET_USER names the login user; user files are created as that user.
+if [ "$(id -u)" = 0 ]; then
+  USER_NAME=${EGPU_TARGET_USER:-${SUDO_USER:-}}; [ -n "$USER_NAME" ] && [ "$USER_NAME" != root ] || { echo "running as root: set EGPU_TARGET_USER=<login user>"; exit 1; }
+  AS_ROOT=1; sudo(){ "$@"; }
+else
+  USER_NAME=${SUDO_USER:-$USER}; AS_ROOT=0
+fi
+USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6); USER_UID=$(id -u "$USER_NAME")
+userctl(){ if [ "$AS_ROOT" = 1 ]; then runuser -u "$USER_NAME" -- env "XDG_RUNTIME_DIR=/run/user/$USER_UID" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$USER_UID/bus" systemctl --user "$@"; else systemctl --user "$@"; fi; }
+umkdir(){ if [ "$AS_ROOT" = 1 ]; then runuser -u "$USER_NAME" -- mkdir -p "$@"; else mkdir -p "$@"; fi; }
+uown(){ [ "$AS_ROOT" = 1 ] && chown -R "$USER_NAME" "$@" 2>/dev/null || true; }
 COMPONENTS=${EGPU_COMPONENTS:-core,session,gamescope,decky,bootpolicy,desktopapp}
 MODE=install
 for a in "$@"; do case "$a" in --check) MODE=check;; --with-driver) COMPONENTS="$COMPONENTS,driver";; --no-gamescope) COMPONENTS=${COMPONENTS//gamescope/};; *) echo "unknown option $a"; exit 1;; esac; done
 want(){ case ",$COMPONENTS," in *",$1,"*) return 0;; *) return 1;; esac; }
 say(){ printf '\033[1m%s\033[0m\n' "$*"; }
-[ "$(id -u)" = 0 ] && { echo "run as the normal user; sudo is requested where needed"; exit 1; }
 
 # ---- preflight -----------------------------------------------------------------------------------
 say "== preflight ($COMPONENTS)"
-for c in sudo systemctl udevadm lspci; do command -v $c >/dev/null || { echo "missing $c"; exit 1; }; done
+for c in systemctl udevadm lspci; do command -v $c >/dev/null || { echo "missing $c"; exit 1; }; done
 lspci -Dn | grep -qE '0300: 10de:' || echo "note: no NVIDIA GPU on the bus right now (fine, it is hot-pluggable)"
 # runtime tools the scripts call (package names are Arch/SteamOS; Bazzite equivalents are similar)
 miss=""; for c in setpci:pciutils modetest:libdrm fuser:psmisc jq:jq xxd:vim perl:perl python3:python qdbus6:qt6-tools kscreen-doctor:libkscreen xprop:xorg-xprop boltctl:bolt nvidia-smi:nvidia-utils; do
@@ -59,9 +69,9 @@ fi
 # ---- user files ----------------------------------------------------------------------------------
 say "== installing user files"
 for f in "${FILES[@]}"; do case "$f" in user/*) ;; *) continue;; esac
-  d=$(map_dest "$f"); mkdir -p "$(dirname "$d")"
+  d=$(map_dest "$f"); umkdir "$(dirname "$d")"
   if [ -e "$d" ] && differs "$f" "$d"; then cp -a "$d" "$d.bak-egpu-buddy-$TS"; fi
-  templ < "$ROOT/$f" > "$d"; chmod --reference="$ROOT/$f" "$d" 2>/dev/null || true
+  templ < "$ROOT/$f" > "$d"; chmod --reference="$ROOT/$f" "$d" 2>/dev/null || true; uown "$d"
 done
 if want session; then
   chmod +x "$USER_HOME"/.local/bin/nv-egpu-* "$USER_HOME"/.local/bin/egpu-* "$USER_HOME/.local/lib/nv-egpu-buddy/gamescope-shim/gamescope" 2>/dev/null || true
@@ -79,7 +89,7 @@ set -e; TS=$TS
 cd '$SYS_TMP'; find . -type f | while read -r f; do d=\"\${f#.}\"; mkdir -p \"\$(dirname \"\$d\")\"; if [ -e \"\$d\" ] && ! cmp -s \"\$f\" \"\$d\"; then cp -a \"\$d\" \"\$d.bak-egpu-buddy-\$TS\"; fi; install -m \"\$(stat -c %a \"\$f\")\" \"\$f\" \"\$d\"; done
 [ -f /etc/sudoers.d/steamos-egpu-buddy ] && { chmod 0440 /etc/sudoers.d/steamos-egpu-buddy; visudo -cf /etc/sudoers.d/steamos-egpu-buddy >/dev/null; }
 chmod 0755 /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* /usr/local/bin/nv-egpu-offset-helper 2>/dev/null || true
-mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu
+mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/version
 udevadm control --reload; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
 systemctl daemon-reload
 for u in egpu-mount egpu-boot-enumerate egpu-conditional-session; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
@@ -88,18 +98,18 @@ true
 "
 fi
 rm -rf "$SYS_TMP"
-systemctl --user daemon-reload
-want core && systemctl --user enable egpu-display-failover.service >/dev/null 2>&1 || true
+userctl daemon-reload
+want core && userctl enable egpu-display-failover.service >/dev/null 2>&1 || true
 
 # ---- gamescope with GBM scan-out (NVIDIA scan-out corruption fix) --------------------------------
 if want gamescope; then
   PRE=${EGPU_PREBUILT_GAMESCOPE:-$ROOT/prebuilt/gamescope-gbm}
-  if command -v meson >/dev/null && command -v ninja >/dev/null && command -v cc >/dev/null && command -v cmake >/dev/null; then
+  if [ "$AS_ROOT" = 0 ] && command -v meson >/dev/null && command -v ninja >/dev/null && command -v cc >/dev/null && command -v cmake >/dev/null; then
     say "== building GBM-scanout gamescope from source (a few minutes)"
     HOME="$USER_HOME" "$ROOT/packaging/gamescope-gbm/build.sh" || echo "build failed; the session shim falls back to /usr/bin/gamescope"
   elif [ -d "$PRE/usr/bin" ]; then
     say "== no build toolchain; installing the prebuilt GBM-scanout gamescope (falls back to the distro gamescope if it cannot run here)"
-    mkdir -p "$USER_HOME/.local/gamescope-gbm" && cp -a "$PRE/usr" "$USER_HOME/.local/gamescope-gbm/"
+    umkdir "$USER_HOME/.local/gamescope-gbm" && cp -a "$PRE/usr" "$USER_HOME/.local/gamescope-gbm/"; uown "$USER_HOME/.local/gamescope-gbm"
     ldd "$USER_HOME/.local/gamescope-gbm/usr/bin/gamescope" | grep -q 'not found' && echo "warning: prebuilt gamescope has missing libraries on this distro; the shim will fall back" || true
   else
     echo "no toolchain and no prebuilt gamescope; skipping (UI corruption stays on NVIDIA)"
@@ -109,10 +119,11 @@ fi
 # ---- desktop app ----------------------------------------------------------------------------------
 if want desktopapp; then
   say "== installing the EGPU Buddy desktop app"
-  D="$USER_HOME/.local/share/egpu-buddy"; mkdir -p "$D" "$USER_HOME/.local/bin" "$USER_HOME/.local/share/applications"
+  D="$USER_HOME/.local/share/egpu-buddy"; umkdir "$D" "$USER_HOME/.local/bin" "$USER_HOME/.local/share/applications"
   cp "$ROOT"/desktop-app/egpu-buddy "$ROOT"/desktop-app/egpu-buddy-server.py "$ROOT"/desktop-app/egpu-buddy-window.py "$ROOT"/desktop-app/index.html "$ROOT"/desktop-app/egpu-buddy.png "$D/"
   chmod +x "$D/egpu-buddy" "$D"/*.py; ln -sf "$D/egpu-buddy" "$USER_HOME/.local/bin/egpu-buddy"
   sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/egpu-buddy.desktop" > "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
+  uown "$D" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
 fi
 
 # ---- Decky plugin --------------------------------------------------------------------------------

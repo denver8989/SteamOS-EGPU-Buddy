@@ -1,11 +1,18 @@
 {
   "name": "EGPU Buddy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "denver8989",
-  "flags": ["root"],
+  "flags": [
+    "root"
+  ],
   "api_version": 1,
   "publish": {
-    "tags": ["egpu", "nvidia", "hardware"],
-    "description": "Attach and safely detach a Thunderbolt/USB4 eGPU from Game Mode, with live eGPU details and power controls."
+    "tags": [
+      "egpu",
+      "nvidia",
+      "hardware"
+    ],
+    "description": "Hot-pluggable NVIDIA eGPU in Game Mode: attach, safe detach, live details, power controls, and a one-button install of the whole SteamOS EGPU Buddy system integration.",
+    "image": "https://raw.githubusercontent.com/denver8989/SteamOS-EGPU-Buddy/main/desktop-app/egpu-buddy.png"
   }
 }

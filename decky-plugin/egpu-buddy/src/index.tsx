@@ -18,6 +18,10 @@ const safeDetach = callable<[], Result>("safe_detach");
 const setPowerLimit = callable<[number], Result>("set_power_limit");
 const setCoreOffset = callable<[number], Result>("set_core_offset");
 const resetClocks = callable<[], Result>("reset_clocks");
+type Setup = { installed_version: string; payload_version: string; helpers_present: boolean; busy: boolean; step: string; rc: number | null; log: string };
+const getSetup = callable<[], Setup>("get_setup_status");
+const installSystem = callable<[], Result>("install_system");
+const uninstallSystem = callable<[], Result>("uninstall_system");
 
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
@@ -31,14 +35,16 @@ function stateLine(s: Status): string {
 
 function Content() {
   const visible = useQuickAccessVisible();
-  const [tab, setTab] = useState<"main" | "details">("main");
+  const [tab, setTab] = useState<"main" | "details" | "setup">("main");
+  const [su, setSu] = useState<Setup | null>(null);
+  const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall">("");
   const [s, setS] = useState<Status | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [pl, setPl] = useState<number | null>(null);
   const [off, setOff] = useState(0);
 
-  const refresh = async () => { try { setS(await getStatus()); } catch (e) { setMsg(`status error: ${e}`); } };
+  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); } catch (e) { setMsg(`status error: ${e}`); } };
   useEffect(() => { if (!visible) return; refresh(); const t = setInterval(refresh, 3000); return () => clearInterval(t); }, [visible]);
 
   const gameUp = !!(s?.game_running || Router.MainRunningApp);
@@ -53,13 +59,14 @@ function Content() {
     <>
       <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => setTab(tab === "main" ? "details" : "main")}>{tab === "main" ? "Show details" : "Back to main"}</ButtonItem>
+          <ButtonItem layout="below" onClick={() => setTab(tab === "main" ? "details" : tab === "details" ? "setup" : "main")}>{tab === "main" ? "Show details" : tab === "details" ? "Setup" : "Back to main"}</ButtonItem>
         </PanelSectionRow>
       </PanelSection>
       {tab === "main" && (
         <PanelSection title="eGPU">
           <PanelSectionRow><div className={staticClasses.Text}>{s ? stateLine(s) : "Loading…"}</div></PanelSectionRow>
-          {s && !s.game_mode && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>In Desktop mode use the desktop icons or Go Hub.</div></PanelSectionRow>}
+          {su && !su.helpers_present && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>System integration is not installed. Open Setup (two presses of the button above) to install it.</div></PanelSectionRow>}
+          {s && !s.game_mode && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>In Desktop mode use the EGPU Buddy desktop app.</div></PanelSectionRow>}
           {s?.attach_pending && <PanelSectionRow><div style={{ fontSize: "12px" }}>eGPU plugged in. Close the game, then press Attach.</div></PanelSectionRow>}
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy || !s?.game_mode || gameUp || (s?.present && s?.on_egpu)} onClick={() => run(() => attach(false))}>Attach eGPU</ButtonItem>
@@ -106,6 +113,27 @@ function Content() {
             <PanelSection title="Power controls"><PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Available when Game Mode runs on the eGPU. On the handheld GPU, Game Mode's own performance menu applies.</div></PanelSectionRow></PanelSection>
           )}
         </>
+      )}
+      {tab === "setup" && (
+        <PanelSection title="System integration">
+          <PanelSectionRow><div style={{ fontSize: "12px" }}>
+            {su ? (su.installed_version ? `Installed: ${su.installed_version}` : "Not installed") + ` · this plugin carries ${su.payload_version}` : "…"}
+          </div></PanelSectionRow>
+          <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installs the hot-plug scripts, udev/systemd/modprobe/sudoers rules, the Game Mode session integration, the GBM gamescope (prebuilt), the boot policy and the desktop app. Everything replaced is backed up. Needs internet. The patched driver is not built here (use the .run installer on the Desktop for that).</div></PanelSectionRow>
+          {su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Working: {su.step}</div></PanelSectionRow>}
+          {su && !su.busy && su.rc !== null && <PanelSectionRow><div style={{ fontSize: "12px", color: su.rc === 0 ? "#4caf50" : "#ff6b6b" }}>{su.rc === 0 ? "Finished. Reboot to activate." : `Failed (rc ${su.rc}); log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => { if (confirmSetup === "install") { setConfirmSetup(""); run(installSystem); } else setConfirmSetup("install"); }}>
+              {confirmSetup === "install" ? "Press again to confirm install" : (su?.installed_version ? "Reinstall / update system integration" : "Install system integration")}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy || !!su?.busy || !su?.installed_version} onClick={() => { if (confirmSetup === "uninstall") { setConfirmSetup(""); run(uninstallSystem); } else setConfirmSetup("uninstall"); }}>
+              {confirmSetup === "uninstall" ? "Press again to confirm uninstall" : "Uninstall system integration"}
+            </ButtonItem>
+          </PanelSectionRow>
+          {su?.log && <PanelSectionRow><div style={{ fontSize: "10px", whiteSpace: "pre-wrap", opacity: 0.8 }}>{su.log}</div></PanelSectionRow>}
+        </PanelSection>
       )}
     </>
   );

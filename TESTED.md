@@ -56,3 +56,9 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 - Desktop app: backend `/api/status` and action guards **tested** on the tested machine (eGPU attached, Desktop);
   the GTK/WebKit window and the Safe Detach / Re-attach buttons from the app **not yet exercised**.
 - hooks.d mechanism: **untested** with a real hook by anyone but the maintainer (their hooks live outside this repo).
+
+## 0.3.0 (2026-09-14)
+
+- Decky Setup tab install route: **tested** on the tested machine (root-mode installer, files owned by the login
+  user, `install.sh --check` clean afterwards). Uninstall from the tab: **not exercised**.
+- Store submission: prepared, not yet accepted by the Decky plugin database.

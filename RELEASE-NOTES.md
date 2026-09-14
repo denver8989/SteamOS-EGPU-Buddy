@@ -1,3 +1,18 @@
+0.3.0 — one build, two ways in.
+
+- **Decky plugin can install everything.** New Setup tab: "Install system integration" fetches this release's
+  tarball from GitHub, verifies the SHA-256, and runs `install.sh` as root (core, session, prebuilt GBM gamescope,
+  boot policy, desktop app). Uninstall from the same tab. The installer gained a root mode for this
+  (`EGPU_TARGET_USER`), creating user files as the login user. `EGPU-Buddy-Decky-0.3.0.zip` is the plugin for
+  Decky's "Install from URL"; the plugin also lives at github.com/denver8989/EGPU-Buddy-Decky for the store.
+- Plugin: GPU detection generalised to any NVIDIA VGA device (was pinned to one device ID); the Desktop hint no
+  longer names another project.
+- Desktop app icon: the eGPU box as a blue duotone illustration with the hot-plug bolt.
+- All earlier releases (0.1.0–0.2.0) were removed; this is the only build.
+
+Tested on the tested machine: the plugin's install route end-to-end as root against the live system (no drift
+afterwards). SteamOS and Bazzite untested.
+
 0.2.0 — standalone.
 
 - **No references to any other project.** The Go Hub tray-app hooks that were guarded in 0.1.x are gone from the

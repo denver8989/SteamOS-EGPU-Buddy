@@ -6,7 +6,13 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd); cd "$ROOT"
 VER=$(cat VERSION); NAME="SteamOS-EGPU-Buddy-$VER"
 rm -rf dist && mkdir -p dist/stage/"$NAME"
-git ls-files -z | grep -zvE '^(dist/|\.github/|build-release\.sh)' | xargs -0 -I{} cp --parents {} dist/stage/"$NAME"/
+# Decky plugin: pin the payload version it fetches, build the frontend, zip it for "install from URL"
+P=decky-plugin/egpu-buddy
+sed -i "s/^PAYLOAD_VERSION = \"[^\"]*\"/PAYLOAD_VERSION = \"$VER\"/" "$P/main.py"
+(cd "$P" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1)
+mkdir -p dist/plugin/EGPU-Buddy && cp -r "$P/dist" "$P/main.py" "$P/plugin.json" "$P/package.json" "$P/README.md" "$P/LICENSE" dist/plugin/EGPU-Buddy/
+(cd dist/plugin && python3 -c "import shutil,sys; shutil.make_archive(sys.argv[1], 'zip', '.', 'EGPU-Buddy')" "../EGPU-Buddy-Decky-$VER")
+git ls-files -z | grep -zvE '^(dist/|\.github/|build-release\.sh|decky-plugin/egpu-buddy/(src|node_modules|pnpm-lock|rollup|tsconfig|\.gitignore))' | xargs -0 -I{} cp --parents {} dist/stage/"$NAME"/
 # prebuilt gamescope is not tracked (binary); ship it in the artifacts
 cp -a prebuilt dist/stage/"$NAME"/ 2>/dev/null || true
 chmod +x dist/stage/"$NAME"/install.sh dist/stage/"$NAME"/uninstall.sh dist/stage/"$NAME"/installer/steamos-egpu-buddy
@@ -27,8 +33,14 @@ HDR
 cat "dist/$NAME.tar.gz"
 } > "dist/$NAME.run"
 chmod +x "dist/$NAME.run"
-sha256sum "dist/$NAME.run" "dist/$NAME.tar.gz" > dist/SHA256SUMS
+sha256sum "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" > dist/SHA256SUMS
 ls -la dist | grep -E 'run|tar|SHA'
 if [ "${1:-}" = --publish ]; then
-  gh release create "v$VER" "dist/$NAME.run" "dist/$NAME.tar.gz" dist/SHA256SUMS --title "SteamOS EGPU Buddy $VER" --notes-file RELEASE-NOTES.md
+  gh release create "v$VER" "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS --title "SteamOS EGPU Buddy $VER" --notes-file RELEASE-NOTES.md
+  # mirror the plugin into its store-shaped repo (plugin at the repo root, as the Decky plugin database expects)
+  SR=${EGPU_STORE_REPO:-$HOME/EGPU-Buddy-Decky}
+  if [ -d "$SR/.git" ]; then
+    rsync -a --delete --exclude .git --exclude node_modules --exclude dist "$P/" "$SR/"
+    (cd "$SR" && git add -A && (git -c user.name=denver8989 -c user.email=denver.besson89@gmail.com commit -qm "EGPU Buddy Decky plugin for SteamOS EGPU Buddy $VER" || true) && git tag -f "v$VER" >/dev/null && git push -q origin HEAD && git push -q -f origin "v$VER")
+  fi
 fi
