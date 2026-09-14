@@ -38,8 +38,9 @@ ls -la dist | grep -E 'run|tar|SHA'
 if [ "${1:-}" = --publish ]; then
   gh release create "v$VER" "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS --title "SteamOS EGPU Buddy $VER" --notes-file RELEASE-NOTES.md
   # mirror the plugin into its store-shaped repo (plugin at the repo root, as the Decky plugin database expects)
-  SR=${EGPU_STORE_REPO:-$HOME/EGPU-Buddy-Decky}
-  if [ -d "$SR/.git" ]; then
+  # only when EGPU_STORE_REPO points at a checkout of a root-level plugin repo (Decky store submission)
+  SR=${EGPU_STORE_REPO:-}
+  if [ -n "$SR" ] && [ -d "$SR/.git" ]; then
     rsync -a --delete --exclude .git --exclude node_modules --exclude dist "$P/" "$SR/"
     (cd "$SR" && git add -A && (git -c user.name=denver8989 -c user.email=denver.besson89@gmail.com commit -qm "EGPU Buddy Decky plugin for SteamOS EGPU Buddy $VER" || true) && git tag -f "v$VER" >/dev/null && git push -q origin HEAD && git push -q -f origin "v$VER")
   fi

@@ -112,7 +112,7 @@ project is referenced: if you run something of your own that must stop before th
 attach, drop an executable into `/etc/nv-egpu-buddy/hooks.d/{pre-unload,post-attach,post-detach}/`.
 
 **From Game Mode: the Decky plugin.** Install `EGPU-Buddy-Decky-<version>.zip` from the release page through
-Decky's "Install from URL" (developer mode) or, once accepted, from the Decky store. Its **Setup** tab installs
+Decky's "Install from URL" (developer mode). Its **Setup** tab installs
 the whole system integration: it downloads the matching release tarball, verifies the SHA-256, and runs the same
 installer as root (hot-plug core, session integration, prebuilt GBM gamescope, boot policy, desktop app; not the
 patched driver). Reboot afterwards. The same tab uninstalls it again.
