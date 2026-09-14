@@ -22,6 +22,7 @@ type Setup = { installed_version: string; payload_version: string; helpers_prese
 const getSetup = callable<[], Setup>("get_setup_status");
 const installSystem = callable<[boolean], Result>("install_system");
 const uninstallSystem = callable<[], Result>("uninstall_system");
+const rebootSystem = callable<[], Result>("reboot_system");
 
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
@@ -66,7 +67,20 @@ function Content() {
       {tab === "main" && (
         <PanelSection title="eGPU">
           <PanelSectionRow><div className={staticClasses.Text}>{s ? stateLine(s) : "Loading…"}</div></PanelSectionRow>
-          {su && !su.helpers_present && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>System integration is not installed. Open Setup (two presses of the button above) to install it.</div></PanelSectionRow>}
+          {su && (!su.helpers_present || su.installed_version !== su.payload_version) && !su.busy && su.rc !== 0 && (
+            <>
+              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version ? `System integration ${su.installed_version} is installed; this plugin carries ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything (hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app). Backups are kept.</div></PanelSectionRow>
+              <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(() => installSystem(false))}>{su.installed_version ? "Update system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>
+            </>
+          )}
+          {su?.busy && <PanelSectionRow><ProgressBarWithInfo nProgress={su.progress} sOperationText={su.step} label="Installing" focusable={false} /></PanelSectionRow>}
+          {su && !su.busy && su.rc === 0 && (
+            <>
+              <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. Reboot to activate it.</div></PanelSectionRow>
+              <PanelSectionRow><ButtonItem layout="below" onClick={() => run(rebootSystem)}>Reboot now</ButtonItem></PanelSectionRow>
+            </>
+          )}
+          {su && !su.busy && su.rc !== null && su.rc !== 0 && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>Install failed (rc {su.rc}). Log: /tmp/egpu-buddy-setup.log</div></PanelSectionRow>}
           {s && !s.game_mode && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>In Desktop mode use the EGPU Buddy desktop app.</div></PanelSectionRow>}
           {s?.attach_pending && <PanelSectionRow><div style={{ fontSize: "12px" }}>eGPU plugged in. Close the game, then press Attach.</div></PanelSectionRow>}
           <PanelSectionRow>

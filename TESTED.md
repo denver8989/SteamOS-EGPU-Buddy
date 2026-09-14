@@ -65,3 +65,8 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 - Patched driver package: the PKGBUILD builds on the tested machine and its DKMS source is byte-identical to the one
   installed here (same package, `pacman -Qkk` clean); the makepkg-based install script itself was not run to completion
   on a second machine.
+
+## 0.3.2 (2026-09-14)
+
+- One-line installer: download + checksum + dry run **tested** on the tested machine; the Decky Loader prompt path **not exercised** (Decky is already installed here).
+- Plugin first-page Install button: backend route unchanged from 0.3.1 (tested); the new button flow **not exercised** in the Quick Access UI by the maintainer's automation.

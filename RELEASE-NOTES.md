@@ -1,3 +1,12 @@
+0.3.2 — simpler ways in.
+
+- **Decky plugin: one press.** When the system integration is missing or outdated, the plugin's first page shows a
+  single Install button; a progress bar reports the stages inline, then a Reboot button. No tab hunting, no double
+  confirm. The Setup tab keeps the driver toggle and Uninstall.
+- **One-line installer** (`get-egpu-buddy.sh`): fetches the latest release, verifies the SHA-256, offers to install
+  Decky Loader from its official installer if missing, then runs the installer.
+- README: the three install methods are outlined step by step.
+
 0.3.1 — one build, two ways in.
 
 - **Decky plugin can install everything.** New Setup tab: "Install system integration" runs `install.sh` as root

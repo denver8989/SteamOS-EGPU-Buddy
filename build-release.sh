@@ -33,8 +33,8 @@ HDR
 cat "dist/$NAME.tar.gz"
 } > "dist/$NAME.run"
 chmod +x "dist/$NAME.run"
-sha256sum "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" > dist/SHA256SUMS
+(cd dist && sha256sum "$NAME.run" "$NAME.tar.gz" "EGPU-Buddy-Decky-$VER.zip" > SHA256SUMS)
 ls -la dist | grep -E 'run|tar|SHA'
 if [ "${1:-}" = --publish ]; then
-  gh release create "v$VER" "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS --title "SteamOS EGPU Buddy $VER" --notes-file RELEASE-NOTES.md
+  gh release create "v$VER" "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS get-egpu-buddy.sh --title "SteamOS EGPU Buddy $VER" --notes-file RELEASE-NOTES.md
 fi

@@ -247,6 +247,9 @@ class Plugin:
                 "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "progress": _setup["progress"],
                 "can_build_driver": bool(shutil.which("pacman")), "log": tail}
 
+    async def reboot_system(self):
+        subprocess.Popen(["systemctl", "reboot"]); return {"ok": True, "message": "Rebooting"}
+
     async def install_system(self, with_driver: bool = False):
         return _start_setup("install", bool(with_driver))
 

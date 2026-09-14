@@ -101,20 +101,16 @@ There are two install methods that give the same result, plus a checkout for dev
 
 ### Method 1 — from Game Mode, with the Decky plugin
 
-No desktop, no terminal. Needs [Decky Loader](https://decky.xyz).
+1. With [Decky Loader](https://decky.xyz) installed, add the plugin: Decky settings → Developer → **Install plugin
+   from URL** → the `EGPU-Buddy-Decky-<version>.zip` link from [Releases](https://github.com/denver8989/SteamOS-EGPU-Buddy/releases).
+2. Open **EGPU Buddy** in the Quick Access menu. If the system integration is missing or outdated, its first page
+   shows one button: **Install system integration**. Press it once.
+3. A progress bar reports each stage (user files, system files, GBM gamescope, desktop app) until it is done. The
+   payload ships inside the plugin, so no internet is needed. Everything replaced is backed up.
+4. Press **Reboot now**. Plug the eGPU in after Game Mode is up the first time.
 
-1. Download `EGPU-Buddy-Decky-<version>.zip` from [Releases](https://github.com/denver8989/SteamOS-EGPU-Buddy/releases),
-   or copy its link.
-2. In Game Mode open the Quick Access menu → Decky → settings (gear) → enable **Developer mode**.
-3. Decky settings → **Developer** → **Install plugin from URL** (or from the zip file) → paste the link → install.
-4. Open the **EGPU Buddy** plugin in the Quick Access menu, press the top button twice to reach the **Setup** tab.
-5. Optionally tick **Also build the patched hot-unplug driver** (Arch-based systems only, several minutes).
-6. Press **Install system integration**, then press it again to confirm. A progress bar shows the stages: user
-   files, system files, GBM gamescope, desktop app, done. The payload ships inside the plugin, so no internet is
-   needed. Everything replaced is backed up next to the original.
-7. Reboot. Plug the eGPU in after Game Mode is up the first time.
-
-The same Setup tab shows the installed version and has **Uninstall system integration**, which restores the backups.
+When everything is already installed and current, that page shows only the eGPU controls. The **Setup** tab
+(two presses of the top button) has the optional patched-driver build and **Uninstall system integration**.
 
 ### Method 2 — from the Desktop, with the graphical installer
 
@@ -126,20 +122,18 @@ The same Setup tab shows the installed version and has **Uninstall system integr
 5. Reboot. Plug the eGPU in after the session is up the first time.
 
 `--uninstall` and `--no-gui` (terminal mode) are accepted. On SteamOS it toggles `steamos-readonly` around the
-install. An "SteamOS EGPU Buddy Uninstaller" entry is added to the application menu.
+install. A "SteamOS EGPU Buddy Uninstaller" entry is added to the application menu.
 
-### Method 3 — from a checkout
+### Method 3 — one line in a terminal
 
 ```
-git clone https://github.com/denver8989/SteamOS-EGPU-Buddy
-cd SteamOS-EGPU-Buddy
-./install.sh --check        # shows what would change on this machine
-./install.sh                # user + system files, GBM gamescope build, Decky plugin, desktop app
-./install.sh --with-driver  # additionally builds the patched nvidia-open-egpu-dkms package with makepkg and installs it
+curl -fsSL https://raw.githubusercontent.com/denver8989/SteamOS-EGPU-Buddy/master/get-egpu-buddy.sh | bash
 ```
 
-`./uninstall.sh` puts the backed-up originals back. The patched driver package (`pacman -R nvidia-open-egpu-dkms`, then
-reinstall `nvidia-open-dkms`) and the private gamescope build are left for you to remove by hand.
+It fetches the latest release, verifies its SHA-256, offers to install Decky Loader with Decky's own official
+installer if it is missing, then runs the same installer as Method 2 (graphical when a display is available,
+otherwise in the terminal). Developers can instead clone the repository and use `./install.sh --check`,
+`./install.sh`, `./install.sh --with-driver` and `./uninstall.sh`.
 
 ### What it needs on the machine
 
