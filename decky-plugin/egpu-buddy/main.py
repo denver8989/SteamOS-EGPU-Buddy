@@ -39,7 +39,7 @@ def _settings():
     try: return json.load(open(SETTINGS))
     except Exception: return {}
 def _save_settings(d):
-    os.makedirs(os.path.dirname(SETTINGS), exist_ok=True); json.dump(d, open(SETTINGS, "w")); subprocess.run(["chown", "-R", USER, os.path.dirname(SETTINGS)])
+    os.makedirs(os.path.dirname(SETTINGS), exist_ok=True); json.dump(d, open(SETTINGS, "w")); subprocess.run(["chown", "-R", USER, os.path.dirname(SETTINGS)], env=_clean_env())
 def _vt(v): return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3]) or (0,)
 def _latest_release():
     data = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases/latest", 20).decode())
@@ -439,7 +439,9 @@ class Plugin:
             return {"ok": False, "message": "Not in Game Mode. Use the Safely Eject desktop icon."}
         if _game_running():
             return {"ok": False, "message": "Close the running game first, then Safe Detach."}
-        subprocess.Popen([DETACH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        # detached, with Decky's library path stripped (bash dies on it) and its output kept for post-mortems
+        out = open("/tmp/egpu-buddy-detach.log", "ab")
+        subprocess.Popen([DETACH], stdout=out, stderr=subprocess.STDOUT, start_new_session=True, env=_clean_env())
         return {"ok": True, "message": "Detaching: Game Mode restarts on the handheld screen. Do not unplug until told."}
 
     async def set_power_limit(self, watts: int):

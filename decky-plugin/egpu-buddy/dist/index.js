@@ -100,7 +100,7 @@ const applyCmdline = callable("apply_kernel_cmdline");
 const getUpdate = callable("get_update_status");
 const setAutoUpdate = callable("set_auto_update");
 const checkUpdate = callable("check_update");
-const PLUGIN_VERSION = "1.7.0";
+const PLUGIN_VERSION = "1.7.1";
 const Row = ({ k, v }) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Field, { label: k, focusable: false, bottomSeparator: "none", children: SP_JSX.jsx("span", { style: { fontSize: "12px", wordBreak: "break-all" }, children: v || "—" }) }) }));
 function stateLine(s) {
     if (!s.present)

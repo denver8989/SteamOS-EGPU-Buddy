@@ -1,3 +1,7 @@
+0.7.5 — plugin: Safe Detach from Game Mode did nothing. The detach script was launched with Decky's library path, so
+bash died on a readline symbol before doing anything, silently. Same class as the 0.7.2 installer fix; the last plain
+spawn in the backend is now cleaned too, and the detach's output goes to /tmp/egpu-buddy-detach.log.
+
 0.7.4 — two boot/reboot mistakes fixed.
 
 - **Booting with the eGPU attached landed on the Desktop.** The hot-plug script, when it brought the card up during
