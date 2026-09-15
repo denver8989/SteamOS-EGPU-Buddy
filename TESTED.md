@@ -91,3 +91,11 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 ## 0.5.0 (2026-09-14)
 
 - Self-heal: quick path and a forced repair **tested** on the tested machine (files, packages, modules already present); a real SteamOS update **not tested**; module restore into a fresh /usr **not exercised**.
+
+## 0.6.0 (2026-09-15)
+
+- Wake guard: a controlled 4-minute DPMS sleep of the eGPU monitor (Desktop, DP, HDR on) woke normally within 1 s,
+  so the stuck state reported by the user (and in NVIDIA #1055/#1028) was **not reproduced** during this session; the
+  guard correctly stayed silent on that normal wake (no false trigger). Its recovery action (`vt-bounce`) is the
+  same one that fixed the dark handheld panel on 2026-09-12. Real-world confirmation pending: the guard logs
+  `-> vt-bounce` to the journal (`journalctl --user -t egpu-wake-guard`) when it acts.
