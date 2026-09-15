@@ -492,9 +492,9 @@ if [ "$detach_mode" = 0 ] && [ -n "$egpu_card" ] && [ -n "$igpu_card" ] && [ -n 
     export NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT=${NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT:-1440}
     export NV_EGPU_GAMESCOPE_NESTED_WIDTH=3840
     export NV_EGPU_GAMESCOPE_NESTED_HEIGHT=1080
-    export NV_EGPU_GAMESCOPE_NESTED_REFRESH=60
-    export STEAM_DISPLAY_REFRESH_LIMITS=40,60
-    log "using 3840x1080 nested Steam canvas on native 5120x1440 eGPU output"
+    export NV_EGPU_GAMESCOPE_NESTED_REFRESH=${NV_EGPU_GAMESCOPE_NESTED_REFRESH:-60}
+    export STEAM_DISPLAY_REFRESH_LIMITS="40,$NV_EGPU_GAMESCOPE_NESTED_REFRESH"
+    log "using 3840x1080 nested Steam canvas on native 5120x1440 eGPU output @$NV_EGPU_GAMESCOPE_NESTED_REFRESH"
   fi
   if [ "$EGPU_GAMESCOPE_HDR" = "1" ]; then
     # 2026-09-11: do NOT export DXVK_HDR=1 session-wide. It made every SDR game (Black Flag) run a
