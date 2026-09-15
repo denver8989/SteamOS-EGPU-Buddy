@@ -29,6 +29,8 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 
+const PLUGIN_VERSION = "1.6.1";
+
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
 );
@@ -106,6 +108,7 @@ function Content() {
             <ButtonItem layout="below" disabled={busy || !s?.game_mode || !s?.present || gameUp} onClick={() => run(safeDetach)}>Safe Detach</ButtonItem>
           </PanelSectionRow>
           {(s?.gm_status?.message || msg) && <PanelSectionRow><div style={{ fontSize: "12px" }}>{msg || s?.gm_status?.message}</div></PanelSectionRow>}
+          <PanelSectionRow><div style={{ fontSize: "11px", opacity: 0.7 }}>EGPU Buddy plugin {PLUGIN_VERSION} · integration {su?.installed_version || "not installed"} · {up ? (up.available ? `update ${up.available} available` : up.checked ? "up to date" : "update check pending") : "…"}{up?.auto_update ? " · auto-update on" : " · auto-update off"}</div></PanelSectionRow>
         </PanelSection>
       )}
       {tab === "details" && s && (

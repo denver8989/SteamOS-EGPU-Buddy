@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 import threading
 import time
+import ssl
 import urllib.request
 
 import decky  # type: ignore
@@ -41,7 +42,7 @@ def _save_settings(d):
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True); json.dump(d, open(SETTINGS, "w")); subprocess.run(["chown", "-R", USER, os.path.dirname(SETTINGS)])
 def _vt(v): return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3]) or (0,)
 def _latest_release():
-    data = json.loads(urllib.request.urlopen(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=20).read().decode())
+    data = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases/latest", 20).decode())
     return data.get("tag_name", "").lstrip("v")
 STAGES = (("== preflight", 8), ("== installing user files", 20), ("== installing system files", 40),
           ("== building GBM-scanout gamescope", 55), ("== no build toolchain", 60), ("== installing the EGPU Buddy desktop app", 75),
@@ -157,6 +158,22 @@ def _audio_sink():
     return out if rc == 0 else ""
 
 
+def _ssl_ctx():
+    """Decky's bundled Python has no CA store; use the distro's bundle."""
+    for ca in ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem"):
+        if os.path.exists(ca): return ssl.create_default_context(cafile=ca)
+    try:
+        import certifi; return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        return ssl.create_default_context()
+
+def _get(url, timeout=30):
+    with urllib.request.urlopen(url, timeout=timeout, context=_ssl_ctx()) as r: return r.read()
+
+def _download(url, dst):
+    with urllib.request.urlopen(url, timeout=120, context=_ssl_ctx()) as r, open(dst, "wb") as f: shutil.copyfileobj(r, f)
+
+
 def _slog(msg, progress=None):
     _setup["step"] = msg
     if progress is not None:
@@ -179,8 +196,8 @@ def _fetch_payload(version=None):
     base = f"https://github.com/{REPO}/releases/download/v{version}/"
     dst = f"/tmp/{name}"
     _slog(f"downloading {name} (no bundled payload)", 2)
-    urllib.request.urlretrieve(base + name, dst)
-    sums = urllib.request.urlopen(base + "SHA256SUMS", timeout=30).read().decode()
+    _download(base + name, dst)
+    sums = _get(base + "SHA256SUMS").decode()
     want = next((l.split()[0] for l in sums.splitlines() if l.strip().endswith(name)), "")
     got = hashlib.sha256(open(dst, "rb").read()).hexdigest()
     if not want or want != got:
@@ -264,8 +281,8 @@ def _start_setup(action, with_driver=False, version=None):
 def _update_plugin_files(version):
     """Replace this plugin with the release's plugin zip (backup kept), then restart Decky detached from ourselves."""
     name = f"EGPU-Buddy-Decky-{version}.zip"; dst = f"/tmp/{name}"
-    urllib.request.urlretrieve(f"https://github.com/{REPO}/releases/download/v{version}/{name}", dst)
-    sums = urllib.request.urlopen(f"https://github.com/{REPO}/releases/download/v{version}/SHA256SUMS", timeout=30).read().decode()
+    _download(f"https://github.com/{REPO}/releases/download/v{version}/{name}", dst)
+    sums = _get(f"https://github.com/{REPO}/releases/download/v{version}/SHA256SUMS").decode()
     want = next((l.split()[0] for l in sums.splitlines() if l.strip().endswith(name)), "")
     if not want or want != hashlib.sha256(open(dst, "rb").read()).hexdigest(): raise RuntimeError("checksum mismatch on the plugin zip")
     import zipfile
@@ -372,6 +389,7 @@ class Plugin:
         return status
 
     async def attach(self, force: bool = False):
+        decky.logger.info(f"attach pressed (force={force})")
         if not _gamescope_running():
             return {"ok": False, "message": "Not in Game Mode. Use the Attach eGPU desktop icon."}
         if _game_running() and not force:
@@ -389,6 +407,7 @@ class Plugin:
         return {"ok": rc == 0, "rc": rc, "message": msgs.get(rc, (out or err)[-200:] or f"rc={rc}")}
 
     async def safe_detach(self):
+        decky.logger.info("safe detach pressed")
         if not _gpu_bdf():
             return {"ok": True, "message": "No eGPU attached."}
         if not _gamescope_running():
