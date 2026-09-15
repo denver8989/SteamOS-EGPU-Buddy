@@ -314,7 +314,7 @@ def _update_worker(version):
         if _setup["rc"] != 0: raise RuntimeError(f"system integration install failed rc={_setup['rc']}")
         if _vt(version) > _vt(PAYLOAD_VERSION):
             _update["state"] = f"updating plugin to {version}"; _update_plugin_files(version)
-        _update["state"] = f"updated to {version}: reboot to activate"; _update["available"] = ""
+        _update["state"] = f"updated to {version}"; _update["available"] = ""
         d = _settings(); d["last_update"] = version; _save_settings(d)
     except Exception as ex:  # noqa: BLE001
         _update["state"] = f"update failed: {ex}"; _update["last_error"] = str(ex); decky.logger.error(f"update failed: {ex}")
@@ -358,7 +358,13 @@ class Plugin:
         except OSError:
             pass
         rc, out, _ = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--check"], 5) if os.path.exists("/usr/local/sbin/egpu-kernel-cmdline") else (0, "", "")
-        return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION,
+        needs_reboot = False
+        try:
+            body = open(SETUP_LOG).read()
+            needs_reboot = any(k in body for k in ("building the patched nvidia-open", "pinning NVIDIA userspace", "installed: nvidia-open-egpu-dkms", "writing the kernel parameters"))
+        except OSError:
+            pass
+        return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION, "needs_reboot": needs_reboot,
                 "unsupported": _unsupported(),
                 "cmdline_missing": out.replace("missing kernel parameters: ", "") if rc != 0 else "",
                 "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
@@ -368,6 +374,14 @@ class Plugin:
     async def apply_kernel_cmdline(self):
         rc, out, err = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--apply"], 120)
         return {"ok": rc == 0, "message": (out or err)[-300:]}
+
+    async def restart_gamemode(self):
+        if not _gamescope_running():
+            return {"ok": True, "message": "Not in Game Mode: the new session pieces apply at the next Game Mode start."}
+        if _game_running():
+            return {"ok": False, "message": "Close the running game first."}
+        rc, out, err = _sh([SWITCH], 240)
+        return {"ok": rc == 0, "message": "Game Mode restarted." if rc == 0 else (out or err)[-200:]}
 
     async def reboot_system(self):
         subprocess.Popen(["systemctl", "reboot"], env=_clean_env()); return {"ok": True, "message": "Rebooting"}

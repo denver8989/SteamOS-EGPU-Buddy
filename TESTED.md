@@ -125,3 +125,9 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 ## 0.7.2 (2026-09-16)
 
 - First real plugin-driven update (0.7.0→0.7.1) **failed** on LD_LIBRARY_PATH from Decky's Python; fixed here.
+
+## 0.7.4 (2026-09-16)
+
+- Boot with the eGPU attached: the desktop landing was **reproduced** on the tested machine (journal: policy wrote Game
+  Mode, the hot-plug script overwrote it 0.5 s later); the gate is applied, the next boot with the eGPU attached is the test.
+- Post-update "Restart Game Mode" button: **not yet pressed** in the UI.

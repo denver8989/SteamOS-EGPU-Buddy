@@ -1,3 +1,12 @@
+0.7.4 — two boot/reboot mistakes fixed.
+
+- **Booting with the eGPU attached landed on the Desktop.** The hot-plug script, when it brought the card up during
+  boot, pinned the autologin session to the desktop before any session existed, overriding the Game Mode boot policy.
+  It now only does that when re-logging an already running desktop session.
+- **After an update the plugin offered a full system reboot.** Script updates need none: the plugin now offers
+  "Restart Game Mode now" and only asks for a reboot when the driver or kernel parameters actually changed.
+- The boot-enumerate unit no longer carries a free-text Documentation line that systemd rejected.
+
 0.7.3 — plugin updater follows the newest of GitHub's latest release and the payload the plugin carries, so an
 integration older than the plugin is brought up without a download; plugin self-replacement only when the release is
 newer than the plugin's own payload.

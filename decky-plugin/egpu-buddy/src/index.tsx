@@ -18,18 +18,19 @@ const safeDetach = callable<[], Result>("safe_detach");
 const setPowerLimit = callable<[number], Result>("set_power_limit");
 const setCoreOffset = callable<[number], Result>("set_core_offset");
 const resetClocks = callable<[], Result>("reset_clocks");
-type Setup = { installed_version: string; payload_version: string; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
+type Setup = { installed_version: string; payload_version: string; needs_reboot: boolean; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
 const getSetup = callable<[], Setup>("get_setup_status");
 const installSystem = callable<[boolean], Result>("install_system");
 const uninstallSystem = callable<[], Result>("uninstall_system");
 const rebootSystem = callable<[], Result>("reboot_system");
+const restartGamemode = callable<[], Result>("restart_gamemode");
 const applyCmdline = callable<[], Result>("apply_kernel_cmdline");
 type Upd = { auto_update: boolean; available: string; state: string; checked: number; last_error: string; installed: string };
 const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 
-const PLUGIN_VERSION = "1.6.1";
+const PLUGIN_VERSION = "1.7.0";
 
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
@@ -87,8 +88,17 @@ function Content() {
           {su?.busy && <PanelSectionRow><ProgressBarWithInfo nProgress={su.progress} sOperationText={su.step} label={su.step.startsWith("update") || up?.state.startsWith("installing") ? "Updating" : "Installing"} focusable={false} /></PanelSectionRow>}
           {su && !su.busy && su.rc === 0 && (
             <>
-              <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. Reboot with the eGPU disconnected, then plug it in.</div></PanelSectionRow>
-              <PanelSectionRow><ButtonItem layout="below" onClick={() => run(rebootSystem)}>Reboot now</ButtonItem></PanelSectionRow>
+              {su.needs_reboot ? (
+                <>
+                  <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. The driver or kernel parameters changed, so a full reboot is needed (with the eGPU disconnected on a first install).</div></PanelSectionRow>
+                  <PanelSectionRow><ButtonItem layout="below" onClick={() => run(rebootSystem)}>Reboot the system</ButtonItem></PanelSectionRow>
+                </>
+              ) : (
+                <>
+                  <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. No reboot needed: hot-plug scripts are live now; the Game Mode session pieces apply when Game Mode restarts.</div></PanelSectionRow>
+                  <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => run(restartGamemode)}>Restart Game Mode now</ButtonItem></PanelSectionRow>
+                </>
+              )}
             </>
           )}
           {su && !su.busy && su.helpers_present && su.cmdline_missing && (

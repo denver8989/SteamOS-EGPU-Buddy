@@ -372,7 +372,9 @@ if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then
   gpu_healthy && { /usr/local/sbin/egpu-gamemode-switch >/dev/null 2>&1; log "gamemode-switch rc=$?"; }
   exit 0
 fi
-set_autologin_plasma
+# Only a running desktop session may pin the autologin to the desktop (the NVIDIA-only re-login must come back to
+# it). At boot, before any session exists, the boot policy (egpu-conditional-session: Game Mode) decides. 2026-09-16.
+pgrep -x kwin_wayland >/dev/null 2>&1 && set_autologin_plasma
 if [ "$crosstalk" = 1 ]; then
   log "eGPU display up + iGPU desktop (crosstalk) -> re-login for NVIDIA-only"; sleep 2; gpu_healthy && relogin_session
 else
