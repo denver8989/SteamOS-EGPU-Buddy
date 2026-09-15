@@ -440,6 +440,11 @@ case "$action" in
     install -d -m 0755 /etc/plasmalogin.conf.d
     printf '[Autologin]\nSession=egpu-bigpicture.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
     ;;
+  panel-off|panel-on)
+    # handheld panel while an eGPU display is active (egpu-panel does the DRM/backlight work; root only)
+    [ "$#" -eq 0 ] || die "$action takes no arguments"
+    /usr/local/sbin/egpu-panel "${action#panel-}"
+    ;;
   vt-bounce)
     # gamescope started paused after a relogin (libseat seat inactive: no "Session resumed", CRTC never enabled).
     # A VT round-trip makes logind re-activate the session -> "Enabling seat" -> gamescope modesets.

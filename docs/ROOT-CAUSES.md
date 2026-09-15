@@ -122,6 +122,19 @@ desktop path used the launcher.
 **Fix here.** `steam-egpu-vk.sh` keeps the branch file at `steamdeck_stable` and launches with `-steamdeck` like
 the wrapper, while exporting `SteamDeck=0` so games do not enter their Deck presets (resolution caps) on the desktop.
 
+## 11. No signal on the eGPU monitor after resume from suspend
+
+**Symptom.** Wake the machine from sleep with Game Mode (or the desktop) on the eGPU: the monitor reports no
+signal although the session is alive. The handheld panel comes back on.
+
+**Cause.** The DisplayPort link does not re-train after resume while the DRM state already says the connector is
+on (same NVIDIA driver family as #9, a variant the wake guard cannot see because nothing reports "off"). Only a
+full modeset recovers it.
+
+**Fix here.** `egpu-buddy-resume.service` runs `egpu-resume-kick` after every resume: if an eGPU display is
+connected it performs the VT round-trip (forced modeset for gamescope or KWin) and then turns the handheld panel off
+again while the eGPU display is the active one. New helper verbs `panel-off` / `panel-on`.
+
 ## Appendix: the exact recipe for the Game Mode UI fix
 
 1. Source: `https://github.com/NightHammer1000/gamescope.git`, branch `poc/gamescope-gbm-route`, commit `2bfc18c`

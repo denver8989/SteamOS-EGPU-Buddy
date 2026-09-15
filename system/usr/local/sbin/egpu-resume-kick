@@ -1,0 +1,23 @@
+#!/bin/bash
+# Runs after every resume from suspend (egpu-buddy-resume.service). When an NVIDIA eGPU drives a connected display,
+# the DisplayPort link often does not re-train after resume although the DRM state says "on" (NVIDIA
+# open-gpu-kernel-modules #1055/#1028 family): the monitor shows no signal until a full modeset. A VT round-trip
+# forces that modeset for whichever compositor runs (gamescope or KWin). Then the handheld panel, which resume
+# re-lights, goes back off while the eGPU display is the active one.
+set -u
+log(){ logger -t egpu-resume-kick "$*"; }
+sleep 4
+lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' || exit 0
+nv=""; for card in /sys/class/drm/card[0-9]; do [ "$(cat "$card/device/vendor" 2>/dev/null)" = 0x10de ] && nv=$card; done
+[ -n "$nv" ] || exit 0
+active=$(for c in "$nv"-*; do [ "$(cat "$c/status" 2>/dev/null)" = connected ] && echo "${c##*/}"; done | head -1)
+[ -n "$active" ] || { log "eGPU present but no display connected to it; nothing to kick"; exit 0; }
+[ -e /run/user/1000/nv-egpu-buddy/detach-handoff-active ] && exit 0
+cur=$(cat /sys/class/tty/tty0/active 2>/dev/null); cur=${cur#tty}
+chvt 2; sleep 1; chvt "${cur:-1}"; log "post-resume modeset kick for $active (VT round-trip)"
+sleep 3
+# the eGPU display is the active one (Game Mode on it, or the NVIDIA-only desktop): handheld panel off again
+gm=$(pgrep -n -x 'gamescope(-wl)?' || true)
+if [ -n "$gm" ]; then oc=$(tr '\0' '\n' </proc/$gm/environ 2>/dev/null | sed -n 's/^OUTPUT_CONNECTOR=//p'); case "${oc%%,*}" in ""|"*"|eDP-1) exit 0;; esac; fi
+/usr/local/sbin/egpu-panel off >/dev/null 2>&1 && log "handheld panel off again"
+exit 0

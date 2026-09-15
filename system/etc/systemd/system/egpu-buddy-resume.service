@@ -1,0 +1,10 @@
+[Unit]
+Description=SteamOS EGPU Buddy: re-train the eGPU display after resume (forced modeset) and re-darken the handheld panel
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/egpu-resume-kick
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

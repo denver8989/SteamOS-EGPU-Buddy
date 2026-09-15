@@ -109,3 +109,8 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 - 144 Hz Game Mode on the eGPU: **verified** by the user after the next session start (5120×1440@144 with the
   GBM-scanout gamescope); VRR from the Quick Access menu no longer caps games at 60 fps, and the display setting
   stays at 144.
+
+## 0.6.3 (2026-09-16)
+
+- Post-resume kick: the manual VT round-trip **recovered** the monitor after a real resume on the tested machine (Game
+  Mode, 144 Hz); the automatic unit is installed and enabled but **not yet exercised** by a suspend/resume cycle.

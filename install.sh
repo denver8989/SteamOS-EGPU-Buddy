@@ -112,7 +112,7 @@ chmod 0755 /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* /usr/local/bin
 mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/version
 udevadm control --reload; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
 systemctl daemon-reload
-for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
+for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal egpu-buddy-resume; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
 if [ -f /etc/pacman.conf ]; then
   # pin the NVIDIA userspace to the patched modules' version: append to an existing IgnorePkg line, never replace it
   for pk in nvidia-utils lib32-nvidia-utils opencl-nvidia lib32-opencl-nvidia; do

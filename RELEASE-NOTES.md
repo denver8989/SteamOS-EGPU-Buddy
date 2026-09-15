@@ -1,3 +1,7 @@
+0.6.3 — picture back after resume from suspend. A new system unit runs after every resume: when an eGPU display is
+connected it forces the modeset (VT round-trip) that the NVIDIA DisplayPort link needs to re-train, then re-darkens the
+handheld panel. Root cause 11. The privileged helper gained `panel-off`/`panel-on`.
+
 0.6.2 — Game Mode on the eGPU no longer capped at 60 Hz. The session wrapper kept a 60 Hz ceiling from the corruption
 era (it chose the output mode and handed Steam a 40–60 limit, so the refresh slider snapped back to 60 each session).
 The cap is gone: the display's best mode is used (5120×1440@144 on the tested monitor) and Steam's slider spans 40 to
