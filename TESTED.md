@@ -117,11 +117,11 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 ## 0.7.0 (2026-09-16)
 
-- Auto-update: the update path (release check, verified download, system install, plugin self-update) **exercised** on
-  the tested machine with the plugin-restart step stubbed; a real unattended hourly update from a published newer
-  release **not yet observed** (it needs a release newer than the installed one).
+- Auto-update: **verified end to end from inside Decky** on the tested machine. 0.7.0→0.7.1 failed on Decky's
+  LD_LIBRARY_PATH (fixed in 0.7.2), 0.7.2 installed the integration from a downloaded release, and 0.7.3 was a full
+  unattended update: release found, tarball verified, integration installed (rc 0), plugin files replaced (backup
+  kept), Decky restarted itself, plugin reloaded, first page asked for a reboot.
 
 ## 0.7.2 (2026-09-16)
 
-- First real plugin-driven update (0.7.0→0.7.1) **failed** on LD_LIBRARY_PATH from Decky's Python; fixed here. The
-  0.7.2 update path was then run unattended on the tested machine from inside Decky (see below).
+- First real plugin-driven update (0.7.0→0.7.1) **failed** on LD_LIBRARY_PATH from Decky's Python; fixed here.
