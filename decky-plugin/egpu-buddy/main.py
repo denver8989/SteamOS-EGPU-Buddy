@@ -219,8 +219,16 @@ def _run_logged(cmd, env, cwd):
         return pr.wait()
 
 
+def _clean_env(**extra):
+    """Decky's bundled Python sets LD_LIBRARY_PATH to its own libraries; system binaries (bash!) must not see it."""
+    e = dict(os.environ)
+    for k in ("LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT", "PYTHONPATH", "PYTHONHOME"):
+        e.pop(k, None)
+    e.update(extra); return e
+
+
 def _setup_worker(action, with_driver=False, version=None):
-    env = dict(os.environ, EGPU_TARGET_USER=USER, HOME=USER_HOME, EGPU_AUTO_YES="1")
+    env = _clean_env(EGPU_TARGET_USER=USER, HOME=USER_HOME, EGPU_AUTO_YES="1")
     ro = shutil.which("steamos-readonly")
     try:
         if action == "install":
@@ -230,21 +238,21 @@ def _setup_worker(action, with_driver=False, version=None):
             with tarfile.open(tgz) as t:
                 top = t.getnames()[0].split("/")[0]; t.extractall(os.path.dirname(SYSDIR))
             os.rename(os.path.join(os.path.dirname(SYSDIR), top), SYSDIR)
-            subprocess.run(["chown", "-R", USER, SYSDIR])
+            subprocess.run(["chown", "-R", USER, SYSDIR], env=_clean_env())
             comps = SETUP_COMPONENTS + (",driver" if shutil.which("pacman") and "driver" not in SETUP_COMPONENTS and os.environ.get("EGPU_SETUP_NO_DRIVER") != "1" else "")
             env.update(EGPU_COMPONENTS=comps, EGPU_PREBUILT_GAMESCOPE=f"{SYSDIR}/prebuilt/gamescope-gbm")
-            if ro: subprocess.run([ro, "disable"])
+            if ro: subprocess.run([ro, "disable"], env=_clean_env())
             _slog("running install.sh", 6)
             rc = _run_logged(["bash", f"{SYSDIR}/install.sh"], env, SYSDIR)
-            if ro: subprocess.run([ro, "enable"])
+            if ro: subprocess.run([ro, "enable"], env=_clean_env())
         else:
             if not os.path.exists(f"{SYSDIR}/uninstall.sh"):
                 raise RuntimeError("no installed copy to uninstall from")
             env.update(EGPU_KEEP_PLUGIN="1")
-            if ro: subprocess.run([ro, "disable"])
+            if ro: subprocess.run([ro, "disable"], env=_clean_env())
             _slog("running uninstall.sh", 10)
             rc = _run_logged(["bash", f"{SYSDIR}/uninstall.sh"], env, SYSDIR)
-            if ro: subprocess.run([ro, "enable"])
+            if ro: subprocess.run([ro, "enable"], env=_clean_env())
         _setup["rc"] = rc
         _slog(f"{action} finished rc={rc}" + ("" if rc == 0 else " (see log)"), 100)
     except Exception as ex:  # noqa: BLE001
@@ -294,9 +302,9 @@ def _update_plugin_files(version):
     for entry in os.listdir(src):
         sp = os.path.join(src, entry); dp = os.path.join(PLUGIN_LIVE, entry)
         shutil.copytree(sp, dp) if os.path.isdir(sp) else shutil.copy2(sp, dp)
-    subprocess.run(["chown", "-R", USER, PLUGIN_LIVE])
+    subprocess.run(["chown", "-R", USER, PLUGIN_LIVE], env=_clean_env())
     if os.environ.get("EGPU_NO_DECKY_RESTART") != "1":   # test hook
-        subprocess.Popen(["systemd-run", "--on-active=5", "--collect", "--quiet", "systemctl", "restart", "plugin_loader.service"])
+        subprocess.Popen(["systemd-run", "--on-active=5", "--collect", "--quiet", "systemctl", "restart", "plugin_loader.service"], env=_clean_env())
 
 
 def _update_worker(version):
@@ -359,7 +367,7 @@ class Plugin:
         return {"ok": rc == 0, "message": (out or err)[-300:]}
 
     async def reboot_system(self):
-        subprocess.Popen(["systemctl", "reboot"]); return {"ok": True, "message": "Rebooting"}
+        subprocess.Popen(["systemctl", "reboot"], env=_clean_env()); return {"ok": True, "message": "Rebooting"}
 
     async def install_system(self, with_driver: bool = False):
         return _start_setup("install", bool(with_driver))

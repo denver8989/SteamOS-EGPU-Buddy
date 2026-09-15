@@ -120,3 +120,8 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 - Auto-update: the update path (release check, verified download, system install, plugin self-update) **exercised** on
   the tested machine with the plugin-restart step stubbed; a real unattended hourly update from a published newer
   release **not yet observed** (it needs a release newer than the installed one).
+
+## 0.7.2 (2026-09-16)
+
+- First real plugin-driven update (0.7.0→0.7.1) **failed** on LD_LIBRARY_PATH from Decky's Python; fixed here. The
+  0.7.2 update path was then run unattended on the tested machine from inside Decky (see below).

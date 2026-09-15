@@ -1,3 +1,7 @@
+0.7.2 — plugin: installs and updates launched from Decky failed with `bash: undefined symbol: rl_trim_arg_from_keyseq`
+because Decky's Python exports its own LD_LIBRARY_PATH; the plugin now strips it for everything it spawns. Found by the
+first real unattended update attempt.
+
 0.7.1 — plugin: the update check works inside Decky's bundled Python (it has no certificate store; the distro's CA bundle
 is now used), the first page shows plugin version, integration version and update state, and Attach/Safe Detach presses
 are logged.
