@@ -50,4 +50,12 @@ fi
 # -cef-force-gpu: Big Picture / client UI is CEF; Steam had latched it to software rendering
 # (--disable-gpu + swiftshader = CPU-drawn UI = laggy BPM) after old GPU-process crashes.
 # Forcing GPU puts the UI on the NVIDIA render node; on crash CEF just falls back to software.
-exec /usr/lib/steam/steam -cef-force-gpu "$@"
+# Stay on the same Steam client branch as Game Mode. The distro wrapper pins "steamdeck_stable" and passes
+# -steamdeck; launching the bare client without it flips Steam to the plain desktop branch, and every Desktop<->Game
+# Mode switch then reinstalls the other package ("update available, restart Steam" nag in Game Mode, Decky broken
+# by the in-place client restart). Keep the branch + flag, but tell games they are not on a Deck (resolution caps).
+if cd ~/.steam/root/package 2>/dev/null || cd ~/.local/share/Steam/package 2>/dev/null; then
+  [ -e beta ] && [ "$(cat beta)" = steamdeck_stable ] || echo -n "steamdeck_stable" > beta; cd - >/dev/null
+fi
+export SteamDeck=0
+exec /usr/lib/steam/steam -steamdeck -cef-force-gpu "$@"

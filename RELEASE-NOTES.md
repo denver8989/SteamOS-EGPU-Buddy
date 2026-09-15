@@ -1,3 +1,10 @@
+0.6.1 — no more "update available, restart Steam" loop on the eGPU.
+
+- The eGPU desktop Steam launcher now stays on the same client branch as Game Mode (`steamdeck_stable`, `-steamdeck`),
+  so switching between the eGPU desktop and Game Mode no longer makes Steam reinstall the other branch, nag for a
+  restart, and break Decky on that restart. Games launched from the desktop get `SteamDeck=0` so they keep their
+  normal resolution lists. Root cause 10 in docs/ROOT-CAUSES.md.
+
 0.6.0 — the eGPU display no longer stays dark after the monitor sleeps.
 
 - **Wake guard** (`egpu-wake-guard`, user service): NVIDIA leaves the DRM connector off after a monitor sleep while the

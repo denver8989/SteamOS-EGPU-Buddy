@@ -110,6 +110,18 @@ arrives while an NVIDIA connector is still off and it stays off for four seconds
 `vt-bounce` (a VT round-trip, the same recovery a suspend gives), at most once every two minutes. A normal wake never
 trips it: the connector comes back within a second of the compositor's DPMS-on.
 
+## 10. Game Mode on the eGPU keeps saying "update available, restart Steam", and the restart breaks Decky
+
+**Cause.** Two Steam client branches on one install. The distro wrapper (`/usr/bin/steam`) pins the
+`steamdeck_stable` branch and passes `-steamdeck`, which Game Mode uses. The eGPU desktop launcher started the bare
+client without the flag, so desktop Steam ran the plain branch and installed its package; the next Game Mode start
+found its own branch "not installed" and asked for a restart to reinstall it, and the in-place restart replaced the
+client files under Decky Loader. Each Desktop→Game Mode switch repeated it. Only on the eGPU because only that
+desktop path used the launcher.
+
+**Fix here.** `steam-egpu-vk.sh` keeps the branch file at `steamdeck_stable` and launches with `-steamdeck` like
+the wrapper, while exporting `SteamDeck=0` so games do not enter their Deck presets (resolution caps) on the desktop.
+
 ## Appendix: the exact recipe for the Game Mode UI fix
 
 1. Source: `https://github.com/NightHammer1000/gamescope.git`, branch `poc/gamescope-gbm-route`, commit `2bfc18c`

@@ -99,3 +99,7 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
   guard correctly stayed silent on that normal wake (no false trigger). Its recovery action (`vt-bounce`) is the
   same one that fixed the dark handheld panel on 2026-09-12. Real-world confirmation pending: the guard logs
   `-> vt-bounce` to the journal (`journalctl --user -t egpu-wake-guard`) when it acts.
+
+## 0.6.1 (2026-09-15)
+
+- Steam branch fix: diagnosed from Steam's bootstrap log (branch flip-flop on every Desktop/Game Mode switch); the fix is applied but **not yet observed** through a full Desktop→Game Mode cycle, and whether `SteamDeck=0` in the launcher's environment reaches games (keeping desktop resolution lists uncapped) is **to be confirmed** on the next desktop game launch.
