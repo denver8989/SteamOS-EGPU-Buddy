@@ -43,6 +43,9 @@ current scripts.
 - **EGPU Buddy Decky plugin**: attach, safe detach, status, and power/clock controls (only when Game Mode runs on
   the eGPU; the handheld's own power management is left alone on the iGPU).
 - **EGPU Buddy desktop app**: the same controls for the docked Desktop, in a window (see *Desktop app*).
+- **Wake guard**: when the eGPU monitor sleeps and stays dark on wake (an NVIDIA driver bug, see
+  [docs/ROOT-CAUSES.md](docs/ROOT-CAUSES.md) #9), the picture is brought back automatically instead of needing a
+  suspend/resume.
 
 ## How it works
 

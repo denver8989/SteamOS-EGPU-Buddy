@@ -94,6 +94,22 @@ keeps scanning out the last frame of the previous compositor.
 **Fix here.** `egpu-hotplug-mount.sh` waits for the NVIDIA-only KWin and then runs `egpu-panel off`, which
 disables the unowned CRTC directly.
 
+## 9. eGPU display stays dark after the monitor sleeps
+
+**Symptom.** The monitor goes to sleep on idle; moving the mouse wakes nothing. Suspend and resume brings the
+picture back. Desktop or Game Mode, DisplayPort.
+
+**Cause.** After DPMS-off the NVIDIA driver can leave the DRM connector `enabled=disabled / dpms=Off` while the
+compositor believes the output is on again; only a full modeset recovers it. Reported against the open kernel
+modules as [#1055](https://github.com/NVIDIA/open-gpu-kernel-modules/issues/1055) and
+[#1028](https://github.com/NVIDIA/open-gpu-kernel-modules/issues/1028) (Blackwell, 580+); no driver fix as of
+610.57.04.
+
+**Fix here.** `egpu-wake-guard` (user service) watches input activity on the session's evdev nodes; when input
+arrives while an NVIDIA connector is still off and it stays off for four seconds, it asks the privileged helper for
+`vt-bounce` (a VT round-trip, the same recovery a suspend gives), at most once every two minutes. A normal wake never
+trips it: the connector comes back within a second of the compositor's DPMS-on.
+
 ## Appendix: the exact recipe for the Game Mode UI fix
 
 1. Source: `https://github.com/NightHammer1000/gamescope.git`, branch `poc/gamescope-gbm-route`, commit `2bfc18c`

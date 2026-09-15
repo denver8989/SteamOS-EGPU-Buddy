@@ -1,3 +1,10 @@
+0.6.0 — the eGPU display no longer stays dark after the monitor sleeps.
+
+- **Wake guard** (`egpu-wake-guard`, user service): NVIDIA leaves the DRM connector off after a monitor sleep while the
+  compositor thinks it is on (open-gpu-kernel-modules #1055/#1028); moving the mouse then shows nothing until a
+  suspend/resume. The guard sees the input, notices the connector is still off four seconds later, and performs the VT
+  round-trip that a suspend would, automatically. Root cause 9 in docs/ROOT-CAUSES.md.
+
 0.5.0 — survives OS updates that wipe /usr (SteamOS-style).
 
 - **Self-heal.** The install keeps the whole release, a pacman package cache (nvidia-utils, lib32, bolt, dkms, the
