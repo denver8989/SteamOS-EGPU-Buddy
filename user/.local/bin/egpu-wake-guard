@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""EGPU Buddy wake guard: recover the eGPU display when it stays dark after a monitor sleep.
+
+NVIDIA open-gpu-kernel-modules #1055 / #1028: after DPMS-off the DRM connector can be left
+enabled=disabled / dpms=Off while the compositor believes the output is on; the monitor stays black
+until a full modeset (VT switch or suspend/resume). This watcher reads input activity from the evdev
+nodes logind grants the session, and when the user is active but the NVIDIA connector is still off a
+few seconds later it asks the privileged helper for a VT round-trip (the same recovery, automated).
+SIGUSR1 counts as activity (used by the test path). Runs as the user; no LACT, no other project.
+"""
+import glob, os, select, signal, subprocess, syslog, time
+
+GRACE = 4.0        # seconds of "user active but connector still off" before we intervene
+COOLDOWN = 120.0   # seconds between interventions
+PRIV = "/usr/local/sbin/nv-egpu-buddy-privileged"
+RUN = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+
+def log(m): syslog.syslog(syslog.LOG_INFO, m)
+def read(p):
+    try: return open(p).read().strip()
+    except OSError: return ""
+
+def nvidia_connectors():
+    out = []
+    for card in glob.glob("/sys/class/drm/card[0-9]"):
+        if read(card + "/device/vendor") != "0x10de": continue
+        for c in glob.glob(card + "-*"):
+            if read(c + "/status") == "connected": out.append(c)
+    return out
+
+def output_off(c): return read(c + "/enabled") == "disabled" or read(c + "/dpms") == "Off"
+
+class Guard:
+    def __init__(self):
+        self.last_input = 0.0; self.last_fix = 0.0; self.off_since = None; self.first_input_off = None; self.fds = {}
+        signal.signal(signal.SIGUSR1, lambda *_: self.mark())
+    def mark(self): self.last_input = time.monotonic()
+    def open_inputs(self):
+        for p in glob.glob("/dev/input/event*"):
+            if p in self.fds: continue
+            try: self.fds[p] = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+            except OSError: pass
+    def drain(self, timeout):
+        if not self.fds: time.sleep(timeout); return
+        r, _, _ = select.select(list(self.fds.values()), [], [], timeout)
+        for fd in r:
+            try: os.read(fd, 4096); self.mark()
+            except OSError:
+                for p, f in list(self.fds.items()):
+                    if f == fd: os.close(f); del self.fds[p]
+    def tick(self):
+        if os.path.exists(f"{RUN}/nv-egpu-buddy/detach-handoff-active"): self.off_since = None; return
+        cons = nvidia_connectors()
+        if not cons: self.off_since = None; return
+        now = time.monotonic()
+        if any(output_off(c) for c in cons):
+            if self.off_since is None: self.off_since = now; self.first_input_off = None
+            # first user input seen while the output is off: the compositor should turn it on within a moment
+            if self.last_input > self.off_since and self.first_input_off is None: self.first_input_off = self.last_input
+            if self.first_input_off is not None and now - self.first_input_off >= GRACE and now - self.last_fix > COOLDOWN:
+                names = ",".join(c.split("-", 1)[1] for c in cons if output_off(c))
+                log(f"eGPU output {names} still off {GRACE:.0f}s after user input (stuck after monitor sleep) -> vt-bounce")
+                subprocess.run(["sudo", "-n", PRIV, "vt-bounce"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+                self.last_fix = time.monotonic(); self.off_since = None; self.first_input_off = None
+        else:
+            self.off_since = None; self.first_input_off = None
+
+def main():
+    syslog.openlog("egpu-wake-guard"); g = Guard(); log("wake guard started"); n = 0
+    while True:
+        if n % 10 == 0: g.open_inputs()
+        g.drain(1.0); g.tick(); n += 1
+
+if __name__ == "__main__":
+    main()

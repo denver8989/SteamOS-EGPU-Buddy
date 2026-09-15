@@ -125,7 +125,7 @@ true
 fi
 rm -rf "$SYS_TMP"
 userctl daemon-reload
-want core && userctl enable egpu-display-failover.service >/dev/null 2>&1 || true
+want core && { userctl enable egpu-display-failover.service; userctl enable --now egpu-wake-guard.service; } >/dev/null 2>&1 || true
 
 # ---- gamescope with GBM scan-out (NVIDIA scan-out corruption fix) --------------------------------
 if want gamescope; then

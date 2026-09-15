@@ -1,0 +1,13 @@
+[Unit]
+Description=EGPU Buddy wake guard (recover the eGPU display when it stays dark after a monitor sleep)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/egpu-wake-guard
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target
