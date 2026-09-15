@@ -103,3 +103,9 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 ## 0.6.1 (2026-09-15)
 
 - Steam branch fix: diagnosed from Steam's bootstrap log (branch flip-flop on every Desktop/Game Mode switch); the fix is applied but **not yet observed** through a full Desktop→Game Mode cycle, and whether `SteamDeck=0` in the launcher's environment reaches games (keeping desktop resolution lists uncapped) is **to be confirmed** on the next desktop game launch.
+
+## 0.6.2 (2026-09-15)
+
+- 144 Hz Game Mode on the eGPU: the wrapper now stages 5120×1440@144 (verified from its environment dump); a Game
+  Mode session at 144 Hz with the GBM-scanout gamescope has **not yet been run** (takes effect at the next session
+  restart); the desktop already ran 144 Hz on the same link.

@@ -25,7 +25,9 @@ FORMAT_FILTER=${NV_EGPU_GAMESCOPE_FORMAT_FILTER:-/home/deck/.local/lib/nv-egpu-b
 EGPU_WAIT_SECONDS=${EGPU_GAMESCOPE_EGPU_WAIT_SECONDS:-25}
 EGPU_PROBE_SECONDS=${EGPU_GAMESCOPE_EGPU_PROBE_SECONDS:-5}
 EGPU_GAMESCOPE_HDR=${NV_EGPU_GAMESCOPE_HDR:-0}
-EGPU_GAMESCOPE_MAX_REFRESH=${NV_EGPU_GAMESCOPE_MAX_REFRESH:-60}
+# refresh cap for the eGPU output; 0 = none (use the display's best mode). The 60 Hz cap of the corruption era is gone
+# since the GBM-scanout gamescope; set NV_EGPU_GAMESCOPE_MAX_REFRESH in the drop-in to cap again.
+EGPU_GAMESCOPE_MAX_REFRESH=${NV_EGPU_GAMESCOPE_MAX_REFRESH:-0}
 SDR_CLAMP=${NV_EGPU_GAMESCOPE_SDR_CLAMP:-/home/deck/.local/bin/nv-egpu-gamescope-sdr-clamp}
 STEAM_SCALE_CLAMP=${NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP_BIN:-/home/deck/.local/bin/nv-egpu-gamescope-steam-scale-clamp}
 
@@ -287,7 +289,7 @@ best_egpu_drm_mode() {
       refresh = $3 + 0
       width = $4 + 0
       height = $8 + 0
-      if (max_refresh != "" && refresh > (max_refresh + 0.5)) {
+      if (max_refresh != "" && (max_refresh + 0) > 0 && refresh > (max_refresh + 0.5)) {
         next
       }
       score = (width * 1000000000) + (width * height * 1000) + refresh
