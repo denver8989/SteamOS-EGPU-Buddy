@@ -1,3 +1,7 @@
+0.7.3 — plugin updater follows the newest of GitHub's latest release and the payload the plugin carries, so an
+integration older than the plugin is brought up without a download; plugin self-replacement only when the release is
+newer than the plugin's own payload.
+
 0.7.2 — plugin: installs and updates launched from Decky failed with `bash: undefined symbol: rl_trim_arg_from_keyseq`
 because Decky's Python exports its own LD_LIBRARY_PATH; the plugin now strips it for everything it spawns. Found by the
 first real unattended update attempt.

@@ -312,7 +312,8 @@ def _update_worker(version):
         _update["state"] = f"installing {version}"
         _setup_worker("install", False, version)
         if _setup["rc"] != 0: raise RuntimeError(f"system integration install failed rc={_setup['rc']}")
-        _update["state"] = f"updating plugin to {version}"; _update_plugin_files(version)
+        if _vt(version) > _vt(PAYLOAD_VERSION):
+            _update["state"] = f"updating plugin to {version}"; _update_plugin_files(version)
         _update["state"] = f"updated to {version}: reboot to activate"; _update["available"] = ""
         d = _settings(); d["last_update"] = version; _save_settings(d)
     except Exception as ex:  # noqa: BLE001
@@ -326,13 +327,15 @@ def _check_update(install=False):
     except Exception as ex:  # noqa: BLE001
         _update["last_error"] = f"check failed: {ex}"; return
     installed = _read(VERSION_FILE)
-    newer = bool(latest) and _vt(latest) > max(_vt(installed), _vt(PAYLOAD_VERSION))
-    _update["available"] = latest if newer else ""
-    if newer and install and installed and not _setup["busy"] and not _game_running():
+    # target = the newest of GitHub's latest release and the payload this plugin carries; the integration follows it
+    target = latest if _vt(latest) > _vt(PAYLOAD_VERSION) else PAYLOAD_VERSION
+    newer = bool(installed) and _vt(target) > _vt(installed)
+    _update["available"] = target if newer else ""
+    if newer and install and not _setup["busy"] and not _game_running():
         _setup.update(busy=True, rc=None, step="update", progress=0)
         try: os.remove(SETUP_LOG)
         except OSError: pass
-        threading.Thread(target=_update_worker, args=(latest,), daemon=True).start()
+        threading.Thread(target=_update_worker, args=(target,), daemon=True).start()
 
 
 class Plugin:
