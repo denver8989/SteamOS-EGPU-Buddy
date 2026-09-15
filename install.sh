@@ -168,7 +168,9 @@ fi
 
 # ---- patched NVIDIA driver (optional, Arch-based) ------------------------------------------------
 if want driver; then
-  if command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
+  PKGV="$(sed -n 's/^pkgver=//p' "$ROOT/packaging/nvidia-open-egpu/PKGBUILD")-$(sed -n 's/^pkgrel=//p' "$ROOT/packaging/nvidia-open-egpu/PKGBUILD")"
+  if command -v pacman >/dev/null && [ "${EGPU_DRIVER_FORCE:-0}" != 1 ] && pacman -Q nvidia-open-egpu-dkms 2>/dev/null | grep -q "$PKGV\$"; then say "== patched driver package $PKGV already installed (EGPU_DRIVER_FORCE=1 to rebuild)"
+  elif command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
 else
   say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
 fi

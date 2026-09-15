@@ -1,4 +1,4 @@
-import { ButtonItem, Field, PanelSection, PanelSectionRow, ProgressBarWithInfo, SliderField, Router, staticClasses } from "@decky/ui";
+import { ButtonItem, Field, PanelSection, PanelSectionRow, ProgressBarWithInfo, SliderField, ToggleField, Router, staticClasses } from "@decky/ui";
 import { callable, definePlugin, useQuickAccessVisible } from "@decky/api";
 import { useEffect, useState } from "react";
 import { FaPlug } from "react-icons/fa";
@@ -24,6 +24,10 @@ const installSystem = callable<[boolean], Result>("install_system");
 const uninstallSystem = callable<[], Result>("uninstall_system");
 const rebootSystem = callable<[], Result>("reboot_system");
 const applyCmdline = callable<[], Result>("apply_kernel_cmdline");
+type Upd = { auto_update: boolean; available: string; state: string; checked: number; last_error: string; installed: string };
+const getUpdate = callable<[], Upd>("get_update_status");
+const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
+const checkUpdate = callable<[boolean], Result>("check_update");
 
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
@@ -39,6 +43,7 @@ function Content() {
   const visible = useQuickAccessVisible();
   const [tab, setTab] = useState<"main" | "details" | "setup">("main");
   const [su, setSu] = useState<Setup | null>(null);
+  const [up, setUp] = useState<Upd | null>(null);
   const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall">("");
   const [s, setS] = useState<Status | null>(null);
   const [msg, setMsg] = useState("");
@@ -46,7 +51,7 @@ function Content() {
   const [pl, setPl] = useState<number | null>(null);
   const [off, setOff] = useState(0);
 
-  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); } catch (e) { setMsg(`status error: ${e}`); } };
+  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); setUp(await getUpdate()); } catch (e) { setMsg(`status error: ${e}`); } };
   useEffect(() => { if (!visible) return; refresh(); const t = setInterval(refresh, su?.busy ? 1000 : 3000); return () => clearInterval(t); }, [visible, su?.busy]);
 
   const gameUp = !!(s?.game_running || Router.MainRunningApp);
@@ -74,7 +79,10 @@ function Content() {
               <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(() => installSystem(false))}>{su.installed_version && !su.helpers_present ? "Repair system integration" : su.installed_version ? "Update system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>
             </>
           )}
-          {su?.busy && <PanelSectionRow><ProgressBarWithInfo nProgress={su.progress} sOperationText={su.step} label="Installing" focusable={false} /></PanelSectionRow>}
+          {up?.available && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Update {up.available} is available{up.auto_update ? " and will install automatically when no game is running" : ""}.</div></PanelSectionRow>}
+          {up?.available && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => run(() => checkUpdate(true))}>Update now to {up.available}</ButtonItem></PanelSectionRow>}
+          {up?.state && <PanelSectionRow><div style={{ fontSize: "12px", color: up.state.includes("failed") ? "#ff6b6b" : "#4caf50" }}>{up.state}</div></PanelSectionRow>}
+          {su?.busy && <PanelSectionRow><ProgressBarWithInfo nProgress={su.progress} sOperationText={su.step} label={su.step.startsWith("update") || up?.state.startsWith("installing") ? "Updating" : "Installing"} focusable={false} /></PanelSectionRow>}
           {su && !su.busy && su.rc === 0 && (
             <>
               <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. Reboot with the eGPU disconnected, then plug it in.</div></PanelSectionRow>
@@ -155,6 +163,13 @@ function Content() {
             </ButtonItem>
           </PanelSectionRow>
           {su?.log && <PanelSectionRow><div style={{ fontSize: "10px", whiteSpace: "pre-wrap", opacity: 0.8 }}>{su.log}</div></PanelSectionRow>}
+        </PanelSection>
+      )}
+      {tab === "setup" && (
+        <PanelSection title="Updates">
+          <PanelSectionRow><ToggleField label="Automatic updates" description="Checks GitHub every hour; installs new releases (system integration and this plugin) when no game is running, then asks for a reboot." checked={!!up?.auto_update} onChange={(v) => run(() => setAutoUpdate(v))} /></PanelSectionRow>
+          <PanelSectionRow><ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => run(() => checkUpdate(false))}>Check for updates now</ButtonItem></PanelSectionRow>
+          <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>{up ? (up.available ? `Available: ${up.available}` : (up.checked ? "Up to date." : "Not checked yet.")) + (up.installed ? ` Installed: ${up.installed}.` : "") + (up.last_error ? ` ${up.last_error}` : "") : "…"}</div></PanelSectionRow>
         </PanelSection>
       )}
     </>

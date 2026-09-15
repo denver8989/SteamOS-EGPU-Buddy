@@ -114,3 +114,9 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 - Post-resume kick: the manual VT round-trip **recovered** the monitor after a real resume on the tested machine (Game
   Mode, 144 Hz); the automatic unit is installed and enabled but **not yet exercised** by a suspend/resume cycle.
+
+## 0.7.0 (2026-09-16)
+
+- Auto-update: the update path (release check, verified download, system install, plugin self-update) **exercised** on
+  the tested machine with the plugin-restart step stubbed; a real unattended hourly update from a published newer
+  release **not yet observed** (it needs a release newer than the installed one).

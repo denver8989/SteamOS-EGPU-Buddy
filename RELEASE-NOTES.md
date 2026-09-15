@@ -1,3 +1,9 @@
+0.7.0 — automatic updates from the Decky plugin. Hourly check of this repository's releases; with *Automatic updates* on
+(default) a new release installs the system integration (verified tarball, same installer) and replaces the plugin's own
+files, reloads Decky and asks for a reboot; never while a game is running, never as a first install. *Update now* and
+*Check for updates now* buttons; the toggle lives in Setup. The driver package is no longer rebuilt when the installed one
+already matches the release.
+
 0.6.3 — picture back after resume from suspend. A new system unit runs after every resume: when an eGPU display is
 connected it forces the modeset (VT round-trip) that the NVIDIA DisplayPort link needs to re-train, then re-darkens the
 handheld panel. Root cause 11. The privileged helper gained `panel-off`/`panel-on`.

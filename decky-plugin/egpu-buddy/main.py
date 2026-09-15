@@ -30,6 +30,19 @@ SETUP_LOG = "/tmp/egpu-buddy-setup.log"
 VERSION_FILE = "/etc/nv-egpu-buddy/version"
 SETUP_COMPONENTS = os.environ.get("EGPU_SETUP_COMPONENTS", "core,session,gamescope,bootpolicy,desktopapp")   # no decky (already here); driver added where pacman exists
 _setup = {"busy": False, "step": "", "rc": None, "progress": 0}
+# ---- automatic updates: keep an existing install on the latest GitHub release (system integration + this plugin)
+SETTINGS = f"{USER_HOME}/.config/egpu-buddy/plugin.json"
+PLUGIN_LIVE = f"{USER_HOME}/homebrew/plugins/EGPU-Buddy"
+_update = {"available": "", "state": "", "checked": 0.0, "last_error": ""}
+def _settings():
+    try: return json.load(open(SETTINGS))
+    except Exception: return {}
+def _save_settings(d):
+    os.makedirs(os.path.dirname(SETTINGS), exist_ok=True); json.dump(d, open(SETTINGS, "w")); subprocess.run(["chown", "-R", USER, os.path.dirname(SETTINGS)])
+def _vt(v): return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3]) or (0,)
+def _latest_release():
+    data = json.loads(urllib.request.urlopen(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=20).read().decode())
+    return data.get("tag_name", "").lstrip("v")
 STAGES = (("== preflight", 8), ("== installing user files", 20), ("== installing system files", 40),
           ("== building GBM-scanout gamescope", 55), ("== no build toolchain", 60), ("== installing the EGPU Buddy desktop app", 75),
           ("== building the patched nvidia-open", 78), ("pinning NVIDIA userspace", 80), ("==> Making package", 82), ("==> Starting build()", 84),
@@ -155,14 +168,15 @@ def _slog(msg, progress=None):
         pass
 
 
-def _fetch_payload():
+def _fetch_payload(version=None):
     """Return the path of the verified release tarball: bundled payload/ if present, else downloaded."""
-    name = f"SteamOS-EGPU-Buddy-{PAYLOAD_VERSION}.tar.gz"
+    version = version or PAYLOAD_VERSION
+    name = f"SteamOS-EGPU-Buddy-{version}.tar.gz"
     local = os.path.join(PLUGIN_DIR, "payload", name)
     if os.path.exists(local):
         _slog(f"using bundled payload {name}", 3)
         return local
-    base = f"https://github.com/{REPO}/releases/download/v{PAYLOAD_VERSION}/"
+    base = f"https://github.com/{REPO}/releases/download/v{version}/"
     dst = f"/tmp/{name}"
     _slog(f"downloading {name} (no bundled payload)", 2)
     urllib.request.urlretrieve(base + name, dst)
@@ -188,12 +202,12 @@ def _run_logged(cmd, env, cwd):
         return pr.wait()
 
 
-def _setup_worker(action, with_driver=False):
+def _setup_worker(action, with_driver=False, version=None):
     env = dict(os.environ, EGPU_TARGET_USER=USER, HOME=USER_HOME, EGPU_AUTO_YES="1")
     ro = shutil.which("steamos-readonly")
     try:
         if action == "install":
-            tgz = _fetch_payload()
+            tgz = _fetch_payload(version)
             _slog(f"extracting to {SYSDIR}", 5)
             shutil.rmtree(SYSDIR, ignore_errors=True); os.makedirs(os.path.dirname(SYSDIR), exist_ok=True)
             with tarfile.open(tgz) as t:
@@ -233,7 +247,7 @@ def _unsupported():
     return ""
 
 
-def _start_setup(action, with_driver=False):
+def _start_setup(action, with_driver=False, version=None):
     if action == "install" and _unsupported():
         return {"ok": False, "message": _unsupported()}
     if _setup["busy"]:
@@ -243,11 +257,71 @@ def _start_setup(action, with_driver=False):
         os.remove(SETUP_LOG)
     except OSError:
         pass
-    threading.Thread(target=_setup_worker, args=(action, with_driver), daemon=True).start()
+    threading.Thread(target=_setup_worker, args=(action, with_driver, version), daemon=True).start()
     return {"ok": True, "message": f"{action} started"}
 
 
+def _update_plugin_files(version):
+    """Replace this plugin with the release's plugin zip (backup kept), then restart Decky detached from ourselves."""
+    name = f"EGPU-Buddy-Decky-{version}.zip"; dst = f"/tmp/{name}"
+    urllib.request.urlretrieve(f"https://github.com/{REPO}/releases/download/v{version}/{name}", dst)
+    sums = urllib.request.urlopen(f"https://github.com/{REPO}/releases/download/v{version}/SHA256SUMS", timeout=30).read().decode()
+    want = next((l.split()[0] for l in sums.splitlines() if l.strip().endswith(name)), "")
+    if not want or want != hashlib.sha256(open(dst, "rb").read()).hexdigest(): raise RuntimeError("checksum mismatch on the plugin zip")
+    import zipfile
+    tmp = f"/tmp/egpu-buddy-plugin-{version}"; shutil.rmtree(tmp, ignore_errors=True); zipfile.ZipFile(dst).extractall(tmp)
+    src = os.path.join(tmp, "EGPU-Buddy"); bak = PLUGIN_LIVE + ".bak-egpu-buddy"
+    shutil.rmtree(bak, ignore_errors=True); shutil.copytree(PLUGIN_LIVE, bak)
+    for entry in os.listdir(PLUGIN_LIVE):
+        pth = os.path.join(PLUGIN_LIVE, entry); shutil.rmtree(pth, ignore_errors=True) if os.path.isdir(pth) else os.remove(pth)
+    for entry in os.listdir(src):
+        sp = os.path.join(src, entry); dp = os.path.join(PLUGIN_LIVE, entry)
+        shutil.copytree(sp, dp) if os.path.isdir(sp) else shutil.copy2(sp, dp)
+    subprocess.run(["chown", "-R", USER, PLUGIN_LIVE])
+    if os.environ.get("EGPU_NO_DECKY_RESTART") != "1":   # test hook
+        subprocess.Popen(["systemd-run", "--on-active=5", "--collect", "--quiet", "systemctl", "restart", "plugin_loader.service"])
+
+
+def _update_worker(version):
+    try:
+        _update["state"] = f"installing {version}"
+        _setup_worker("install", False, version)
+        if _setup["rc"] != 0: raise RuntimeError(f"system integration install failed rc={_setup['rc']}")
+        _update["state"] = f"updating plugin to {version}"; _update_plugin_files(version)
+        _update["state"] = f"updated to {version}: reboot to activate"; _update["available"] = ""
+        d = _settings(); d["last_update"] = version; _save_settings(d)
+    except Exception as ex:  # noqa: BLE001
+        _update["state"] = f"update failed: {ex}"; _update["last_error"] = str(ex); decky.logger.error(f"update failed: {ex}")
+
+
+def _check_update(install=False):
+    """Compare the installed integration with the latest release; optionally install it (never a first install)."""
+    try:
+        latest = _latest_release(); _update["checked"] = time.time(); _update["last_error"] = ""
+    except Exception as ex:  # noqa: BLE001
+        _update["last_error"] = f"check failed: {ex}"; return
+    installed = _read(VERSION_FILE)
+    newer = bool(latest) and _vt(latest) > max(_vt(installed), _vt(PAYLOAD_VERSION))
+    _update["available"] = latest if newer else ""
+    if newer and install and installed and not _setup["busy"] and not _game_running():
+        _setup.update(busy=True, rc=None, step="update", progress=0)
+        try: os.remove(SETUP_LOG)
+        except OSError: pass
+        threading.Thread(target=_update_worker, args=(latest,), daemon=True).start()
+
+
 class Plugin:
+    async def get_update_status(self):
+        d = _settings()
+        return {"auto_update": d.get("auto_update", True), "available": _update["available"], "state": _update["state"],
+                "checked": _update["checked"], "last_error": _update["last_error"], "installed": _read(VERSION_FILE)}
+
+    async def set_auto_update(self, enabled: bool):
+        d = _settings(); d["auto_update"] = bool(enabled); _save_settings(d); return {"ok": True, "message": "saved"}
+
+    async def check_update(self, install: bool = False):
+        threading.Thread(target=_check_update, args=(bool(install),), daemon=True).start(); return {"ok": True, "message": "checking"}
+
     async def get_setup_status(self):
         tail = ""
         try:
@@ -338,7 +412,12 @@ class Plugin:
 
     async def _main(self):
         decky.logger.info("EGPU Buddy backend loaded")
-        while True:  # keep the plugin alive; nothing to do in the background (system udev rules do the work)
+        await asyncio.sleep(90)
+        while True:  # automatic updates: hourly check; install only if enabled, already installed, and no game running
+            try:
+                _check_update(install=_settings().get("auto_update", True))
+            except Exception as ex:  # noqa: BLE001
+                decky.logger.error(f"update check: {ex}")
             await asyncio.sleep(3600)
 
     async def _unload(self):
