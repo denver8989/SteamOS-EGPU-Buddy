@@ -106,6 +106,6 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 ## 0.6.2 (2026-09-15)
 
-- 144 Hz Game Mode on the eGPU: the wrapper now stages 5120×1440@144 (verified from its environment dump); a Game
-  Mode session at 144 Hz with the GBM-scanout gamescope has **not yet been run** (takes effect at the next session
-  restart); the desktop already ran 144 Hz on the same link.
+- 144 Hz Game Mode on the eGPU: **verified** by the user after the next session start (5120×1440@144 with the
+  GBM-scanout gamescope); VRR from the Quick Access menu no longer caps games at 60 fps, and the display setting
+  stays at 144.
