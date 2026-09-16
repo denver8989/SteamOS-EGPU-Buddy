@@ -1,3 +1,7 @@
+0.7.9 — plugin: with no eGPU the details page says just that (one line plus the session) instead of a wall of empty
+metrics; the tab switcher is labelled by what it opens ("Show setup & updates"), never like an action; Reinstall in
+Setup asks first and says what it does; the raw PipeWire placeholder no longer shows as the audio sink.
+
 0.7.8 — plugin: "Safe to unplug the cable" now goes away by itself once the enclosure is actually unplugged (no
 Thunderbolt/USB4 device enumerated and no GPU on the bus).
 

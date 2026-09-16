@@ -175,7 +175,11 @@ def _settle_detach_status():
 
 def _audio_sink():
     rc, out, _ = _sh(["runuser", "-u", USER, "--", "env", *[f"{k}={v}" for k, v in RUNENV.items()], "pactl", "get-default-sink"], 5)
-    return out if rc == 0 else ""
+    if rc != 0: return ""
+    if out.startswith("@"):   # PipeWire may answer with the placeholder; resolve it from the server info
+        _, info, _ = _sh(["runuser", "-u", USER, "--", "env", *[f"{k}={v}" for k, v in RUNENV.items()], "pactl", "info"], 5)
+        out = next((l.split(":", 1)[1].strip() for l in info.splitlines() if l.startswith("Default Sink:")), "")
+    return "" if out.startswith("@") else out
 
 
 def _ssl_ctx():

@@ -30,7 +30,7 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 
-const PLUGIN_VERSION = "1.8.1";
+const PLUGIN_VERSION = "1.8.2";
 
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
@@ -69,7 +69,7 @@ function Content() {
     <>
       <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => setTab(tab === "main" ? "details" : tab === "details" ? "setup" : "main")}>{tab === "main" ? "Show details" : tab === "details" ? "Setup" : "Back to main"}</ButtonItem>
+          <ButtonItem layout="below" onClick={() => setTab(tab === "main" ? "details" : tab === "details" ? "setup" : "main")}>{tab === "main" ? "Show details" : tab === "details" ? "Show setup & updates" : "Back to main"}</ButtonItem>
         </PanelSectionRow>
       </PanelSection>
       {tab === "main" && (
@@ -125,6 +125,12 @@ function Content() {
       {tab === "details" && s && (
         <>
           <PanelSection title="eGPU details">
+            {!s.present ? (
+              <>
+                <PanelSectionRow><div className={staticClasses.Text}>eGPU not connected.</div></PanelSectionRow>
+                <Row k="Session" v={s.game_mode ? "Game Mode on the handheld screen" : "Desktop"} />
+              </>
+            ) : (
             <>
               <Row k="GPU" v={tel["name"] ?? (s.present ? s.bdf : "absent")} />
               <Row k="Driver" v={s.driver_loaded ? `nvidia ${tel["driver_version"] ?? ""}` : "not loaded"} />
@@ -139,8 +145,9 @@ function Content() {
               <Row k="Load" v={tel["utilization.gpu"] ? `${tel["utilization.gpu"]} %` : ""} />
               <Row k="Fan" v={tel["fan.speed"] && tel["fan.speed"] !== "[N/A]" ? `${tel["fan.speed"]} %` : ""} />
             </>
+            )}
           </PanelSection>
-          {controlsOk ? (
+          {!s.present ? null : controlsOk ? (
             <PanelSection title="Power controls">
               <PanelSectionRow>
                 <SliderField label="Power limit (W)" value={plNow} min={plMin} max={plMax} step={5} showValue onChange={setPl} />
@@ -167,7 +174,7 @@ function Content() {
           {su?.busy && <PanelSectionRow><ProgressBarItem nProgress={su.progress} layout="below" bottomSeparator="none" label={"Installing " + Math.round(su.progress) + "%"} description={<span style={{ fontSize: "11px", whiteSpace: "normal", wordBreak: "break-word" }}>{su.step.length > 70 ? su.step.slice(0, 70) + "…" : su.step}</span>} /></PanelSectionRow>}
           {su && !su.busy && su.rc !== null && <PanelSectionRow><div style={{ fontSize: "12px", color: su.rc === 0 ? "#4caf50" : "#ff6b6b" }}>{su.rc === 0 ? "Finished. Reboot to activate." : `Failed (rc ${su.rc}); log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => { if (confirmSetup === "install") { setConfirmSetup(""); run(() => installSystem(false)); } else setConfirmSetup("install"); }}>
+            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => showModal(<ConfirmModal strTitle={su?.installed_version ? "Reinstall the system integration" : "Install the system integration"} strDescription="Runs the full installer as root: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, patched driver, kernel parameters. Everything replaced is backed up. Takes several minutes. Do this only if something is broken or after a reinstall of the OS." strOKButtonText={su?.installed_version ? "Reinstall" : "Install"} onOK={() => run(() => installSystem(false))} />)}>
               {confirmSetup === "install" ? "Press again to confirm install" : (su?.installed_version ? "Reinstall / update system integration" : "Install system integration")}
             </ButtonItem>
           </PanelSectionRow>
