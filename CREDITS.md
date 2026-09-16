@@ -38,6 +38,44 @@ say where it came from.
   `lactd`, but the design and parts of the control logic derive from LACT and its NVIDIA backend.
   LACT's license: MIT, Copyright (c) 2023 Ilya Zlobintsev.
 
+## The USB4 link stability (the AMD data-fabric sync flood)
+
+- **damianbienias32** (CachyOS forum, [setup](https://discuss.cachyos.org/t/my-setup-mini-pc-aorus-egpu-and-cachyos/34425)
+  and [eGPU control switcher](https://discuss.cachyos.org/t/egpu-control-switcher/34486) threads) — the platform twin
+  (Ryzen AI Max+ USB4 host + the same AORUS AI Box on CachyOS) whose method this project's attach path follows: bring
+  the card up only after the desktop, disable ASPM/L1 substates on both ends of the tunnel, pin the link speed with
+  hardware autonomous speed change disabled and retrain **before** the driver loads, keep the GPU at P0. Before that,
+  every boot with the card attached ended in an AMD data-fabric sync-flood reset on this machine.
+- **The open-gpu-kernel-modules [#979](https://github.com/NVIDIA/open-gpu-kernel-modules/issues/979) thread** — roger-pmta
+  (opener), apnex, jciolek, lokmantsui, efenex and others, who established that the tunneled link's autonomous speed
+  negotiation, not GPU clocks, triggers the GSP lockdown that cascades into the flood, and that `pcie_aspm=off` is harmful
+  on AMD USB4 hosts.
+- **nikomiiller** (NVIDIA forum thread [365386](https://forums.developer.nvidia.com/t/365386), same box and GPU) — the
+  link-speed cap, ASPM-off and persistenced workarounds that were tested first.
+- **Alex Forencich** — the [setpci link-speed recipe](https://alexforencich.com/wiki/en/pcie/set-speed) (Link Control 2
+  target speed, retrain bit) that the pin is written with.
+- **DamianKA1993 — [blackwell-egpu-manager](https://github.com/DamianKA1993/blackwell-egpu-manager)** (MIT) — a tool built
+  around the same approach (udev-driven attach, setpci ASPM/link control, boltctl authorization, P0 lock) for Blackwell
+  eGPUs; not used here, listed because the approach is the same lineage.
+- **ewagner12 — [all-ways-egpu](https://github.com/ewagner12/all-ways-egpu)** (MIT) — the `boot_vga` bind-mount
+  technique (its "Method 2") is reimplemented in `egpu-hotplug-mount.sh` so that compositors pick the eGPU as primary;
+  no code was copied, the idea and the file layout (a `0`/`1` file bind-mounted over the sysfs flag, a list of mounted
+  paths for cleanup) are his.
+- The PCIe DPC handling (clearing the containment trigger so the second USB4 port forms its tunnel, re-arming it before
+  the driver loads), freeing the enclosure's empty Thunderbolt sibling ports so the 16 GB BAR fits, and the flood lockout
+  that breaks a reboot loop were worked out on this machine.
+
+## Related projects (no code shared)
+
+- [hertg/egpu-switcher](https://github.com/hertg/egpu-switcher) — X.Org-only eGPU switching; not applicable to
+  gamescope/Wayland, nothing taken from it.
+- [WowOne987/eGPUBridge](https://github.com/WowOne987/eGPUBridge) — a Decky plugin for eGPU display switching (AMD
+  RX 9070 on a Legion Go S, with NVIDIA driver loading). Independent work from the same period; it replaces the whole
+  gamescope session script, this project wraps the distro's. Checked side by side: no shared code.
+- [djanice1980/eGPU-Blackwell-Stability](https://github.com/djanice1980/eGPU-Blackwell-Stability) — Blackwell eGPU on a
+  Strix Halo host (Flow Z13) with apnex's driver patches; it uses the card for render offload only and does not drive a
+  display from it, which is why it never meets the display-path problems solved here.
+
 ## Everything else this leans on
 
 - **Valve** — gamescope (BSD-2-Clause), the Steam Linux Runtime, Proton, the `gamescope-session` scripts this

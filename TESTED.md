@@ -146,3 +146,7 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 - Audio loss after the interrupted detach: **reproduced** (WirePlumber stopped at 09:01, never restarted); manual start
   restored speaker and microphone; the two safety nets are applied, not yet exercised by another interrupted detach.
+
+## 0.7.12 (2026-09-16)
+
+- Documentation and versioning only; no script changes.

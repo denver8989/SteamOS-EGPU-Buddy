@@ -1,3 +1,13 @@
+0.7.12 — one version, every build kept, credits completed.
+
+- The plugin now carries the release version; the first page shows a single "EGPU Buddy 0.7.12" (with "system files
+  x.y.z, update pending" only while an update is in flight).
+- Releases are no longer removed when a newer one is published; older builds stay on the Releases page.
+- Credits: the USB4 link-stability lineage (damianbienias32's method, the open-gpu-kernel-modules #979 thread, nikomiiller,
+  Alex Forencich's setpci recipe, DamianKA1993's blackwell-egpu-manager), all-ways-egpu's boot_vga technique stated
+  precisely, and a "related projects, no code shared" list (egpu-switcher, eGPUBridge, eGPU-Blackwell-Stability).
+- README roadmap: separating the NVIDIA-specific layer from the generic eGPU path.
+
 0.7.11 — no audio after an interrupted detach. The Game Mode detach stops WirePlumber to release the eGPU's audio card
 and restarts it at the end; the detach that Decky's restart killed (0.7.7 story) never reached that line, leaving only a
 dummy sink. The detach now restarts WirePlumber on any exit, and the plugin restarts it whenever it finds it down outside
