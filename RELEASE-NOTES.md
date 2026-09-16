@@ -1,3 +1,6 @@
+0.7.10 — plugin: the progress bar is now a plain, full-width bar drawn by the plugin (the UI kit's bar rendered inline
+next to its label and ran off the panel on every display). Used for installs, updates and repairs alike.
+
 0.7.9 — plugin: with no eGPU the details page says just that (one line plus the session) instead of a wall of empty
 metrics; the tab switcher is labelled by what it opens ("Show setup & updates"), never like an action; Reinstall in
 Setup asks first and says what it does; the raw PipeWire placeholder no longer shows as the audio sink.

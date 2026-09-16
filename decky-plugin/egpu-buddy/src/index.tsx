@@ -1,4 +1,4 @@
-import { ButtonItem, ConfirmModal, Field, PanelSection, PanelSectionRow, ProgressBarItem, SliderField, ToggleField, Router, showModal, staticClasses } from "@decky/ui";
+import { ButtonItem, ConfirmModal, Field, PanelSection, PanelSectionRow, SliderField, ToggleField, Router, showModal, staticClasses } from "@decky/ui";
 import { callable, definePlugin, useQuickAccessVisible } from "@decky/api";
 import { useEffect, useState } from "react";
 import { FaPlug } from "react-icons/fa";
@@ -30,7 +30,17 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 
-const PLUGIN_VERSION = "1.8.2";
+const PLUGIN_VERSION = "1.8.3";
+
+const Progress = ({ pct, title, step }: { pct: number; title: string; step: string }) => (
+  <div style={{ width: "100%", boxSizing: "border-box", padding: "4px 0" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }}><span>{title}</span><span>{Math.round(pct)}%</span></div>
+    <div style={{ width: "100%", height: "6px", borderRadius: "3px", background: "rgba(255,255,255,0.15)", overflow: "hidden" }}>
+      <div style={{ width: `${Math.max(0, Math.min(100, pct))}%`, height: "100%", background: "#1a9fff", transition: "width .4s" }} />
+    </div>
+    <div style={{ fontSize: "11px", opacity: 0.75, marginTop: "4px", whiteSpace: "normal", wordBreak: "break-word" }}>{step.length > 70 ? step.slice(0, 70) + "…" : step}</div>
+  </div>
+);
 
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
@@ -85,7 +95,7 @@ function Content() {
           {up?.available && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Update {up.available} is available{up.auto_update ? " and will install automatically when no game is running" : ""}.</div></PanelSectionRow>}
           {up?.available && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => run(() => checkUpdate(true))}>Update now to {up.available}</ButtonItem></PanelSectionRow>}
           {up?.state && <PanelSectionRow><div style={{ fontSize: "12px", color: up.state.includes("failed") ? "#ff6b6b" : "#4caf50" }}>{up.state}</div></PanelSectionRow>}
-          {su?.busy && <PanelSectionRow><ProgressBarItem nProgress={su.progress} layout="below" bottomSeparator="none" label={(su.step.startsWith("update") || up?.state.startsWith("installing") ? "Updating " : "Installing ") + Math.round(su.progress) + "%"} description={<span style={{ fontSize: "11px", whiteSpace: "normal", wordBreak: "break-word" }}>{su.step.length > 70 ? su.step.slice(0, 70) + "…" : su.step}</span>} /></PanelSectionRow>}
+          {su?.busy && <PanelSectionRow><Progress pct={su.progress} title={(su.step.startsWith("update") || up?.state.startsWith("installing")) ? "Updating" : "Installing"} step={su.step} /></PanelSectionRow>}
           {su && !su.busy && su.rc === 0 && (
             <>
               {su.needs_reboot ? (
@@ -171,7 +181,7 @@ function Content() {
             {su ? (su.installed_version ? `Installed: ${su.installed_version}` : "Not installed") + ` · this plugin carries ${su.payload_version}` : "…"}
           </div></PanelSectionRow>
           <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Reinstalls everything the first page installs. Everything replaced is backed up. The payload ships inside this plugin; the driver build needs the Arch mirrors.</div></PanelSectionRow>
-          {su?.busy && <PanelSectionRow><ProgressBarItem nProgress={su.progress} layout="below" bottomSeparator="none" label={"Installing " + Math.round(su.progress) + "%"} description={<span style={{ fontSize: "11px", whiteSpace: "normal", wordBreak: "break-word" }}>{su.step.length > 70 ? su.step.slice(0, 70) + "…" : su.step}</span>} /></PanelSectionRow>}
+          {su?.busy && <PanelSectionRow><Progress pct={su.progress} title="Installing" step={su.step} /></PanelSectionRow>}
           {su && !su.busy && su.rc !== null && <PanelSectionRow><div style={{ fontSize: "12px", color: su.rc === 0 ? "#4caf50" : "#ff6b6b" }}>{su.rc === 0 ? "Finished. Reboot to activate." : `Failed (rc ${su.rc}); log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => showModal(<ConfirmModal strTitle={su?.installed_version ? "Reinstall the system integration" : "Install the system integration"} strDescription="Runs the full installer as root: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, patched driver, kernel parameters. Everything replaced is backed up. Takes several minutes. Do this only if something is broken or after a reinstall of the OS." strOKButtonText={su?.installed_version ? "Reinstall" : "Install"} onOK={() => run(() => installSystem(false))} />)}>
