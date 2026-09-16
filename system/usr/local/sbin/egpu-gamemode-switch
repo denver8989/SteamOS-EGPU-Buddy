@@ -26,7 +26,8 @@ if [ -n "$g" ]; then
   log "gamescope up (pid $g) OUTPUT_CONNECTOR=${oc:-?}"
 # mangoapp (Steam performance overlay) races the session restart and hits its start limit -> revive it
 as_deck systemctl --user reset-failed gamescope-mangoapp.service 2>/dev/null; as_deck systemctl --user restart gamescope-mangoapp.service 2>/dev/null || true
-  printf '{"state":"ATTACHED","message":"Game Mode is on %s."}\n' "${oc%%,*}" > $ST/gm-status.json
+  case "${oc%%,*}" in ""|"*"|eDP-1) printf '{"state":"ATTACHED","message":"Game Mode is on the handheld screen."}\n' > $ST/gm-status.json ;;
+                     *) printf '{"state":"ATTACHED","message":"Game Mode is on %s."}\n' "${oc%%,*}" > $ST/gm-status.json ;; esac
   case "${oc%%,*}" in ""|"*"|eDP-1) ;; *) /usr/local/sbin/egpu-panel off >/dev/null 2>&1 ;; esac   # handheld panel fully off while on the eGPU display
   exit 0
 fi
