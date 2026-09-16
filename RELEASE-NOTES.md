@@ -1,3 +1,18 @@
+0.7.7 — Safe Detach and the updater no longer fight each other.
+
+- **Cause of the dead Decky after a detach:** the plugin's automatic update ran 90 s after Game Mode started and
+  scheduled its Decky restart exactly while Safe Detach was running as a child of the plugin. The stop hung on that
+  child, systemd killed the whole group after 15 s (Decky, the plugin and the half-finished detach), and the failed
+  restart left Decky down.
+- Attach, Safe Detach and the Game Mode restart now run as transient system services outside Decky's process group;
+  a Decky restart cannot interrupt them. Their output goes to /tmp/egpu-buddy-{attach,detach,switch}.log.
+- The updater never acts while an attach/detach is pending or a game runs, and not in the first five minutes of a
+  session; the Decky restart after a self-update is a try-restart.
+- Attach and Safe Detach ask for confirmation and explain what will happen (screen goes dark, reopen the menu, it
+  says when it is safe to unplug). The first page shows the operation state in colour and "Safe to unplug the cable."
+- After "Restart Game Mode now" the post-install message no longer reappears.
+- The surprise-removal recovery also skips when a Game Mode detach is in progress.
+
 0.7.6 — plugin: the install/update progress row overflowed the Quick Access panel (long single-line stage text); it is
 now the panel's item-style bar with a wrapping, length-capped description.
 

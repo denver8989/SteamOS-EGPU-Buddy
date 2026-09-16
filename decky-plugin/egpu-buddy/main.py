@@ -35,6 +35,7 @@ _setup = {"busy": False, "step": "", "rc": None, "progress": 0}
 SETTINGS = f"{USER_HOME}/.config/egpu-buddy/plugin.json"
 PLUGIN_LIVE = f"{USER_HOME}/homebrew/plugins/EGPU-Buddy"
 _update = {"available": "", "state": "", "checked": 0.0, "last_error": ""}
+_started = time.time()
 def _settings():
     try: return json.load(open(SETTINGS))
     except Exception: return {}
@@ -174,6 +175,20 @@ def _download(url, dst):
     with urllib.request.urlopen(url, timeout=120, context=_ssl_ctx()) as r, open(dst, "wb") as f: shutil.copyfileobj(r, f)
 
 
+def _spawn_root_job(name, cmd):
+    """Run a privileged, long-running helper as a transient system service: outside Decky's cgroup, so a Decky
+    restart cannot kill it half-way, and with Decky's library path stripped."""
+    unit = f"egpu-buddy-{name}-{int(time.time())}"
+    subprocess.Popen(["systemd-run", "--collect", "--quiet", "--unit", unit, "-p", "StandardOutput=append:/tmp/egpu-buddy-" + name + ".log",
+                      "-p", "StandardError=inherit", *cmd], env=_clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return unit
+
+
+def _operation_in_progress():
+    st = _json(GM_STATUS).get("state", "")
+    return os.path.exists(GM_PENDING) or st in ("DETACHING", "SWITCHING") or _setup["busy"] or _game_running()
+
+
 def _slog(msg, progress=None):
     _setup["step"] = msg
     if progress is not None:
@@ -304,7 +319,7 @@ def _update_plugin_files(version):
         shutil.copytree(sp, dp) if os.path.isdir(sp) else shutil.copy2(sp, dp)
     subprocess.run(["chown", "-R", USER, PLUGIN_LIVE], env=_clean_env())
     if os.environ.get("EGPU_NO_DECKY_RESTART") != "1":   # test hook
-        subprocess.Popen(["systemd-run", "--on-active=5", "--collect", "--quiet", "systemctl", "restart", "plugin_loader.service"], env=_clean_env())
+        subprocess.Popen(["systemd-run", "--on-active=5", "--collect", "--quiet", "systemctl", "try-restart", "plugin_loader.service"], env=_clean_env())
 
 
 def _update_worker(version):
@@ -331,7 +346,7 @@ def _check_update(install=False):
     target = latest if _vt(latest) > _vt(PAYLOAD_VERSION) else PAYLOAD_VERSION
     newer = bool(installed) and _vt(target) > _vt(installed)
     _update["available"] = target if newer else ""
-    if newer and install and not _setup["busy"] and not _game_running():
+    if newer and install and not _operation_in_progress() and time.time() - _started > 300:
         _setup.update(busy=True, rc=None, step="update", progress=0)
         try: os.remove(SETUP_LOG)
         except OSError: pass
@@ -380,8 +395,9 @@ class Plugin:
             return {"ok": True, "message": "Not in Game Mode: the new session pieces apply at the next Game Mode start."}
         if _game_running():
             return {"ok": False, "message": "Close the running game first."}
-        rc, out, err = _sh([SWITCH], 240)
-        return {"ok": rc == 0, "message": "Game Mode restarted." if rc == 0 else (out or err)[-200:]}
+        _setup["rc"] = None; _update["state"] = ""
+        _spawn_root_job("switch", [SWITCH])
+        return {"ok": True, "message": "Game Mode is restarting."}
 
     async def reboot_system(self):
         subprocess.Popen(["systemctl", "reboot"], env=_clean_env()); return {"ok": True, "message": "Rebooting"}
@@ -426,10 +442,8 @@ class Plugin:
             cmd = [SWITCH] + (["--force"] if force else [])
         else:
             cmd = [REATTACH]  # GPU off the bus (after a safe detach): rescan + fresh driver + gamescope switch
-        rc, out, err = _sh(cmd, 240)
-        msgs = {0: "Game Mode is moving to the eGPU display.", 2: "Game Mode is not running.",
-                3: "Close the running game first, then Attach.", 4: "Game Mode did not restart."}
-        return {"ok": rc == 0, "rc": rc, "message": msgs.get(rc, (out or err)[-200:] or f"rc={rc}")}
+        _spawn_root_job("attach", cmd)
+        return {"ok": True, "message": "Attaching: the screen goes dark for a moment while Game Mode restarts on the eGPU display. Reopen this menu afterwards."}
 
     async def safe_detach(self):
         decky.logger.info("safe detach pressed")
@@ -439,10 +453,8 @@ class Plugin:
             return {"ok": False, "message": "Not in Game Mode. Use the Safely Eject desktop icon."}
         if _game_running():
             return {"ok": False, "message": "Close the running game first, then Safe Detach."}
-        # detached, with Decky's library path stripped (bash dies on it) and its output kept for post-mortems
-        out = open("/tmp/egpu-buddy-detach.log", "ab")
-        subprocess.Popen([DETACH], stdout=out, stderr=subprocess.STDOUT, start_new_session=True, env=_clean_env())
-        return {"ok": True, "message": "Detaching: Game Mode restarts on the handheld screen. Do not unplug until told."}
+        _spawn_root_job("detach", [DETACH])
+        return {"ok": True, "message": "Detaching: the screen goes dark for a moment while Game Mode moves to the handheld screen. Reopen this menu afterwards; it says when it is safe to unplug."}
 
     async def set_power_limit(self, watts: int):
         rc, out, err = _sh([PRIV, "set-gpu-power-limit", str(int(watts))], 20)
@@ -458,7 +470,7 @@ class Plugin:
 
     async def _main(self):
         decky.logger.info("EGPU Buddy backend loaded")
-        await asyncio.sleep(90)
+        await asyncio.sleep(300)
         while True:  # automatic updates: hourly check; install only if enabled, already installed, and no game running
             try:
                 _check_update(install=_settings().get("auto_update", True))

@@ -10,6 +10,7 @@ LOG=/var/log/egpu-surprise-recover.log; log(){ printf '%s %s\n' "$(date '+%F %T'
 # safe detach / reattach own their PCI-remove -> not a surprise
 [ -e /run/user/$U/nv-egpu-buddy/detach-handoff-active ] && { log "skip: safe-detach in progress"; exit 0; }
 pgrep -f '/usr/local/sbin/egpu-safe-detach' >/dev/null && { log "skip: safe-detach helper running"; exit 0; }
+[ -e /run/nvegpu/gm-detach-pending ] && { log "skip: Game Mode safe-detach in progress"; exit 0; }
 lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { log "skip: GPU still on the bus"; exit 0; }
 exec 9>/run/egpu-surprise-recover.lock; flock -n 9 || { log "skip: already running"; exit 0; }
 log "SURPRISE removal detected (GPU gone from bus)"

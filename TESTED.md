@@ -136,3 +136,8 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 - Safe Detach from the plugin: press reached the backend (logged) and the script died on Decky's LD_LIBRARY_PATH;
   fixed; a press after the fix is the test (user).
+
+## 0.7.7 (2026-09-16)
+
+- The detach/updater collision was **reproduced from the logs** on the tested machine; the fixes are applied, and a Safe
+  Detach from the plugin after them is the test (user).
