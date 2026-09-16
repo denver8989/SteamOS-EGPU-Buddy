@@ -1,3 +1,6 @@
+0.7.6 — plugin: the install/update progress row overflowed the Quick Access panel (long single-line stage text); it is
+now the panel's item-style bar with a wrapping, length-capped description.
+
 0.7.5 — plugin: Safe Detach from Game Mode did nothing. The detach script was launched with Decky's library path, so
 bash died on a readline symbol before doing anything, silently. Same class as the 0.7.2 installer fix; the last plain
 spawn in the backend is now cleaned too, and the detach's output goes to /tmp/egpu-buddy-detach.log.
