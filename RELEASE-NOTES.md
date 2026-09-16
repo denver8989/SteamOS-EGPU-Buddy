@@ -1,3 +1,8 @@
+0.7.11 — no audio after an interrupted detach. The Game Mode detach stops WirePlumber to release the eGPU's audio card
+and restarts it at the end; the detach that Decky's restart killed (0.7.7 story) never reached that line, leaving only a
+dummy sink. The detach now restarts WirePlumber on any exit, and the plugin restarts it whenever it finds it down outside
+a detach.
+
 0.7.10 — plugin: the progress bar is now a plain, full-width bar drawn by the plugin (the UI kit's bar rendered inline
 next to its label and ran off the panel on every display). Used for installs, updates and repairs alike.
 

@@ -141,3 +141,8 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 
 - The detach/updater collision was **reproduced from the logs** on the tested machine; the fixes are applied, and a Safe
   Detach from the plugin after them is the test (user).
+
+## 0.7.11 (2026-09-16)
+
+- Audio loss after the interrupted detach: **reproduced** (WirePlumber stopped at 09:01, never restarted); manual start
+  restored speaker and microphone; the two safety nets are applied, not yet exercised by another interrupted detach.

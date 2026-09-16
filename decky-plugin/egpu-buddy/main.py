@@ -161,6 +161,16 @@ def _dock_present():
     return any(re.match(r"^\d+-[1-9]", os.path.basename(d)) and os.path.exists(d + "/device_name") for d in _g.glob("/sys/bus/thunderbolt/devices/*-*"))
 
 
+def _heal_audio():
+    """A detach stops WirePlumber to release the eGPU audio card; if it never came back (interrupted detach), restart it."""
+    if os.path.exists(GM_PENDING) or _json(GM_STATUS).get("state") == "DETACHING":
+        return
+    base = ["runuser", "-u", USER, "--", "env", *[f"{k}={v}" for k, v in RUNENV.items()], "systemctl", "--user"]
+    rc, out, _ = _sh(base + ["is-active", "wireplumber.service"], 5)
+    if out.strip() == "inactive":
+        _sh(base + ["start", "wireplumber.service"], 10); decky.logger.info("wireplumber was down; started it")
+
+
 def _settle_detach_status():
     """After a safe detach the status says 'safe to unplug' until the cable is actually pulled; once the
     enclosure is gone, retire that message."""
@@ -432,7 +442,7 @@ class Plugin:
         return _start_setup("uninstall")
 
     async def get_status(self):
-        _settle_detach_status()
+        _settle_detach_status(); _heal_audio()
         bdf = _gpu_bdf()
         game_mode = _gamescope_running()
         driver = os.path.exists("/sys/module/nvidia_drm")
