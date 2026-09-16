@@ -14,6 +14,14 @@ tar -C dist/stage -czf "dist/$NAME.tar.gz" "$NAME"
 # Decky plugin: pin the payload version it fetches, build the frontend, zip it for "install from URL"
 P=decky-plugin/egpu-buddy
 sed -i "s/^PAYLOAD_VERSION = \"[^\"]*\"/PAYLOAD_VERSION = \"$VER\"/" "$P/main.py"
+# one version for everything: the plugin carries the release version (no separate plugin version)
+python3 - "$P" "$VER" <<'PY'
+import json,sys,re
+p,ver=sys.argv[1],sys.argv[2]
+for f in ("plugin.json","package.json"):
+    j=json.load(open(f"{p}/{f}")); j["version"]=ver; json.dump(j,open(f"{p}/{f}","w"),indent=2); open(f"{p}/{f}","a").write("\n")
+t=open(f"{p}/src/index.tsx").read(); t=re.sub(r'const PLUGIN_VERSION = "[^"]*";', f'const PLUGIN_VERSION = "{ver}";', t); open(f"{p}/src/index.tsx","w").write(t)
+PY
 (cd "$P" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1)
 mkdir -p dist/plugin/EGPU-Buddy/payload && cp "dist/$NAME.tar.gz" dist/plugin/EGPU-Buddy/payload/ && cp -r "$P/dist" "$P/main.py" "$P/plugin.json" "$P/package.json" "$P/README.md" "$P/LICENSE" dist/plugin/EGPU-Buddy/
 (cd dist/plugin && python3 -c "import shutil,sys; shutil.make_archive(sys.argv[1], 'zip', '.', 'EGPU-Buddy')" "../EGPU-Buddy-Decky-$VER")

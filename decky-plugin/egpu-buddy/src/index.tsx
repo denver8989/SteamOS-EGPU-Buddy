@@ -30,7 +30,7 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 
-const PLUGIN_VERSION = "1.8.4";
+const PLUGIN_VERSION = "0.7.11";
 
 const Progress = ({ pct, title, step }: { pct: number; title: string; step: string }) => (
   <div style={{ width: "100%", boxSizing: "border-box", padding: "4px 0" }}>
@@ -88,7 +88,7 @@ function Content() {
           {su?.unsupported && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>{su.unsupported}</div></PanelSectionRow>}
           {su && !su.unsupported && (!su.helpers_present || su.installed_version !== su.payload_version) && !su.busy && su.rc !== 0 && (
             <>
-              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version && !su.helpers_present ? `The system integration (${su.installed_version}) is missing after an OS update.` : su.installed_version ? `System integration ${su.installed_version} is installed; this plugin carries ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept. Several minutes.</div></PanelSectionRow>
+              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version && !su.helpers_present ? `The system integration (${su.installed_version}) is missing after an OS update.` : su.installed_version ? `Version ${su.installed_version} is installed; this plugin is ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept. Several minutes.</div></PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(() => installSystem(false))}>{su.installed_version && !su.helpers_present ? "Repair system integration" : su.installed_version ? "Update system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>
             </>
           )}
@@ -129,7 +129,7 @@ function Content() {
           </PanelSectionRow>
           {s?.gm_status?.state && s.gm_status.state !== "ATTACHED" && s.gm_status.state !== "IDLE" && <PanelSectionRow><div style={{ fontSize: "13px", fontWeight: 600, color: s.gm_status.state === "SAFE_COMPLETE" || s.gm_status.state === "DETACHED" ? "#4caf50" : s.gm_status.state.includes("DO_NOT") || s.gm_status.state === "FAILED" ? "#ff6b6b" : "#f0b429" }}>{s.gm_status.state === "SAFE_COMPLETE" || s.gm_status.state === "DETACHED" ? "Safe to unplug the cable." : s.gm_status.message}</div></PanelSectionRow>}
           {msg && <PanelSectionRow><div style={{ fontSize: "12px" }}>{msg}</div></PanelSectionRow>}
-          <PanelSectionRow><div style={{ fontSize: "11px", opacity: 0.7 }}>EGPU Buddy plugin {PLUGIN_VERSION} · integration {su?.installed_version || "not installed"} · {up ? (up.available ? `update ${up.available} available` : up.checked ? "up to date" : "update check pending") : "…"}{up?.auto_update ? " · auto-update on" : " · auto-update off"}</div></PanelSectionRow>
+          <PanelSectionRow><div style={{ fontSize: "11px", opacity: 0.7 }}>EGPU Buddy {su?.installed_version && su.installed_version !== PLUGIN_VERSION ? `${PLUGIN_VERSION} (system files ${su.installed_version}, update pending)` : PLUGIN_VERSION}{su && !su.installed_version ? " · not installed" : ""} · {up ? (up.available ? `update ${up.available} available` : up.checked ? "up to date" : "update check pending") : "…"}{up?.auto_update ? " · auto-update on" : " · auto-update off"}</div></PanelSectionRow>
         </PanelSection>
       )}
       {tab === "details" && s && (
@@ -178,7 +178,7 @@ function Content() {
       {tab === "setup" && (
         <PanelSection title="System integration">
           <PanelSectionRow><div style={{ fontSize: "12px" }}>
-            {su ? (su.installed_version ? `Installed: ${su.installed_version}` : "Not installed") + ` · this plugin carries ${su.payload_version}` : "…"}
+            {su ? (su.installed_version ? `Installed: ${su.installed_version}` : "Not installed") : "…"}
           </div></PanelSectionRow>
           <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Reinstalls everything the first page installs. Everything replaced is backed up. The payload ships inside this plugin; the driver build needs the Arch mirrors.</div></PanelSectionRow>
           {su?.busy && <PanelSectionRow><Progress pct={su.progress} title="Installing" step={su.step} /></PanelSectionRow>}
