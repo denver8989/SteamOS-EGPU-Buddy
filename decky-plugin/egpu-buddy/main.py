@@ -154,6 +154,24 @@ def _displays(bdf):
     return outs
 
 
+def _dock_present():
+    """A Thunderbolt/USB4 device is enumerated (the enclosure is still plugged in)."""
+    import glob as _g
+    return any(os.path.exists(d + "/device_name") for d in _g.glob("/sys/bus/thunderbolt/devices/*-*"))
+
+
+def _settle_detach_status():
+    """After a safe detach the status says 'safe to unplug' until the cable is actually pulled; once the
+    enclosure is gone, retire that message."""
+    st = _json(GM_STATUS)
+    if st.get("state") in ("SAFE_COMPLETE", "DETACHED") and not _dock_present() and not _gpu_bdf():
+        try:
+            with open(GM_STATUS, "w") as f:
+                json.dump({"state": "IDLE", "message": "eGPU disconnected."}, f)
+        except OSError:
+            pass
+
+
 def _audio_sink():
     rc, out, _ = _sh(["runuser", "-u", USER, "--", "env", *[f"{k}={v}" for k, v in RUNENV.items()], "pactl", "get-default-sink"], 5)
     return out if rc == 0 else ""
@@ -409,6 +427,7 @@ class Plugin:
         return _start_setup("uninstall")
 
     async def get_status(self):
+        _settle_detach_status()
         bdf = _gpu_bdf()
         game_mode = _gamescope_running()
         driver = os.path.exists("/sys/module/nvidia_drm")
@@ -416,7 +435,7 @@ class Plugin:
         status = {
             "present": bool(bdf), "bdf": bdf, "driver_loaded": driver,
             "game_mode": game_mode, "game_running": _game_running() if game_mode else False,
-            "attach_pending": os.path.exists(GM_PENDING),
+            "attach_pending": os.path.exists(GM_PENDING), "dock_present": _dock_present(),
             "on_egpu": bool(bdf) and game_mode and output not in ("", "*", "eDP-1"),
             "output": output,
             "gm_status": _json(GM_STATUS), "desktop_status": _json(DESKTOP_STATUS),

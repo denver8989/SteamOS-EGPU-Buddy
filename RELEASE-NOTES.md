@@ -1,3 +1,6 @@
+0.7.8 — plugin: "Safe to unplug the cable" now goes away by itself once the enclosure is actually unplugged (no
+Thunderbolt/USB4 device enumerated and no GPU on the bus).
+
 0.7.7 — Safe Detach and the updater no longer fight each other.
 
 - **Cause of the dead Decky after a detach:** the plugin's automatic update ran 90 s after Game Mode started and
