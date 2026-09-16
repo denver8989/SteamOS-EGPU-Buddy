@@ -157,7 +157,8 @@ def _displays(bdf):
 def _dock_present():
     """A Thunderbolt/USB4 device is enumerated (the enclosure is still plugged in)."""
     import glob as _g
-    return any(os.path.exists(d + "/device_name") for d in _g.glob("/sys/bus/thunderbolt/devices/*-*"))
+    # host routers are "<domain>-0"; a plugged enclosure/dock has a non-zero route such as "0-2" or "0-2.1"
+    return any(re.match(r"^\d+-[1-9]", os.path.basename(d)) and os.path.exists(d + "/device_name") for d in _g.glob("/sys/bus/thunderbolt/devices/*-*"))
 
 
 def _settle_detach_status():
