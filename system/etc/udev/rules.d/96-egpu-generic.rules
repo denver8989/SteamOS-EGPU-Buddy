@@ -1,0 +1,5 @@
+# SteamOS EGPU Buddy — non-NVIDIA eGPU (AMD 1002, Intel 8086) add/remove. The script exits at once when the
+# device is the built-in GPU or an NVIDIA card (NVIDIA has its own rules 97/98). EXPERIMENTAL.
+ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]", ATTRS{vendor}=="0x1002|0x8086", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/egpu-generic attach"
+ACTION=="change", SUBSYSTEM=="drm", KERNEL=="card[0-9]", ENV{HOTPLUG}=="1", ATTRS{vendor}=="0x1002|0x8086", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/egpu-generic attach"
+ACTION=="remove", SUBSYSTEM=="pci", ENV{PCI_ID}=="1002:*|8086:*", ENV{PCI_CLASS}=="30000|38000", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/egpu-generic surprise"

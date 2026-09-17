@@ -25,6 +25,39 @@ your own risk, keep a way to boot without the eGPU, and read the scripts before 
 An RTX 3080 (Ampere) on driver 580 was used during earlier development; that combination is not covered by the
 current scripts.
 
+### AMD (and Intel) eGPUs — experimental, untested (0.8.0 beta)
+
+From 0.8.0-beta1 the project detects the eGPU's vendor by itself; nothing asks you which one you have. **The AMD path
+was written without any AMD eGPU to test on. It has never run on real hardware. Treat it as a starting point for
+testers, not as a working feature.** If you have an AMD eGPU and are willing to try it, please open an issue with
+`/var/log/egpu-generic.log`.
+
+How detection works: the eGPU is the display-class PCI device that does not drive the built-in panel and sits behind a
+bridge chain (`egpu-detect`; it has a self-test, `egpu-detect --selftest`). NVIDIA eGPUs take the tested path, unchanged.
+Any other vendor takes `egpu-generic`, which leaves out everything that only exists because of the NVIDIA driver:
+
+| | NVIDIA path (tested) | AMD / Mesa path (experimental) |
+|---|---|---|
+| Kernel driver | patched `nvidia-open`, loaded on attach, unloaded on detach | the in-kernel driver, shared with the built-in GPU: never loaded or unloaded |
+| Attach | BAR resize, link-speed pin, FLR, DPC handling, NVML health gate | none of that: wait for the DRM card, move the session |
+| Game Mode | GBM-scanout gamescope build, format filter, NVIDIA Vulkan ICD | stock gamescope pointed at the eGPU card (`WLR_DRM_DEVICES`), games follow with `DRI_PRIME` |
+| Desktop | KWin restricted to the NVIDIA card | eGPU made primary (`boot_vga`), built-in GPU kept so the panel can be switched off normally |
+| Safe detach | hide NVIDIA userspace, unload modules, remove from the bus | move the session to the panel, wait until nothing holds the eGPU's nodes, remove only the eGPU from the bus |
+| Cable yank | needs the patched driver | relies on amdgpu's own hot-unplug support; the session is moved back to the panel |
+| Telemetry, power limit | `nvidia-smi` | amdgpu sysfs / hwmon (`power1_cap`); no clock offsets |
+| Installer | installs NVIDIA packages, pins them, builds driver + gamescope | skips all of those when a non-NVIDIA eGPU is on the bus (or `EGPU_VENDOR=amd`) |
+
+With no eGPU connected at install time the installer cannot know the vendor and installs NVIDIA support, because an
+NVIDIA eGPU's first connection without it is the dangerous case and an unused package is not.
+
+`egpu-detect --device` names the device profile: `legion-go-2` for the tested handheld, `generic` for everything else.
+Fixes that only make sense on one machine (such as the Legion Go 2 standby wake fix) are gated on it.
+
+The new code detects the GPUs, DRM cards, panel connector and desktop user instead of assuming this handheld's, so it
+is meant to carry over to other handhelds and laptops with an AMD built-in GPU. The older NVIDIA scripts still contain
+Legion Go 2 specifics (user `deck`, PCI addresses, the Strix Halo USB4 root-port ID); they are deliberately left alone
+until other hardware is available for testing.
+
 ## What you get
 
 - **Auto-attach**: udev sees the eGPU, the driver loads fresh, Game Mode restarts on the external display.
@@ -160,10 +193,16 @@ the plugin's automatic updates follow the newest release only.
 When everything is installed and current that page shows only the eGPU controls; **Setup** (two presses of the
 top button) reinstalls or uninstalls.
 
-**Automatic updates.** The plugin checks this repository's releases every hour. With *Automatic updates* on (the
-default, in Setup) a new release installs itself when no game is running: the system integration through the same
-verified installer, then the plugin's own files, then Decky reloads and the first page asks for a reboot. With it off
-the first page shows an *Update now* button instead. It never performs a first install on its own.
+**Updates are your choice.** The plugin checks this repository's releases every hour and announces a new one on its
+first page with an *Update now* button; nothing installs by itself unless you switch *Automatic updates* on in Setup
+(off by default from 0.8.0). An update installs the system integration through the same verified installer, then the
+plugin's own files, then Decky reloads and the first page asks for a restart. It never performs a first install on
+its own.
+
+**Going back.** Every release stays published. *Setup → Install another version* lists them (betas are marked) and
+installs the one you pick, system files and plugin together. A version you picked is held: automatic updates are
+switched off and nothing moves you off it until you press *Update now* or pick another version. If an update breaks
+something for you, that is the way back to the build that worked.
 
 ### Method 2 — from the Desktop, with the graphical installer
 
@@ -231,7 +270,10 @@ user name.
   order, kernel parameters, boot policy, session restart, panel handling, safe detach, the plugin. NVIDIA-only: the
   patched driver, the GBM-scanout gamescope, the NVIDIA userspace pinning, nvidia-smi telemetry and power controls, the
   DPC/link-pin details that exist because of the GSP lockdown. The goal is a layout where an AMD eGPU can use the
-  generic path with the NVIDIA layer left out. Not started.
+  generic path with the NVIDIA layer left out. First step in 0.8.0-beta1: vendor detection and a separate, experimental
+  path for non-NVIDIA eGPUs (see above). Needs testers with AMD eGPUs.
+- **Other handhelds and laptops.** New code detects hardware instead of assuming the Legion Go 2. The tested NVIDIA
+  scripts still carry device specifics and will be generalised only with hardware to verify each change on.
 
 ## Reporting problems
 

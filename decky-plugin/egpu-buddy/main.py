@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.12"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.8.0-beta1"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -41,7 +41,17 @@ def _settings():
     except Exception: return {}
 def _save_settings(d):
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True); json.dump(d, open(SETTINGS, "w")); subprocess.run(["chown", "-R", USER, os.path.dirname(SETTINGS)], env=_clean_env())
-def _vt(v): return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3]) or (0,)
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?$")
+def _vt(v):
+    """Sortable version: 0.8.0-beta1 < 0.8.0 (a pre-release sorts below its final release)."""
+    v = v or "0"; core, _, pre = v.partition("-")
+    n = [int(x) for x in re.findall(r"\d+", core)[:3]]; n += [0] * (3 - len(n))
+    return tuple(n) + ((0, int((re.findall(r"\d+", pre) or [0])[-1])) if pre else (1, 0))
+def _releases():
+    """Every release kept on GitHub, newest first (betas included): the list the version picker offers."""
+    data = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases?per_page=20", 20).decode())
+    out = [{"version": r.get("tag_name", "").lstrip("v"), "beta": bool(r.get("prerelease"))} for r in data if not r.get("draft")]
+    return [r for r in out if VERSION_RE.match(r["version"])]
 def _latest_release():
     data = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases/latest", 20).decode())
     return data.get("tag_name", "").lstrip("v")
@@ -91,13 +101,52 @@ def _json(path):
         return {}
 
 
-def _gpu_bdf():
+GENERIC = "/usr/local/sbin/egpu-generic"
+DETECT = "/usr/local/sbin/egpu-detect"
+
+
+def _gpu():
+    """(bdf, vendor) of the eGPU. NVIDIA is matched as before; any other vendor comes from egpu-detect (experimental)."""
     _, out, _ = _sh(["lspci", "-Dn"], 5)
     for line in out.splitlines():
         m = GPU_RE.match(line)
         if m:
-            return m.group(1)
-    return ""
+            return m.group(1), "nvidia"
+    if os.path.exists(DETECT):
+        rc, out, _ = _sh([DETECT], 5)
+        parts = out.split()
+        if rc == 0 and len(parts) >= 2 and parts[1] != "nvidia":
+            return parts[0], parts[1]
+    return "", ""
+
+
+def _gpu_bdf():
+    return _gpu()[0]
+
+
+def _hwmon(bdf):
+    import glob as _g
+    d = _g.glob(f"/sys/bus/pci/devices/{bdf}/hwmon/hwmon*")
+    return d[0] if d else ""
+
+
+def _sysfs_query(bdf):
+    """Mesa-driver telemetry (amdgpu sysfs), returned under the same keys nvidia-smi uses so the UI is shared."""
+    dev, hw = f"/sys/bus/pci/devices/{bdf}", _hwmon(bdf)
+    def num(path, div, fmt="{:.0f}"):
+        v = _read(path)
+        return fmt.format(int(v) / div) if v.lstrip("-").isdigit() else ""
+    _, name, _ = _sh(["lspci", "-D", "-s", bdf], 5)
+    tel = {
+        "name": name.split(": ", 1)[-1].strip() if name else bdf,
+        "driver_version": os.path.basename(os.path.realpath(f"{dev}/driver")),
+        "temperature.gpu": num(f"{hw}/temp1_input", 1000), "power.draw": num(f"{hw}/power1_average", 1e6) or num(f"{hw}/power1_input", 1e6),
+        "power.limit": num(f"{hw}/power1_cap", 1e6), "power.max_limit": num(f"{hw}/power1_cap_max", 1e6), "power.min_limit": num(f"{hw}/power1_cap_min", 1e6),
+        "clocks.gr": num(f"{hw}/freq1_input", 1e6), "clocks.mem": num(f"{hw}/freq2_input", 1e6),
+        "memory.used": num(f"{dev}/mem_info_vram_used", 1 << 20), "memory.total": num(f"{dev}/mem_info_vram_total", 1 << 20),
+        "utilization.gpu": _read(f"{dev}/gpu_busy_percent"), "fan.speed": num(f"{hw}/pwm1", 2.55),
+    }
+    return {k: v for k, v in tel.items() if v}
 
 
 def _proc_running(name):
@@ -355,14 +404,18 @@ def _update_plugin_files(version):
         subprocess.Popen(["systemd-run", "--on-active=5", "--collect", "--quiet", "systemctl", "try-restart", "plugin_loader.service"], env=_clean_env())
 
 
-def _update_worker(version):
+def _update_worker(version, hold=False):
+    """Install exactly `version` (newer or older). hold=True is a user-chosen version: automatic updates are switched
+    off first, so neither this plugin nor the older one being installed moves away from it on its own."""
     try:
         _update["state"] = f"installing {version}"
+        if hold:
+            d = _settings(); d["auto_update"] = False; d["held_version"] = version; _save_settings(d)
         _setup_worker("install", False, version)
         if _setup["rc"] != 0: raise RuntimeError(f"system integration install failed rc={_setup['rc']}")
-        if _vt(version) > _vt(PAYLOAD_VERSION):
-            _update["state"] = f"updating plugin to {version}"; _update_plugin_files(version)
-        _update["state"] = f"updated to {version}"; _update["available"] = ""
+        if version != PAYLOAD_VERSION:
+            _update["state"] = f"switching plugin to {version}"; _update_plugin_files(version)
+        _update["state"] = f"now on {version}"; _update["available"] = ""
         d = _settings(); d["last_update"] = version; _save_settings(d)
     except Exception as ex:  # noqa: BLE001
         _update["state"] = f"update failed: {ex}"; _update["last_error"] = str(ex); decky.logger.error(f"update failed: {ex}")
@@ -380,22 +433,45 @@ def _check_update(install=False):
     newer = bool(installed) and _vt(target) > _vt(installed)
     _update["available"] = target if newer else ""
     if newer and install and not _operation_in_progress() and time.time() - _started > 300:
-        _setup.update(busy=True, rc=None, step="update", progress=0)
-        try: os.remove(SETUP_LOG)
-        except OSError: pass
-        threading.Thread(target=_update_worker, args=(target,), daemon=True).start()
+        _start_update(target)
+
+
+def _start_update(version, hold=False):
+    _setup.update(busy=True, rc=None, step="update", progress=0)
+    try: os.remove(SETUP_LOG)
+    except OSError: pass
+    threading.Thread(target=_update_worker, args=(version, hold), daemon=True).start()
 
 
 class Plugin:
     async def get_update_status(self):
         d = _settings()
-        return {"auto_update": d.get("auto_update", True), "available": _update["available"], "state": _update["state"],
+        return {"auto_update": d.get("auto_update", False), "held_version": d.get("held_version", ""), "available": _update["available"], "state": _update["state"],
                 "checked": _update["checked"], "last_error": _update["last_error"], "installed": _read(VERSION_FILE)}
 
     async def set_auto_update(self, enabled: bool):
-        d = _settings(); d["auto_update"] = bool(enabled); _save_settings(d); return {"ok": True, "message": "saved"}
+        d = _settings(); d["auto_update"] = bool(enabled)
+        if enabled: d.pop("held_version", None)
+        _save_settings(d); return {"ok": True, "message": "saved"}
+
+    async def list_versions(self):
+        try:
+            return {"ok": True, "current": _read(VERSION_FILE), "versions": _releases()}
+        except Exception as ex:  # noqa: BLE001
+            return {"ok": False, "message": f"could not reach GitHub: {ex}", "versions": []}
+
+    async def install_version(self, version: str):
+        """Install a version the user picked (rollback or beta) and hold it."""
+        if not VERSION_RE.match(version or "") or version not in [r["version"] for r in _releases()]:
+            return {"ok": False, "message": "That version is not a published release."}
+        if _setup["busy"] or _operation_in_progress() or _game_running():
+            return {"ok": False, "message": "Busy: close the running game or wait for the current operation, then try again."}
+        _start_update(version, hold=True)
+        return {"ok": True, "message": f"Installing {version}. Automatic updates are now off so this version stays."}
 
     async def check_update(self, install: bool = False):
+        if install:
+            d = _settings(); d.pop("held_version", None); _save_settings(d)
         threading.Thread(target=_check_update, args=(bool(install),), daemon=True).start(); return {"ok": True, "message": "checking"}
 
     async def get_setup_status(self):
@@ -443,12 +519,12 @@ class Plugin:
 
     async def get_status(self):
         _settle_detach_status(); _heal_audio()
-        bdf = _gpu_bdf()
+        bdf, vendor = _gpu()
         game_mode = _gamescope_running()
-        driver = os.path.exists("/sys/module/nvidia_drm")
+        driver = os.path.exists("/sys/module/nvidia_drm") if vendor in ("", "nvidia") else os.path.exists(f"/sys/bus/pci/devices/{bdf}/driver")
         output = _gamescope_env("OUTPUT_CONNECTOR").split(",")[0] if game_mode else ""
         status = {
-            "present": bool(bdf), "bdf": bdf, "driver_loaded": driver,
+            "present": bool(bdf), "bdf": bdf, "vendor": vendor, "driver_loaded": driver,
             "game_mode": game_mode, "game_running": _game_running() if game_mode else False,
             "attach_pending": os.path.exists(GM_PENDING), "dock_present": _dock_present(),
             "on_egpu": bool(bdf) and game_mode and output not in ("", "*", "eDP-1"),
@@ -458,7 +534,7 @@ class Plugin:
                      "width": _read(f"/sys/bus/pci/devices/{bdf}/current_link_width") if bdf else ""},
             "displays": _displays(bdf) if bdf else [],
             "audio_sink": _audio_sink(),
-            "telemetry": _nvidia_query(bdf) if (bdf and driver) else {},
+            "telemetry": ({} if not (bdf and driver) else _nvidia_query(bdf) if vendor == "nvidia" else _sysfs_query(bdf)),
             "ts": time.time(),
         }
         return status
@@ -487,18 +563,30 @@ class Plugin:
             return {"ok": False, "message": "Not in Game Mode. Use the Safely Eject desktop icon."}
         if _game_running():
             return {"ok": False, "message": "Close the running game first, then Safe Detach."}
-        _spawn_root_job("detach", [DETACH])
+        _spawn_root_job("detach", [DETACH] if _gpu()[1] == "nvidia" else [GENERIC, "detach"])
         return {"ok": True, "message": "Detaching: the screen goes dark for a moment while Game Mode moves to the handheld screen. Reopen this menu afterwards; it says when it is safe to unplug."}
 
     async def set_power_limit(self, watts: int):
+        bdf, vendor = _gpu()
+        if vendor not in ("", "nvidia"):
+            try:
+                with open(f"{_hwmon(bdf)}/power1_cap", "w") as f:
+                    f.write(str(int(watts) * 1000000))
+                return {"ok": True, "message": f"Power limit set to {int(watts)} W."}
+            except OSError as ex:
+                return {"ok": False, "message": f"This GPU does not accept a power limit ({ex.strerror})."}
         rc, out, err = _sh([PRIV, "set-gpu-power-limit", str(int(watts))], 20)
         return {"ok": rc == 0, "message": (err or out)[-200:]}
 
     async def set_core_offset(self, mhz: int):
+        if _gpu()[1] not in ("", "nvidia"):
+            return {"ok": False, "message": "Clock offsets are only available on NVIDIA eGPUs."}
         rc, out, err = _sh([PRIV, "set-gpu-core-offset", str(int(mhz))], 20)
         return {"ok": rc == 0, "message": (err or out)[-200:]}
 
     async def reset_clocks(self):
+        if _gpu()[1] not in ("", "nvidia"):
+            return {"ok": False, "message": "Clock offsets are only available on NVIDIA eGPUs."}
         rc, out, err = _sh([PRIV, "reset-gpu-clocks"], 20)
         return {"ok": rc == 0, "message": (err or out)[-200:]}
 
@@ -507,7 +595,7 @@ class Plugin:
         await asyncio.sleep(300)
         while True:  # automatic updates: hourly check; install only if enabled, already installed, and no game running
             try:
-                _check_update(install=_settings().get("auto_update", True))
+                _check_update(install=_settings().get("auto_update", False))
             except Exception as ex:  # noqa: BLE001
                 decky.logger.error(f"update check: {ex}")
             await asyncio.sleep(3600)

@@ -3,6 +3,17 @@
 # SETCRTC ioctl as master (no compositor owns card1 when the desktop is on the eGPU). "on" is left to the
 # compositor that takes card1 (detach mode); we only make sure the backlight flag is not blocking it.
 set -u; want=${1:-off}
+# Non-NVIDIA (Mesa) eGPU: two cards share a driver name, so "modetest -M amdgpu" and the fixed card1 can hit the
+# wrong GPU. Resolve the panel's own card and switch off its CRTCs directly. (NVIDIA path below is unchanged.)
+if /usr/local/sbin/egpu-detect 2>/dev/null | grep -qv ' nvidia'; then
+  pc=$(ls -d /sys/class/drm/card[0-9]*-eDP-1 2>/dev/null | head -1); pc=${pc##*/}; pc=${pc%%-*}
+  [ -n "$pc" ] || exit 0
+  if [ "$want" = off ]; then
+    fuser "/dev/dri/$pc" >/dev/null 2>&1 || python3 /usr/local/sbin/egpu-crtc-off.py "/dev/dri/$pc" all >/dev/null 2>&1
+    for b in /sys/class/backlight/*; do echo 1 > "$b/bl_power" 2>/dev/null; done
+  else for b in /sys/class/backlight/*; do echo 0 > "$b/bl_power" 2>/dev/null; done; fi
+  exit 0
+fi
 if fuser /dev/dri/card1 >/dev/null 2>&1; then [ "$want" = off ] && exit 0; fi   # a compositor owns the panel
 case "$want" in
   off)

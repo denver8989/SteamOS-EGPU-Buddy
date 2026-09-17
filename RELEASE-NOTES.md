@@ -1,3 +1,25 @@
+0.8.0-beta1 — PRE-RELEASE. AMD eGPU path (experimental, untested), updates become your choice, going back to an
+older build. Not offered by the updater unless you pick it yourself.
+
+- **Nothing in the NVIDIA path was rewritten.** The tested scripts are the 0.7.12 ones; the only edits inside them are
+  small vendor checks that do nothing when the eGPU is NVIDIA. This beta has still not been run on the NVIDIA eGPU.
+- **AMD / Intel eGPUs (experimental, never run on real hardware).** The vendor is detected (`egpu-detect`), never
+  asked. Non-NVIDIA eGPUs use a separate `egpu-generic attach|detach|surprise`: no driver load/unload, no BAR or link
+  tricks, stock gamescope pointed at the eGPU card, games follow with `DRI_PRIME`, safe detach removes only the eGPU
+  from the bus. Plugin and desktop app show amdgpu telemetry from sysfs and set the hwmon power cap. The installer skips
+  the NVIDIA packages, the driver build and the patched gamescope when a non-NVIDIA eGPU is on the bus.
+- **Updates are opt-in.** Automatic updates are now off by default; a new release is announced with an Update button.
+- **Going back.** Setup → "Install another version" lists every published release (betas marked) and installs the one
+  you pick, system files and plugin together, then holds it: nothing updates it until you say so.
+- New code detects GPUs, DRM cards, the panel connector and the desktop user instead of assuming the Legion Go 2.
+- **Device profile.** `egpu-detect --device` reports `legion-go-2` (the tested machine) or `generic`. Device-specific
+  fixes are gated on it; other hardware only gets detected, generic behaviour.
+- **Legion Go 2: standby that ended by itself.** The detachable controllers re-enumerate on the internal USB controller
+  as the machine suspends and woke it seconds later (it then stayed awake until the battery was empty). Wake from that
+  one controller is now disabled, on the Legion Go 2 only (DMI match). The power button still wakes it; the controller
+  buttons no longer do. Not yet confirmed over a real standby.
+- The panel-off helper resolves the panel's own DRM card when two GPUs share a driver.
+
 0.7.12 — one version, every build kept, credits completed.
 
 - The plugin now carries the release version; the first page shows a single "EGPU Buddy 0.7.12" (with "system files

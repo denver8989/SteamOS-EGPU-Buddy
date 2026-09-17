@@ -21,11 +21,29 @@ def jread(p):
 
 FIELDS = ("name,driver_version,temperature.gpu,power.draw,power.limit,power.min_limit,power.max_limit,clocks.gr,clocks.mem,"
           "memory.used,memory.total,utilization.gpu,pcie.link.gen.current,pcie.link.width.current,fan.speed,pstate")
+def sysfs_gpu(bdf):
+    """Mesa-driver (AMD) telemetry under the nvidia-smi key names, so the page is shared. Experimental."""
+    import glob
+    dev = f"/sys/bus/pci/devices/{bdf}"; hw = (glob.glob(dev + "/hwmon/hwmon*") or [""])[0]
+    def num(path, div):
+        v = read(path); return f"{int(v) / div:.0f}" if v.lstrip("-").isdigit() else ""
+    _, name, _ = sh(["lspci", "-D", "-s", bdf])
+    g = {"name": name.split(": ", 1)[-1] if name else bdf, "driver_version": os.path.basename(os.path.realpath(dev + "/driver")),
+         "temperature.gpu": num(hw + "/temp1_input", 1000), "power.draw": num(hw + "/power1_average", 1e6) or num(hw + "/power1_input", 1e6),
+         "power.limit": num(hw + "/power1_cap", 1e6), "power.min_limit": num(hw + "/power1_cap_min", 1e6), "power.max_limit": num(hw + "/power1_cap_max", 1e6),
+         "clocks.gr": num(hw + "/freq1_input", 1e6), "clocks.mem": num(hw + "/freq2_input", 1e6),
+         "memory.used": num(dev + "/mem_info_vram_used", 1 << 20), "memory.total": num(dev + "/mem_info_vram_total", 1 << 20),
+         "utilization.gpu": read(dev + "/gpu_busy_percent"), "fan.speed": num(hw + "/pwm1", 2.55)}
+    return {k: v for k, v in g.items() if v}
+
 def status():
-    _, l, _ = sh(["lspci", "-Dn"]); bdf = next((x.split()[0] for x in l.splitlines() if " 0300: 10de:" in x), "")
-    driver = os.path.exists("/sys/module/nvidia_drm")
-    gpu = {}
-    if bdf and driver:
+    _, l, _ = sh(["lspci", "-Dn"]); bdf = next((x.split()[0] for x in l.splitlines() if " 0300: 10de:" in x), ""); vendor = "nvidia" if bdf else ""
+    if not bdf:
+        rc, o, _ = sh(["/usr/local/sbin/egpu-detect"]); o = o.split()
+        if rc == 0 and len(o) >= 2 and o[1] != "nvidia": bdf, vendor = o[0], o[1]
+    driver = os.path.exists("/sys/module/nvidia_drm") if vendor in ("", "nvidia") else os.path.exists(f"/sys/bus/pci/devices/{bdf}/driver")
+    gpu = sysfs_gpu(bdf) if (bdf and driver and vendor != "nvidia") else {}
+    if bdf and driver and vendor == "nvidia":
         rc, out, _ = sh(["timeout", "6", "nvidia-smi", "-i", bdf, f"--query-gpu={FIELDS}", "--format=csv,noheader,nounits"], 8)
         if rc == 0 and out: gpu = dict(zip(FIELDS.split(","), [v.strip() for v in out.split(",")]))
     _, bolt, _ = sh(["boltctl", "list"]); tunnel = "authorized" in bolt.lower()
@@ -39,7 +57,7 @@ def status():
                     if c.startswith(card + "-") and read(f"/sys/class/drm/{c}/status") == "connected":
                         displays.append({"name": c.split("-", 1)[1], "enabled": read(f"/sys/class/drm/{c}/enabled") == "enabled"})
     panel = [read(p + "/enabled") for p in __import__("glob").glob("/sys/class/drm/card*-eDP-1")]
-    return {"present": bool(bdf), "bdf": bdf, "driver_loaded": driver, "tunnel": tunnel, "game_mode": game_mode,
+    return {"present": bool(bdf), "bdf": bdf, "vendor": vendor, "driver_loaded": driver, "tunnel": tunnel, "game_mode": game_mode,
             "gpu": gpu, "displays": displays, "panel_enabled": (panel[0] == "enabled") if panel else None,
             "detach": jread(f"{RUN}/safe-detach-status.json"), "gm": jread("/run/nvegpu/gm-status.json")}
 
@@ -47,6 +65,8 @@ def action(p):
     a = (p or {}).get("action"); s = status()
     if a == "safe-detach":
         if not s["present"]: return {"ok": False, "error": "no eGPU on the bus"}
+        if s["vendor"] != "nvidia":
+            subprocess.Popen(["sudo", "-n", "/usr/local/sbin/egpu-generic", "detach"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); return {"ok": True, "started": "safe-detach"}
         if s["game_mode"]: rc, o, e = sh(["sudo", "-n", "/usr/local/sbin/egpu-gamemode-detach"], 120); return {"ok": rc == 0, "out": o or e}
         if not os.access(UI_DETACH, os.X_OK): return {"ok": False, "error": "egpu-safe-detach-ui is not installed"}
         subprocess.Popen([UI_DETACH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); return {"ok": True, "started": "safe-detach"}
@@ -54,7 +74,7 @@ def action(p):
         if s["present"] and s["driver_loaded"]: return {"ok": False, "error": "already attached"}
         subprocess.Popen(["sudo", "-n", "/usr/local/sbin/egpu-reattach"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); return {"ok": True, "started": "attach"}
     if a == "power-limit":
-        w = int((p or {}).get("watts", 0)); rc, o, e = sh(["sudo", "-n", PRIV, "set-gpu-power-limit", str(w)], 20); return {"ok": rc == 0, "out": o or e}
+        w = int((p or {}).get("watts", 0)); rc, o, e = sh(["sudo", "-n", PRIV, "set-gpu-power-limit" if s["vendor"] in ("", "nvidia") else "set-generic-power-cap", str(w)], 20); return {"ok": rc == 0, "out": o or e}
     if a == "reset-clocks":
         rc, o, e = sh(["sudo", "-n", PRIV, "reset-gpu-clocks"], 20); return {"ok": rc == 0, "out": o or e}
     return {"ok": False, "error": f"unknown action {a}"}

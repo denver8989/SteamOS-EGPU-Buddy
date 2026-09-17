@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# SteamOS EGPU Buddy — attach / detach / surprise handling for a NON-NVIDIA eGPU (AMD, Intel: Mesa drivers).
+# EXPERIMENTAL: written without test hardware. The NVIDIA path (egpu-hotplug-mount.sh, egpu-safe-detach,
+# egpu-gamemode-detach, egpu-surprise-recover) is separate and is never entered from here.
+# What differs from NVIDIA: the kernel driver is shared with the built-in GPU, so nothing is loaded or
+# unloaded; no BAR resize / link pin / FLR; detach = move the session to the panel, then PCI-remove the eGPU only.
+#   egpu-generic attach | detach | surprise
+# Portable by construction: GPUs, DRM cards, the panel connector and the desktop user are detected, not assumed.
+set -u
+. /usr/local/sbin/egpu-detect                              # also reads /etc/nv-egpu-buddy/egpu.conf (EGPU_USER, EGPU_PCI_BDF)
+UN=${EGPU_USER:-$(loginctl list-sessions --no-legend 2>/dev/null | awk '$4=="seat0"{print $3; exit}')}; UN=${UN:-$(id -nu 1000 2>/dev/null)}
+U=$(id -u "$UN" 2>/dev/null) || { echo "cannot resolve the desktop user"; exit 1; }
+RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
+PANEL=$(ls -d /sys/class/drm/card[0-9]*-eDP-* 2>/dev/null | head -1); PANEL=${PANEL##*/card[0-9]-}; PANEL=${PANEL:-eDP-1}
+ST=/run/nvegpu; mkdir -p $ST; LOG=/var/log/egpu-generic.log
+log(){ printf '%s %s: %s\n' "$(date '+%F %T')" "${verb:-?}" "$*" >> "$LOG"; }
+status(){ printf '{"state":"%s","message":"%s"}\n' "$1" "$2" > $ST/gm-status.json; }
+as_deck(){ runuser -u "$UN" -- env $RUNENV "$@"; }
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+verb=${1:-}; MARK=$ST/generic-attached; MOVED=$ST/generic-session-moved; PENDING=$ST/gm-detach-pending; DMODE=/run/user/$U/egpu-detach-mode
+exec 9>/run/egpu-generic.lock; flock -n 9 || { log "another instance running — skip"; exit 0; }
+
+game_mode(){ pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 || as_deck systemctl --user is-active gamescope-session.target >/dev/null 2>&1; }
+igpu_card(){ basename "$(ls -d /sys/bus/pci/devices/"$(egpu_igpu_bdf)"/drm/card[0-9]* 2>/dev/null | head -1)"; }
+render_of(){ ls "/sys/class/drm/$1/device/drm" 2>/dev/null | grep -m1 renderD; }
+# all-ways-egpu Method 2 (reimplemented, same as the NVIDIA path): compositors pick their primary GPU from the
+# read-only boot_vga flag, so bind-mount 1 over the eGPU's flag and 0 over the built-in GPU's.
+BIND=/run/egpu-bootvga
+clear_boot_vga(){ [ -r $BIND/bind-paths ] && { tac $BIND/bind-paths | while read -r p; do [ -n "$p" ] && umount -l "$p" 2>/dev/null; done; rm -f $BIND/bind-paths; }; }
+set_boot_vga(){ local d f; mkdir -p $BIND; echo 1 > $BIND/1; echo 0 > $BIND/0; clear_boot_vga
+  for d in /sys/bus/pci/devices/*; do _egpu_is_display "$d" || continue
+    for f in $(find "$d/" -maxdepth 3 -name 'boot_*' 2>/dev/null); do
+      if [ "${d##*/}" = "$1" ]; then mount -n --bind -o ro $BIND/1 "$f" 2>/dev/null && echo "$f" >> $BIND/bind-paths
+      elif grep -q 1 "$f" 2>/dev/null; then mount -n --bind -o ro $BIND/0 "$f" 2>/dev/null && echo "$f" >> $BIND/bind-paths; fi
+    done; done; }
+user_env_igpu(){ local ic; ic=$(igpu_card)
+  as_deck systemctl --user set-environment "KWIN_DRM_DEVICES=/dev/dri/${ic:-card1}" >/dev/null 2>&1
+  as_deck systemctl --user unset-environment DRI_PRIME WLR_DRM_DEVICES KWIN_RENDER_NODES >/dev/null 2>&1; }
+pin_plasma(){ pgrep -x kwin_wayland >/dev/null || return 0   # keep the relogin on the Desktop (conf.d wins over the main file)
+  [ -e /etc/plasmalogin.conf ] || [ -d /etc/plasmalogin.conf.d ] || return 0   # only on systems that use plasmalogin autologin
+  printf '[Autologin]\nRelogin=true\nSession=plasma.desktop\nUser=%s\n' "$UN" > /etc/plasmalogin.conf
+  install -d -m 0755 /etc/plasmalogin.conf.d; printf '[Autologin]\nSession=plasma.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf; }
+logout_plasma(){ as_deck qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout 2>/dev/null || as_deck qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout 2>/dev/null; }
+
+case "$verb" in
+attach)
+  [ -e $PENDING ] && { log "skip: detach in progress"; exit 0; }
+  read -r bdf vendor card < <(egpu_find) || { log "no eGPU on the bus"; exit 0; }
+  [ "$vendor" != nvidia ] || exit 0                       # NVIDIA has its own path
+  for _ in $(seq 1 30); do [ -n "$card" ] && break; sleep 1; read -r bdf vendor card < <(egpu_find) || exit 0; done
+  [ -n "$card" ] || { log "$vendor $bdf: no kernel driver bound a DRM card within 30s — leaving it alone"; exit 0; }
+  [ -e $MOVED ] && { log "session already moved to $bdf"; exit 0; }   # display hotplug events re-enter here: never relogin twice
+  echo on > "/sys/bus/pci/devices/$bdf/power/control" 2>/dev/null     # no runtime suspend across the tunnel
+  out=""; for _ in $(seq 1 15); do out=$(egpu_connected_outputs "$card" | head -1); [ -n "$out" ] && break; sleep 2; done
+  log "$vendor eGPU $bdf ($card) link x$(cat /sys/bus/pci/devices/$bdf/current_link_width 2>/dev/null) output=${out:-none}"
+  echo "$bdf" > $MARK
+  [ -n "$out" ] || { log "no display on the eGPU: it stays available for rendering (DRI_PRIME), session untouched"; exit 0; }
+  if game_mode; then touch $MOVED; exec 9>&-; exec /usr/local/sbin/egpu-gamemode-switch; fi
+  # boot / login screen: no session to move. Game Mode picks the eGPU by itself (session wrapper); never touch the greeter's GPU.
+  pgrep -x kwin_wayland >/dev/null || { log "no running session — nothing to move"; exit 0; }
+  pgrep -u "$UN" -x plasmashell >/dev/null || { log "login screen, not a user desktop — nothing to move"; exit 0; }
+  touch $MOVED; set_boot_vga "$bdf"; pin_plasma
+  # eGPU first = KWin renders on it; the built-in GPU stays in the list so kscreen can switch the panel off properly
+  as_deck systemctl --user set-environment "KWIN_DRM_DEVICES=/dev/dri/$card:/dev/dri/$(igpu_card)" \
+    "DRI_PRIME=pci-$(printf '%s' "$bdf" | tr ':.' '__')!" >/dev/null 2>&1
+  logout_plasma && log "session logout issued — autologin restarts Plasma with the eGPU as primary" || log "logout failed; log out and in to move the desktop to the eGPU"
+  ( for _ in $(seq 1 30); do sleep 2; as_deck kscreen-doctor -o 2>/dev/null | grep -q "$out" && break; done; sleep 4
+    as_deck kscreen-doctor output."$out".enable output."$out".priority.1 >/dev/null 2>&1; sleep 1
+    as_deck kscreen-doctor output."$PANEL".disable >/dev/null 2>&1 && log "external-only: $out primary, panel off" ) &
+  ;;
+detach)
+  read -r bdf vendor card < <(egpu_find) || { status IDLE "No eGPU connected."; exit 0; }
+  [ "$vendor" != nvidia ] || exit 0
+  trap 'rm -f $PENDING $DMODE' EXIT
+  date +%s > $PENDING; as_deck touch $DMODE; status DETACHING "Moving the session to the handheld screen. Do not unplug."
+  clear_boot_vga; user_env_igpu
+  if game_mode; then
+    G0=$(pgrep -n -x 'gamescope(-wl)?'); as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+    for _ in $(seq 1 45); do sleep 2; g=$(pgrep -n -x 'gamescope(-wl)?'); [ -n "$g" ] && [ "$g" != "$G0" ] && break; done
+  elif pgrep -x kwin_wayland >/dev/null; then
+    K0=$(pgrep -x kwin_wayland | head -1); pin_plasma; logout_plasma
+    for _ in $(seq 1 45); do sleep 2; k=$(pgrep -x kwin_wayland | head -1); [ -n "$k" ] && [ "$k" != "$K0" ] && break; done
+  fi
+  status DO_NOT_UNPLUG "Releasing the eGPU. Do not unplug yet."
+  nodes="/dev/dri/$card /dev/dri/$(render_of "$card")"
+  for _ in $(seq 1 20); do fuser $nodes >/dev/null 2>&1 || break; sleep 2; done
+  if fuser $nodes >/dev/null 2>&1; then log "still held by: $(fuser $nodes 2>/dev/null | tr -s ' ') -> TERM"; fuser -k -TERM $nodes >/dev/null 2>&1; sleep 3; fi
+  if fuser $nodes >/dev/null 2>&1; then status FAILED "A program is still using the eGPU. Close games and try again."; log "abort: nodes busy"; exit 5; fi
+  for fn in /sys/bus/pci/devices/"${bdf%.*}".[1-7] "/sys/bus/pci/devices/$bdf"; do [ -e "$fn/remove" ] && echo 1 > "$fn/remove" 2>/dev/null; done
+  rm -f $MARK $MOVED
+  if egpu_find >/dev/null; then status FAILED "The eGPU did not leave the bus. Do not unplug; reboot first."; log "remove failed"; exit 6; fi
+  log "eGPU $bdf removed"; status SAFE_COMPLETE "Safe to unplug the cable."
+  ;;
+surprise)
+  [ -e $PENDING ] && exit 0; [ -e $MARK ] || exit 0
+  egpu_find >/dev/null && exit 0                          # some other function went away; the GPU is still there
+  log "surprise removal of $(cat $MARK)"; rm -f $MARK $MOVED; clear_boot_vga; user_env_igpu
+  /usr/local/sbin/nv-egpu-buddy-privileged panel-on >/dev/null 2>&1
+  if game_mode; then sleep 3; as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1; status IDLE "eGPU unplugged. Game Mode is back on the handheld screen."
+  else pin_plasma; fi                                      # KWin exits when its primary GPU vanishes; autologin brings Plasma back on the panel
+  ;;
+*) echo "usage: egpu-generic attach|detach|surprise"; exit 2 ;;
+esac

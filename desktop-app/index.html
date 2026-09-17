@@ -46,7 +46,7 @@ $("a-detach").onclick=()=>{if(confirm("Safe Detach: the session moves back to th
 $("a-attach").onclick=()=>post("attach"); $("a-reset").onclick=()=>post("reset-clocks");
 async function refresh(){let s; try{s=await(await fetch("/api/status")).json()}catch(e){return}
  const g=s.gpu||{}, on=s.present&&s.driver_loaded&&g.name;
- S("name",g.name||(s.present?"NVIDIA GPU (driver not loaded)":"not detected"));
+ S("name",g.name||(s.present?"eGPU (driver not loaded)":"not detected"));
  $("b-gpu").textContent=s.present?"On the bus":"No eGPU"; $("b-gpu").className="bdg"+(s.present?" on":"");
  $("b-tun").textContent=s.tunnel?"Tunnel up":"No tunnel"; $("b-tun").className="bdg"+(s.tunnel?" on":"");
  $("b-drv").textContent=s.driver_loaded?"Driver loaded":"Driver unloaded"; $("b-drv").className="bdg"+(s.driver_loaded?" on":"");

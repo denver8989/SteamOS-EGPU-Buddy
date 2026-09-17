@@ -5,3 +5,4 @@ deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-reattach
 deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-gamemode-switch, /usr/local/sbin/egpu-gamemode-switch --force
 deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-gamemode-detach
 deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-rearm
+deck ALL=(root) NOPASSWD: /usr/local/sbin/egpu-generic attach, /usr/local/sbin/egpu-generic detach

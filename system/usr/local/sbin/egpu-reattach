@@ -3,7 +3,9 @@ set -u; U=1000; RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=un
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1
 say "[1/4] PCI rescan"; echo 1 > /sys/bus/pci/rescan; sleep 4
-GPU=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$GPU" ] || { say "GPU did not enumerate"; exit 2; }; say "      GPU at $GPU"
+GPU=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}')
+[ -n "$GPU" ] || { /usr/local/sbin/egpu-detect 2>/dev/null | grep -qv ' nvidia' && { say "non-NVIDIA eGPU -> generic attach"; exec /usr/local/sbin/egpu-generic attach; }; }   # experimental
+[ -n "$GPU" ] || { say "GPU did not enumerate"; exit 2; }; say "      GPU at $GPU"
 say "[2/4] fresh nvidia stack"; modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null
 modprobe --ignore-install nvidia && modprobe --ignore-install nvidia_modeset && modprobe --ignore-install nvidia_drm modeset=1 fbdev=1; modprobe --ignore-install nvidia_uvm 2>/dev/null
 for _ in $(seq 1 15); do [ -e /sys/class/drm/card0 ] && [ "$(basename "$(readlink -f /sys/class/drm/card0/device/driver 2>/dev/null)")" = nvidia ] && break; sleep 1; done

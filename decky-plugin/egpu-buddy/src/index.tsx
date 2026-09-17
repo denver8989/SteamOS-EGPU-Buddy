@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { FaPlug } from "react-icons/fa";
 
 type Status = {
-  present: boolean; bdf: string; driver_loaded: boolean; game_mode: boolean; game_running: boolean;
+  present: boolean; bdf: string; vendor?: string; driver_loaded: boolean; game_mode: boolean; game_running: boolean;
   attach_pending: boolean; on_egpu: boolean; output: string;
   gm_status: { state?: string; message?: string }; desktop_status: { state?: string; message?: string };
   link: { speed: string; width: string }; displays: { name: string; enabled: boolean }[]; audio_sink: string;
@@ -25,12 +25,15 @@ const uninstallSystem = callable<[], Result>("uninstall_system");
 const rebootSystem = callable<[], Result>("reboot_system");
 const restartGamemode = callable<[], Result>("restart_gamemode");
 const applyCmdline = callable<[], Result>("apply_kernel_cmdline");
-type Upd = { auto_update: boolean; available: string; state: string; checked: number; last_error: string; installed: string };
+type Upd = { auto_update: boolean; held_version?: string; available: string; state: string; checked: number; last_error: string; installed: string };
 const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
+type Versions = { ok: boolean; message?: string; current?: string; versions: { version: string; beta: boolean }[] };
+const listVersions = callable<[], Versions>("list_versions");
+const installVersion = callable<[string], Result>("install_version");
 
-const PLUGIN_VERSION = "0.7.12";
+const PLUGIN_VERSION = "0.8.0-beta1";
 
 const Progress = ({ pct, title, step }: { pct: number; title: string; step: string }) => (
   <div style={{ width: "100%", boxSizing: "border-box", padding: "4px 0" }}>
@@ -57,6 +60,7 @@ function Content() {
   const [tab, setTab] = useState<"main" | "details" | "setup">("main");
   const [su, setSu] = useState<Setup | null>(null);
   const [up, setUp] = useState<Upd | null>(null);
+  const [vers, setVers] = useState<Versions | null>(null);
   const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall">("");
   const [s, setS] = useState<Status | null>(null);
   const [msg, setMsg] = useState("");
@@ -143,7 +147,7 @@ function Content() {
             ) : (
             <>
               <Row k="GPU" v={tel["name"] ?? (s.present ? s.bdf : "absent")} />
-              <Row k="Driver" v={s.driver_loaded ? `nvidia ${tel["driver_version"] ?? ""}` : "not loaded"} />
+              <Row k="Driver" v={s.driver_loaded ? ((s.vendor ?? "nvidia") === "nvidia" ? `nvidia ${tel["driver_version"] ?? ""}` : `${tel["driver_version"] ?? s.vendor} (experimental support)`) : "not loaded"} />
               <Row k="PCIe" v={s.present ? `${s.link.speed} x${s.link.width}` : ""} />
               <Row k="Session" v={s.game_mode ? (s.on_egpu ? `Game Mode on ${s.output}` : "Game Mode on panel") : "Desktop"} />
               <Row k="Displays" v={s.displays.map((d) => `${d.name}${d.enabled ? "" : " (off)"}`).join(", ")} />
@@ -163,11 +167,13 @@ function Content() {
                 <SliderField label="Power limit (W)" value={plNow} min={plMin} max={plMax} step={5} showValue onChange={setPl} />
               </PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" disabled={busy || pl === null} onClick={() => run(() => setPowerLimit(plNow))}>Apply power limit</ButtonItem></PanelSectionRow>
+              {(s.vendor ?? "nvidia") === "nvidia" && (<>
               <PanelSectionRow>
                 <SliderField label="Core clock offset (MHz)" value={off} min={-300} max={300} step={15} showValue onChange={setOff} />
               </PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(() => setCoreOffset(off))}>Apply offset</ButtonItem></PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => { setOff(0); setPl(null); run(resetClocks); }}>Reset clocks</ButtonItem></PanelSectionRow>
+              </>)}
               {msg && <PanelSectionRow><div style={{ fontSize: "12px" }}>{msg}</div></PanelSectionRow>}
             </PanelSection>
           ) : (
@@ -198,9 +204,20 @@ function Content() {
       )}
       {tab === "setup" && (
         <PanelSection title="Updates">
-          <PanelSectionRow><ToggleField label="Automatic updates" description="Checks GitHub every hour; installs new releases (system integration and this plugin) when no game is running, then asks for a reboot." checked={!!up?.auto_update} onChange={(v) => run(() => setAutoUpdate(v))} /></PanelSectionRow>
+          <PanelSectionRow><ToggleField label="Automatic updates" description="Off: new releases are only announced here and you decide when to install. On: they install by themselves when no game is running." checked={!!up?.auto_update} onChange={(v) => run(() => setAutoUpdate(v))} /></PanelSectionRow>
           <PanelSectionRow><ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => run(() => checkUpdate(false))}>Check for updates now</ButtonItem></PanelSectionRow>
+          {up?.available && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(() => checkUpdate(true))}>Update now to {up.available}</ButtonItem></PanelSectionRow>}
           <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>{up ? (up.available ? `Available: ${up.available}` : (up.checked ? "Up to date." : "Not checked yet.")) + (up.installed ? ` Installed: ${up.installed}.` : "") + (up.last_error ? ` ${up.last_error}` : "") : "…"}</div></PanelSectionRow>
+          {up?.held_version && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ffc107" }}>Staying on {up.held_version}: you chose this version, nothing updates it until you press Update or pick another one.</div></PanelSectionRow>}
+          <PanelSectionRow><ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={async () => { const r = await listVersions(); setVers(r); if (!r.ok) setMsg(r.message ?? ""); }}>Install another version (go back, or try a beta)</ButtonItem></PanelSectionRow>
+          {vers?.versions.map((v) => (
+            <PanelSectionRow key={v.version}>
+              <ButtonItem layout="below" disabled={busy || !!su?.busy || v.version === vers.current} onClick={() => showModal(<ConfirmModal strTitle={`Install ${v.version}`} strDescription={`Replaces the system integration and this plugin with ${v.version}${v.beta ? " (beta: untested, may break things)" : ""}. Automatic updates are switched off so it stays on this version. Reboot afterwards.`} strOKButtonText="Install" onOK={() => run(() => installVersion(v.version))} />)}>
+                {v.version}{v.beta ? " (beta)" : ""}{v.version === vers.current ? " — installed" : ""}
+              </ButtonItem>
+            </PanelSectionRow>
+          ))}
+          {msg && <PanelSectionRow><div style={{ fontSize: "12px" }}>{msg}</div></PanelSectionRow>}
         </PanelSection>
       )}
     </>

@@ -44,5 +44,6 @@ chmod +x "dist/$NAME.run"
 (cd dist && sha256sum "$NAME.run" "$NAME.tar.gz" "EGPU-Buddy-Decky-$VER.zip" > SHA256SUMS)
 ls -la dist | grep -E 'run|tar|SHA'
 if [ "${1:-}" = --publish ]; then
-  gh release create "v$VER" "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS get-egpu-buddy.sh --title "SteamOS EGPU Buddy $VER" --notes-file RELEASE-NOTES.md
+  PRE=""; case "$VER" in *-*) PRE="--prerelease --latest=false";; esac   # betas never become "latest": the updater and the curl installer skip them
+  gh release create "v$VER" $PRE --target "$(git branch --show-current)" "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS get-egpu-buddy.sh --title "SteamOS EGPU Buddy $VER" --notes-file RELEASE-NOTES.md
 fi

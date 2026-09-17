@@ -4,6 +4,14 @@ Everything below was verified on the single machine described in the README (Leg
 5120×1440 DisplayPort monitor, CachyOS Deckify, nvidia-open 610.57.04). "Verified" means it was exercised
 repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing here has been run on a second machine.
 
+## Not tested at all: AMD / Intel eGPUs (0.8.0 beta)
+
+The whole non-NVIDIA path (`egpu-detect`, `egpu-generic`, the session wrapper's generic branch, sysfs telemetry and
+power cap) was written without an AMD eGPU. Verified only: the detection logic against a fake sysfs tree
+(`egpu-detect --selftest`), that it reports "no eGPU" on the real machine, and the sysfs telemetry reader against the
+built-in AMD GPU (same driver). Attach, Game Mode routing, safe detach and cable-yank handling have never run.
+0.8.0-beta1 as a whole has also not yet been run with the NVIDIA eGPU attached.
+
 ## Verified
 
 | Feature | How it was verified |

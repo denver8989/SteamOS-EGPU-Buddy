@@ -445,6 +445,16 @@ case "$action" in
     [ "$#" -eq 0 ] || die "$action takes no arguments"
     /usr/local/sbin/egpu-panel "${action#panel-}"
     ;;
+  set-generic-power-cap)
+    # non-NVIDIA eGPU (experimental): hwmon power cap in watts, clamped to what the card reports
+    [ "$#" -eq 1 ] && [[ "$1" =~ ^[0-9]{1,4}$ ]] || die "usage: set-generic-power-cap <watts>"
+    read -r gbdf gvendor _ < <(/usr/local/sbin/egpu-detect) || die "no eGPU"
+    [ "$gvendor" != nvidia ] || die "use set-gpu-power-limit for NVIDIA"
+    cap=$(ls /sys/bus/pci/devices/"$gbdf"/hwmon/hwmon*/power1_cap 2>/dev/null | head -1); [ -n "$cap" ] || die "this GPU has no power cap"
+    uw=$(( $1 * 1000000 )); max=$(cat "${cap}_max" 2>/dev/null || echo "$uw"); min=$(cat "${cap}_min" 2>/dev/null || echo 0)
+    [ "$uw" -le "$max" ] && [ "$uw" -ge "$min" ] || die "power cap must be between $((min/1000000)) and $((max/1000000)) W"
+    echo "$uw" > "$cap" && echo "power cap set to $1 W"
+    ;;
   vt-bounce)
     # gamescope started paused after a relogin (libseat seat inactive: no "Session resumed", CRTC never enabled).
     # A VT round-trip makes logind re-activate the session -> "Enabling seat" -> gamescope modesets.

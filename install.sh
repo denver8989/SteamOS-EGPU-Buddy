@@ -41,15 +41,23 @@ if [ "${ID:-}" = steamos ] && [ "$MODE" = install ]; then
   echo "      from the copy kept in your home, restores cached packages and kernel modules, and rebuilds the driver if headers exist."
 fi
 for c in systemctl udevadm lspci; do command -v $c >/dev/null || { echo "missing $c"; exit 1; }; done
-lspci -Dn | grep -qE '0300: 10de:' || echo "note: no NVIDIA GPU on the bus right now (fine, it is hot-pluggable)"
+# eGPU vendor: detected, never asked. NVIDIA-only pieces (driver packages, patched modules, GBM-scanout gamescope) are
+# skipped only when a non-NVIDIA eGPU is actually on the bus (or EGPU_VENDOR=amd). With nothing connected they are
+# installed: an NVIDIA eGPU's first connection without them is the dangerous case, an unused package is not.
+EGPU_VENDOR=${EGPU_VENDOR:-auto}; seen=$(bash "$ROOT/system/usr/local/sbin/egpu-detect" 2>/dev/null | awk '{print $2}' || true)
+NVIDIA_STEPS=1; case "$EGPU_VENDOR:$seen" in amd:*|intel:*|auto:amd|auto:intel|auto:other) NVIDIA_STEPS=0;; esac
+if [ "$NVIDIA_STEPS" = 0 ]; then
+  echo "note: ${seen:-$EGPU_VENDOR} eGPU: EXPERIMENTAL, untested path. Skipping the NVIDIA driver, package pinning and the patched gamescope (Mesa needs none of them)."
+  _c=""; for c in ${COMPONENTS//,/ }; do case "$c" in driver|gamescope) ;; *) _c="$_c${_c:+,}$c";; esac; done; COMPONENTS=$_c
+elif [ -z "$seen" ]; then echo "note: no eGPU on the bus right now (fine, it is hot-pluggable); installing with NVIDIA support"; fi
 # runtime tools the scripts call (package names are Arch/SteamOS; Bazzite equivalents are similar)
-miss=""; for c in setpci:pciutils modetest:libdrm fuser:psmisc jq:jq xxd:vim perl:perl python3:python qdbus6:qt6-tools kscreen-doctor:libkscreen xprop:xorg-xprop boltctl:bolt nvidia-smi:nvidia-utils; do
+miss=""; for c in setpci:pciutils modetest:libdrm fuser:psmisc jq:jq xxd:vim perl:perl python3:python qdbus6:qt6-tools kscreen-doctor:libkscreen xprop:xorg-xprop boltctl:bolt $([ "$NVIDIA_STEPS" = 1 ] && echo nvidia-smi:nvidia-utils); do
   command -v "${c%%:*}" >/dev/null 2>&1 || miss="$miss ${c%%:*}(${c#*:})"; done
 [ -z "$miss" ] || echo "warning: missing tools, some paths will degrade:$miss"
 STOCK=${STOCK_GAMESCOPE_SESSION:-}; [ -n "$STOCK" ] || for s in /usr/lib/steamos/gamescope-session /usr/bin/gamescope-session /usr/bin/gamescope-session-plus; do [ -f "$s" ] && { STOCK=$s; break; }; done
 [ -n "$STOCK" ] || echo "warning: no gamescope-session script found; Game Mode pieces will be inert"
 # NVIDIA userspace + driver packages (the hot-plug path loads nvidia-open; nvidia-smi/NVML drive the controls)
-if ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
+if [ "$NVIDIA_STEPS" = 1 ] && ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "NVIDIA packages are missing. Install nvidia-open-dkms + nvidia-utils now with pacman? [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== installing nvidia-open-dkms nvidia-utils lib32-nvidia-utils"; sudo pacman -S --needed --noconfirm nvidia-open-dkms nvidia-utils lib32-nvidia-utils || echo "warning: NVIDIA package install failed; install them by hand"; else echo "warning: no nvidia-smi; install nvidia-open-dkms + nvidia-utils before plugging the eGPU in"; fi
 fi

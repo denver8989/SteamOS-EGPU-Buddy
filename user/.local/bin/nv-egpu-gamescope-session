@@ -105,6 +105,8 @@ clear_egpu_env() {
   unset XAUTHORITY
   unset OUTPUT_CONNECTOR
   unset KWIN_DRM_DEVICES
+  unset WLR_DRM_DEVICES
+  unset DRI_PRIME
   unset VK_DRIVER_FILES
   unset VK_ICD_FILENAMES
   unset __EGL_VENDOR_LIBRARY_FILENAMES
@@ -428,6 +430,16 @@ disable_steam_gamescope_hdr_config() {
   done
 }
 
+# non-NVIDIA eGPU (egpu-detect: "BDF VENDOR CARD") with a DRM card and a connected output
+gen_bdf=; gen_vendor=; gen_card=; gen_outputs=
+generic_egpu_ready() {
+  [ -x /usr/local/sbin/egpu-detect ] || return 1
+  read -r gen_bdf gen_vendor gen_card < <(/usr/local/sbin/egpu-detect 2>/dev/null) || return 1
+  [ -n "$gen_card" ] && [ "$gen_vendor" != nvidia ] || return 1
+  gen_outputs=$(for n in /sys/class/drm/"$gen_card"-*; do [ "$(cat "$n/status" 2>/dev/null)" = connected ] && printf '%s ' "${n##*/"$gen_card"-}"; done)
+  [ -n "$gen_outputs" ]
+}
+
 egpu_card=
 igpu_card=
 outputs=
@@ -528,13 +540,24 @@ if [ "$detach_mode" = 0 ] && [ -n "$egpu_card" ] && [ -n "$igpu_card" ] && [ -n 
   if [ "${NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP:-1}" != "0" ] && [ -x "$STEAM_SCALE_CLAMP" ]; then
     "$STEAM_SCALE_CLAMP" >/tmp/nv-egpu-gamescope-steam-scale-clamp.log 2>&1 &
   fi
+elif [ "$detach_mode" = 0 ] && generic_egpu_ready; then
+  # EXPERIMENTAL (untested hardware): non-NVIDIA eGPU (AMD/Intel, Mesa). No GBM-scanout build, format filter or
+  # NVIDIA ICD pinning: stock gamescope, pointed at the eGPU's DRM card, games on the same GPU via DRI_PRIME.
+  clear_egpu_env
+  clear_session_env
+  export OUTPUT_CONNECTOR="$(printf '%s,' $gen_outputs)*,${PANEL}"
+  export WLR_DRM_DEVICES="/dev/dri/$gen_card"
+  export DRI_PRIME="pci-$(printf '%s' "$gen_bdf" | tr ':.' '__')!"
+  log "generic eGPU route: $gen_vendor $gen_bdf ($gen_card) outputs: $gen_outputs"
 else
   clear_egpu_env
   export OUTPUT_CONNECTOR="*,${PANEL}"
   if [ "$detach_mode" = 1 ]; then
-    # pin gamescope + Vulkan/EGL to the AMD card so nothing in this session holds the NVIDIA nodes
-    _amd=""; for _c in /sys/class/drm/card[0-9]; do [ "$(cat "$_c/device/vendor" 2>/dev/null)" = 0x1002 ] && { _amd=/dev/dri/${_c##*/}; break; }; done
+    # pin gamescope + Vulkan/EGL to the built-in AMD card so nothing in this session holds the eGPU nodes
+    _amd=$(basename "$(ls -d /sys/class/drm/card[0-9]*-"$PANEL" 2>/dev/null | head -1)"); _amd=${_amd%%-*}; [ -n "$_amd" ] && _amd=/dev/dri/$_amd
     [ -n "$_amd" ] && export KWIN_DRM_DEVICES="$_amd"
+    # a Mesa eGPU shares the driver with the built-in GPU: only an explicit device list keeps gamescope off it
+    case "$(/usr/local/sbin/egpu-detect 2>/dev/null)" in ""|*" nvidia "*|*" nvidia") ;; *) [ -n "$_amd" ] && export WLR_DRM_DEVICES="$_amd" ;; esac
     export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.json VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json
     export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json __GLX_VENDOR_LIBRARY_NAME=mesa
   fi
@@ -582,6 +605,7 @@ if [ -e /run/nvegpu/diag ]; then export PROTON_LOG=1 VK_LOADER_DEBUG=error,warn 
   sleep 12
   pgrep -x gamescope-wl >/dev/null 2>&1 || exit 0
   lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && exit 0
+  /usr/local/sbin/egpu-detect >/dev/null 2>&1 && exit 0
   [ "$(cat /sys/class/drm/card*-eDP-1/enabled 2>/dev/null | head -1)" = disabled ] || exit 0
   log "panel still disabled 12s after gamescope start -> vt-bounce (paused libseat seat)"
   sudo -n /usr/local/sbin/nv-egpu-buddy-privileged vt-bounce >/dev/null 2>&1 || true

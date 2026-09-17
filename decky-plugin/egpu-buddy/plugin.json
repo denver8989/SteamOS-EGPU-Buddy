@@ -1,6 +1,6 @@
 {
   "name": "EGPU Buddy",
-  "version": "0.7.12",
+  "version": "0.8.0-beta1",
   "author": "denver8989",
   "flags": [
     "root"
