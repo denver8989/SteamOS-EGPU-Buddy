@@ -1,10 +1,11 @@
-0.7.21 — SteamOS: the driver extension now works on a real device; an honest progress bar; a visible finish line.
+0.7.21 — SteamOS: fix for the install failure found on a real device; an honest progress bar; a visible finish line.
 
 - **SteamOS, found on a real Legion Go:** the driver compiled, then the install stopped at `overlay: case-insensitive
   capable filesystem ... not supported`. SteamOS formats `/home` as ext4 with case-folding and its kernel's overlayfs
   refuses directories there, which also rules out a directory-based system extension. The extension is now one
   squashfs image (about 520 MB instead of a 1.5 GB directory) and the module dependency step works on tmpfs. If you
-  hit this: press **Repair**; the compiled driver is reused, it takes about a minute.
+  hit this: press **Repair**; the compiled driver is reused, it takes about a minute. Verified in the test container
+  (now with a case-folding `/home`); the merged extension is still unconfirmed on a real device, see `TESTED.md`.
 - A failed driver step no longer ends in "done": the installer says the driver was not built and the plugin shows it,
   with a **Repair** button, until the driver really is there. The state is read from the system, so it is the same
   after closing the menu, a Decky restart or a reboot.
