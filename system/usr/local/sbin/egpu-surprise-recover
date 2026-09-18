@@ -25,7 +25,10 @@ runuser -u deck -- env $RUNENV systemctl --user set-environment \
   "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.json" "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json" >/dev/null 2>&1
 runuser -u deck -- env $RUNENV systemctl --user unset-environment PROTON_ENABLE_NVAPI DXVK_ENABLE_NVAPI PROTON_HIDE_NVIDIA_GPU >/dev/null 2>&1
 log "user env -> iGPU (${igpu:-card1})"
+# gamescope dies with the card within a second, so it cannot be asked; the session wrapper / desktop login script record the type
 GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1; runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
+[ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1
+[ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = desktop ] && pgrep -x kwin_wayland >/dev/null 2>&1 && GM=0
 log "game-mode=$GM"
 # 2. wait for the session to come back on the iGPU (KWin exit -> autologin relaunch), up to 90s  [desktop only]
 [ "$GM" = 0 ] && \
@@ -42,7 +45,7 @@ for h in /etc/nv-egpu-buddy/hooks.d/pre-unload/*; do [ -x "$h" ] && "$h" >/dev/n
 sleep 1
 # pre-removal user processes still holding dmabufs (e.g. a Steam Proton helper) keep NVIDIA-exported buffers -> pin nvidia_drm
 for p in $(pgrep -u 1000); do
-  st=$(stat -c %Y /proc/$p 2>/dev/null); [ -n "$st" ] && [ "$st" -lt "$T0" ] || continue
+  age=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' '); [ -n "$age" ] && [ "$age" -gt $(( $(date +%s) - T0 )) ] || continue   # only processes older than the removal
   ls -l /proc/$p/fd 2>/dev/null | grep -qE 'dmabuf|sync_file' || continue
   case "$(cat /proc/$p/comm 2>/dev/null)" in kwin_wayland|Xwayland|plasmashell|pipewire*|wireplumber|systemd*) ;; *) kill -9 "$p" 2>/dev/null; log "killed pre-removal dmabuf holder $p ($(cat /proc/$p/comm 2>/dev/null))";; esac
 done
@@ -51,9 +54,13 @@ done
 # modules, then restart the session on the panel. Was after the unload loop (up to 60 s of dark screen; 20 s on 2026-09-11).
 if [ "$GM" = 1 ]; then
   /usr/local/sbin/egpu-safe-detach --prep >/dev/null 2>&1
-  runuser -u deck -- env $RUNENV systemctl --user reset-failed gamescope-session.service gamescope-session.target 2>/dev/null
-  runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
-  log "gamescope-session restart issued (panel) before the driver unload"
+  st=$(runuser -u deck -- env $RUNENV systemctl --user show gamescope-session.service -p ActiveState --value 2>/dev/null)
+  case "$st" in
+    active|activating) log "gamescope-session is relaunching by itself ($st); not restarting it" ;;
+    *) runuser -u deck -- env $RUNENV systemctl --user reset-failed gamescope-session.service gamescope-session.target 2>/dev/null
+       runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+       log "gamescope-session restart issued (panel, was $st) before the driver unload" ;;
+  esac
 fi
 for _ in $(seq 1 20); do
   modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia 2>/dev/null
