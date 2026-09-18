@@ -18,6 +18,7 @@
 # External-only is the normal docked desktop target. Set
 # EGPU_KEEP_PANEL_LIFELINE=1 only for recovery testing.
 # ============================================================================
+printf desktop > "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/egpu-session-type" 2>/dev/null || true   # session type, read by egpu-surprise-recover
 set -u
 # eGPU PCI address is NOT fixed — it depends which USB4 port it tunneled through (seen at both
 # 62:00.0 and 03:00.0). Detect the NVIDIA-driven GPU (with a DRM node) dynamically; hardcoding it

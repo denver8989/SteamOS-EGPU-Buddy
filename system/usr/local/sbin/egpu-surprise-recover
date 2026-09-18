@@ -14,8 +14,20 @@ pgrep -f '/usr/local/sbin/egpu-safe-detach' >/dev/null && { log "skip: safe-deta
 lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { log "skip: GPU still on the bus"; exit 0; }
 exec 9>/run/egpu-surprise-recover.lock; flock -n 9 || { log "skip: already running"; exit 0; }
 log "SURPRISE removal detected (GPU gone from bus)"
-T0=$(date +%s); mkdir -p /run/nvegpu; date +%s > /run/nvegpu/surprise-pending   # hotplug-mount: stale modules -> unbind+FLR+rebind on next attach
+T0=$(date +%s); SELF_START=$(awk '{print $22}' /proc/self/stat); mkdir -p /run/nvegpu; date +%s > /run/nvegpu/surprise-pending   # hotplug-mount: stale modules -> unbind+FLR+rebind on next attach
+# gamescope dies with the card within a second, so it cannot be asked; the session wrapper / desktop login script record the type
+GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1; runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
+[ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1
+[ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = desktop ] && pgrep -x kwin_wayland >/dev/null 2>&1 && GM=0
+log "game-mode=$GM"
 # 1. user-manager env -> iGPU immediately (the relaunching session must not point at the dead card)
+if [ "$GM" = 1 ]; then
+  # Game Mode: the session wrapper routes itself. Pushing Desktop routing/display variables into the user manager here
+  # (KWIN_RENDER_NODES on the built-in GPU, later WAYLAND_DISPLAY/DISPLAY via egpu-republish-display) left them there
+  # until the next reboot and made every game black after the next attach (2026-09-18). Clear them instead.
+  runuser -u deck -- env $RUNENV systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XAUTHORITY KWIN_RENDER_NODES >/dev/null 2>&1
+  log "Game Mode: desktop routing not applied; stray display variables cleared"
+else
 igpu=$(for c in /sys/class/drm/card[0-9]; do [ "$(cat $c/device/vendor 2>/dev/null)" = 0x1002 ] && basename $c && break; done)
 runuser -u deck -- env $RUNENV systemctl --user set-environment \
   "KWIN_DRM_DEVICES=/dev/dri/${igpu:-card1}" \
@@ -25,8 +37,9 @@ runuser -u deck -- env $RUNENV systemctl --user set-environment \
   "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.json" "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json" >/dev/null 2>&1
 runuser -u deck -- env $RUNENV systemctl --user unset-environment PROTON_ENABLE_NVAPI DXVK_ENABLE_NVAPI PROTON_HIDE_NVIDIA_GPU >/dev/null 2>&1
 log "user env -> iGPU (${igpu:-card1})"
-GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1; runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
-log "game-mode=$GM"
+fi
+# GAME MODE: hide the NVIDIA userspace right now, before the auto-relaunched session's Steam can open the dead card
+[ "$GM" = 1 ] && /usr/local/sbin/egpu-safe-detach --prep >/dev/null 2>&1
 # 2. wait for the session to come back on the iGPU (KWin exit -> autologin relaunch), up to 90s  [desktop only]
 [ "$GM" = 0 ] && \
 for _ in $(seq 1 90); do
@@ -42,10 +55,24 @@ for h in /etc/nv-egpu-buddy/hooks.d/pre-unload/*; do [ -x "$h" ] && "$h" >/dev/n
 sleep 1
 # pre-removal user processes still holding dmabufs (e.g. a Steam Proton helper) keep NVIDIA-exported buffers -> pin nvidia_drm
 for p in $(pgrep -u 1000); do
-  st=$(stat -c %Y /proc/$p 2>/dev/null); [ -n "$st" ] && [ "$st" -lt "$T0" ] || continue
+  # the relaunched Game Mode session (systemd restarts it the instant the old one dies, before this script runs) lives in the
+  # session's own cgroup; nothing from the old session can, systemd killed that cgroup. Never touch it.
+  [ "$GM" = 1 ] && grep -qE 'gamescope-session\.service|steam-launcher\.service|app-.*steam' /proc/$p/cgroup 2>/dev/null && continue
   ls -l /proc/$p/fd 2>/dev/null | grep -qE 'dmabuf|sync_file' || continue
   case "$(cat /proc/$p/comm 2>/dev/null)" in kwin_wayland|Xwayland|plasmashell|pipewire*|wireplumber|systemd*) ;; *) kill -9 "$p" 2>/dev/null; log "killed pre-removal dmabuf holder $p ($(cat /proc/$p/comm 2>/dev/null))";; esac
 done
+# 3a. GAME MODE: gamescope (on the removed card) is dead or dying. Bring the picture back first and unload behind it:
+# hide the NVIDIA userspace (as the safe detach does) so the relaunched Steam cannot open the dead card and pin the
+# modules, then restart the session on the panel. Was after the unload loop (up to 60 s of dark screen; 20 s on 2026-09-11).
+if [ "$GM" = 1 ]; then
+  st=$(runuser -u deck -- env $RUNENV systemctl --user show gamescope-session.service -p ActiveState --value 2>/dev/null)
+  case "$st" in
+    active|activating) log "gamescope-session is relaunching by itself ($st); not restarting it" ;;
+    *) runuser -u deck -- env $RUNENV systemctl --user reset-failed gamescope-session.service gamescope-session.target 2>/dev/null
+       runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+       log "gamescope-session restart issued (panel, was $st) before the driver unload" ;;
+  esac
+fi
 for _ in $(seq 1 20); do
   modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia 2>/dev/null
   lsmod | grep -q '^nvidia' || break
@@ -56,21 +83,17 @@ for _ in $(seq 1 20); do
   sleep 3
 done
 log "nvidia modules left: $(lsmod | grep '^nvidia' | awk '{print $1"="$3}' | tr '\n' ' ')"
-# 3b. GAME MODE: gamescope (on the NVIDIA card) is dead or dying -> restart it on the handheld panel
-if [ "$GM" = 1 ]; then
-  runuser -u deck -- env $RUNENV systemctl --user reset-failed gamescope-session.service gamescope-session.target 2>/dev/null
-  runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
-  log "gamescope-session restart issued (panel)"
-fi
+[ "$GM" = 1 ] && /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1   # userspace back for the next attach
 # 4. DPC containment on the USB4 root ports would block the next link-up -> clear (hotplug-mount's lever)
 eval "$(sed -n '/^clear_dpc(){/,/^}/p' /usr/local/sbin/egpu-hotplug-mount.sh)"; clear_dpc 2>/dev/null; log "DPC cleared"
 # 4b. the relaunched session has a new Xwayland: republish DISPLAY/XAUTHORITY (else "Unable to open a connection to X")
-for _ in $(seq 1 30); do pgrep -x Xwayland >/dev/null && pgrep -x plasmashell >/dev/null && break; sleep 2; done; sleep 3
-/usr/local/sbin/egpu-republish-display >/dev/null 2>&1 || true
+if [ "$GM" = 1 ]; then for _ in $(seq 1 30); do pgrep -x 'gamescope(-wl)?' >/dev/null && pgrep -x steam >/dev/null && break; sleep 2; done
+else for _ in $(seq 1 30); do pgrep -x Xwayland >/dev/null && pgrep -x plasmashell >/dev/null && break; sleep 2; done; sleep 3; fi
+[ "$GM" = 1 ] || /usr/local/sbin/egpu-republish-display >/dev/null 2>&1 || true   # Desktop only: there is no KWin display to publish in Game Mode
 # 5. internal panel back on + failover watcher promotes eDP-1; audio to internal
 /usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
 runuser -u deck -- env $RUNENV bash -c 'pactl set-default-sink alsa_output.pci-0000_c2_00.6.pro-output-0' >/dev/null 2>&1
 runuser -u deck -- env $RUNENV bash -c 'for h in /etc/nv-egpu-buddy/hooks.d/post-detach/*; do [ -x "$h" ] && systemd-run --user --collect --quiet --unit=egpu-hook-$(basename "$h")-$(date +%s) "$h" >/dev/null 2>&1; done' >/dev/null 2>&1   # user hooks (none shipped)
 [ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-surprise-steam-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1   # plain steam on the iGPU session (old instance is dead/zombie)
-runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 notify-send -a NV-EGPU-Buddy "eGPU disconnected" "Desktop moved to the internal screen." >/dev/null 2>&1 || true
+[ "$GM" = 1 ] || runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 notify-send -a NV-EGPU-Buddy "eGPU disconnected" "Desktop moved to the internal screen." >/dev/null 2>&1 || true
 log "DONE"

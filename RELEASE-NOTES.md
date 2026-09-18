@@ -1,3 +1,19 @@
+0.7.15 — games black after a re-attach, and the cable-yank recovery, both fixed and verified on real replugs.
+
+- **Every game black (or crashing at launch) after re-attaching the eGPU, until a reboot.** The Steam UI was fine, games
+  rendered on the eGPU but never reached the screen. Cause, A/B-tested four times on one boot: resizing the GPU's memory
+  window (256 MB -> 16 GB) right before the driver loads leaves the card in a state only a fresh enumeration clears. A
+  cable pull resets the window to 256 MB, so every replug ran into it. The attach now skips the resize when the window
+  already is 16 GB (software re-attach), and after a real resize removes and re-scans the GPU once and resets it again
+  before the driver loads (about two seconds, no session involved). Verified: Safe Detach -> unplug -> replug -> play.
+- **Cable yank in Game Mode.** The recovery could not tell it was in Game Mode once gamescope had died with the card,
+  took the Desktop route (three relaunches over four minutes, measured), and left Desktop display variables
+  (WAYLAND_DISPLAY, DISPLAY, KWIN_RENDER_NODES) in the user environment until the next reboot, which by itself made
+  game windows invisible. Now: the session records its type, the recovery detects it first, applies no Desktop routing
+  in Game Mode and clears any stray variables, never touches the relaunched session, and the session script stops
+  waiting as soon as the eGPU leaves the bus. One relaunch, no Steam restart. The Game Mode attach clears the same
+  variables as a second line of defence. Verified: yank -> handheld back -> replug -> play.
+
 0.7.14 — two attach fixes found while testing on the eGPU.
 
 - **Panel stayed on next to the eGPU display after an automatic hot-plug (Desktop).** The attach script's panel-off

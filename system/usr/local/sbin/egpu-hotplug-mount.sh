@@ -135,7 +135,15 @@ else
 fi
 
 # ---- ReBAR (OFF by default: wedges RmInitAdapter on this Strix Halo + RTX 3080) ------------------
-if [ ! -e /etc/nv-egpu-buddy/no-rebar ]; then
+# 2026-09-18: a resize right before the driver load left the GPU in a state where the session came up but every game
+# was black (Diablo IV, Cyberpunk; A/B-tested: resize -> black, same card re-enumerated with its 16G BAR kept -> fine).
+# So: (1) skip the whole block when BAR1 already is 16G (a software re-attach keeps the size; only a cable pull resets
+# it to 256M); (2) after a real resize, remove + rescan the GPU once and FLR it again, so the driver loads on a freshly
+# enumerated device exactly like the working path. About two seconds, no session involved.
+_bar1_bytes(){ stat -c %s "$GDEV/resource1" 2>/dev/null || echo 0; }
+if [ ! -e /etc/nv-egpu-buddy/no-rebar ] && [ "$(_bar1_bytes)" -ge 17179869184 ]; then
+  log "BAR1 already 16GB — resize block skipped"
+elif [ ! -e /etc/nv-egpu-buddy/no-rebar ]; then
   cfg0(){ xxd -l4 "$1/config" 2>/dev/null | awk '{print $2$3}'; }
   dev_alive(){ local d=$1 w c
     [ -e "$d" ] || return 1
@@ -167,6 +175,20 @@ if [ ! -e /etc/nv-egpu-buddy/no-rebar ]; then
     elif "$PRIV" resize 13 >/dev/null 2>&1; then log "BAR1 -> 8GB (16G refused)"
     elif "$PRIV" resize 12 >/dev/null 2>&1; then log "BAR1 -> 4GB (8G refused)"
     else log "BAR1 resize failed — staying 256M (siblings may not have freed)"; fi
+    if [ "$(_bar1_bytes)" -ge 4294967296 ]; then
+      log "re-enumerating the GPU after the resize (fresh device for the driver)"
+      # the removal below is ours, not a cable yank: the surprise recovery honours this marker and stays out
+      mkdir -p /run/nvegpu; date +%s > /run/nvegpu/gm-detach-pending
+      _aud="/sys/bus/pci/devices/${gpu%.*}.1"; [ -e "$_aud/remove" ] && echo 1 > "$_aud/remove" 2>/dev/null
+      echo 1 > "$GDEV/remove" 2>/dev/null; sleep 1
+      echo 1 > /sys/bus/pci/rescan 2>/dev/null
+      for _ in $(seq 1 20); do [ -e "$GDEV/config" ] && break; sleep 0.5; done
+      sleep 2; rm -f /run/nvegpu/gm-detach-pending /run/nvegpu/surprise-pending
+      if [ -e "$GDEV/config" ]; then
+        log "GPU back, BAR1=$(( $(_bar1_bytes) / 1048576 ))MiB"
+        [ -L "$GDEV/driver" ] || { "$PRIV" reset-gpu >/dev/null 2>&1 && log "FLR done (after re-enumeration)"; }
+      else log "GPU did not come back after the re-enumeration — exit"; exit 0; fi
+    fi
   fi
 fi
 
