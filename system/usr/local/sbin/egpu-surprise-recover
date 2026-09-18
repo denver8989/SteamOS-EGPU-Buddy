@@ -30,6 +30,8 @@ GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1; runuser -u deck -- env
 [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1
 [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = desktop ] && pgrep -x kwin_wayland >/dev/null 2>&1 && GM=0
 log "game-mode=$GM"
+# GAME MODE: hide the NVIDIA userspace right now, before the auto-relaunched session's Steam can open the dead card
+[ "$GM" = 1 ] && /usr/local/sbin/egpu-safe-detach --prep >/dev/null 2>&1
 # 2. wait for the session to come back on the iGPU (KWin exit -> autologin relaunch), up to 90s  [desktop only]
 [ "$GM" = 0 ] && \
 for _ in $(seq 1 90); do
@@ -45,7 +47,9 @@ for h in /etc/nv-egpu-buddy/hooks.d/pre-unload/*; do [ -x "$h" ] && "$h" >/dev/n
 sleep 1
 # pre-removal user processes still holding dmabufs (e.g. a Steam Proton helper) keep NVIDIA-exported buffers -> pin nvidia_drm
 for p in $(pgrep -u 1000); do
-  ps0=$(awk '{print $22}' /proc/$p/stat 2>/dev/null); [ -n "$ps0" ] && [ "$ps0" -lt "$SELF_START" ] || continue   # only processes started before this recovery (10 ms ticks)
+  # the relaunched Game Mode session (systemd restarts it the instant the old one dies, before this script runs) lives in the
+  # session's own cgroup; nothing from the old session can, systemd killed that cgroup. Never touch it.
+  [ "$GM" = 1 ] && grep -qE 'gamescope-session\.service|steam-launcher\.service|app-.*steam' /proc/$p/cgroup 2>/dev/null && continue
   ls -l /proc/$p/fd 2>/dev/null | grep -qE 'dmabuf|sync_file' || continue
   case "$(cat /proc/$p/comm 2>/dev/null)" in kwin_wayland|Xwayland|plasmashell|pipewire*|wireplumber|systemd*) ;; *) kill -9 "$p" 2>/dev/null; log "killed pre-removal dmabuf holder $p ($(cat /proc/$p/comm 2>/dev/null))";; esac
 done
@@ -53,7 +57,6 @@ done
 # hide the NVIDIA userspace (as the safe detach does) so the relaunched Steam cannot open the dead card and pin the
 # modules, then restart the session on the panel. Was after the unload loop (up to 60 s of dark screen; 20 s on 2026-09-11).
 if [ "$GM" = 1 ]; then
-  /usr/local/sbin/egpu-safe-detach --prep >/dev/null 2>&1
   st=$(runuser -u deck -- env $RUNENV systemctl --user show gamescope-session.service -p ActiveState --value 2>/dev/null)
   case "$st" in
     active|activating) log "gamescope-session is relaunching by itself ($st); not restarting it" ;;
