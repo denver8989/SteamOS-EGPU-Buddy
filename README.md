@@ -51,7 +51,7 @@ With no eGPU connected at install time the installer cannot know the vendor and 
 NVIDIA eGPU's first connection without it is the dangerous case and an unused package is not.
 
 `egpu-detect --device` names the device profile: `legion-go-2` for the tested handheld, `generic` for everything else.
-Fixes that only make sense on one machine (such as the Legion Go 2 standby wake fix) are gated on it.
+Fixes that only make sense on one machine are gated on it (none shipped yet).
 
 The new code detects the GPUs, DRM cards, panel connector and desktop user instead of assuming this handheld's, so it
 is meant to carry over to other handhelds and laptops with an AMD built-in GPU. The older NVIDIA scripts still contain
