@@ -208,12 +208,16 @@ wait_for_egpu_native_ready() {
       log "waiting up to ${EGPU_WAIT_SECONDS}s for NVIDIA-native Game Mode routing"
       announced=1
     fi
+    if [ "$requested" -eq 1 ] && ! egpu_pci_present; then
+      log "eGPU left the bus while waiting (surprise removal): handheld routing now"
+      break
+    fi
     sleep 1
     elapsed=$((elapsed + 1))
   done
 
   refresh_egpu_state
-  if [ "$requested" -eq 1 ]; then
+  if [ "$requested" -eq 1 ] && [ "$elapsed" -ge "$EGPU_WAIT_SECONDS" ]; then
     log "eGPU wait timed out; falling back to handheld gamescope routing"
   fi
   if ! lspci -Dn 2>/dev/null | grep -qE '0300: 10de:'; then
@@ -446,6 +450,8 @@ outputs=
 bar1_bytes=0
 stock_session="$STOCK_GAMESCOPE_SESSION"
 
+# which session type is running: read by egpu-surprise-recover (gamescope itself dies with the card, so it cannot be asked)
+printf gamemode > "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-session-type" 2>/dev/null || true
 wait_for_egpu_native_ready || refresh_egpu_state
 
 # NV-EGPU-Buddy safe detach (Game Mode): while the marker exists the relaunched session must NOT take the eGPU
