@@ -67,7 +67,10 @@ if [ "$MODE" = install ] && command -v pacman-key >/dev/null 2>&1 && ! sudo pacm
   say "== initialising the pacman keyring (first package operation on this system)"
   { sudo pacman-key --init && sudo pacman-key --populate; } >/dev/null 2>&1 || echo "warning: could not initialise the pacman keyring; package steps will fail"
 fi
-if ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
+# When the patched driver is part of this install, its step brings the matching userspace itself. Installing the
+# distro's NVIDIA packages first would only fetch a different version (SteamOS 3.8: 575.64.05, ~1.4 GB) and start a
+# DKMS build of it, to be replaced minutes later.
+if ! want driver && ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "NVIDIA packages are missing. Install nvidia-open-dkms + nvidia-utils now with pacman? [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== installing nvidia-open-dkms nvidia-utils lib32-nvidia-utils"; sudo pacman -S --needed --noconfirm nvidia-open-dkms nvidia-utils lib32-nvidia-utils || echo "warning: NVIDIA package install failed; install them by hand"; else echo "warning: no nvidia-smi; install nvidia-open-dkms + nvidia-utils before plugging the eGPU in"; fi
 fi
