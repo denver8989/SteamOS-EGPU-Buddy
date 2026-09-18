@@ -46,6 +46,15 @@ for p in $(pgrep -u 1000); do
   ls -l /proc/$p/fd 2>/dev/null | grep -qE 'dmabuf|sync_file' || continue
   case "$(cat /proc/$p/comm 2>/dev/null)" in kwin_wayland|Xwayland|plasmashell|pipewire*|wireplumber|systemd*) ;; *) kill -9 "$p" 2>/dev/null; log "killed pre-removal dmabuf holder $p ($(cat /proc/$p/comm 2>/dev/null))";; esac
 done
+# 3a. GAME MODE: gamescope (on the removed card) is dead or dying. Bring the picture back first and unload behind it:
+# hide the NVIDIA userspace (as the safe detach does) so the relaunched Steam cannot open the dead card and pin the
+# modules, then restart the session on the panel. Was after the unload loop (up to 60 s of dark screen; 20 s on 2026-09-11).
+if [ "$GM" = 1 ]; then
+  /usr/local/sbin/egpu-safe-detach --prep >/dev/null 2>&1
+  runuser -u deck -- env $RUNENV systemctl --user reset-failed gamescope-session.service gamescope-session.target 2>/dev/null
+  runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+  log "gamescope-session restart issued (panel) before the driver unload"
+fi
 for _ in $(seq 1 20); do
   modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia 2>/dev/null
   lsmod | grep -q '^nvidia' || break
@@ -56,16 +65,12 @@ for _ in $(seq 1 20); do
   sleep 3
 done
 log "nvidia modules left: $(lsmod | grep '^nvidia' | awk '{print $1"="$3}' | tr '\n' ' ')"
-# 3b. GAME MODE: gamescope (on the NVIDIA card) is dead or dying -> restart it on the handheld panel
-if [ "$GM" = 1 ]; then
-  runuser -u deck -- env $RUNENV systemctl --user reset-failed gamescope-session.service gamescope-session.target 2>/dev/null
-  runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
-  log "gamescope-session restart issued (panel)"
-fi
+[ "$GM" = 1 ] && /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1   # userspace back for the next attach
 # 4. DPC containment on the USB4 root ports would block the next link-up -> clear (hotplug-mount's lever)
 eval "$(sed -n '/^clear_dpc(){/,/^}/p' /usr/local/sbin/egpu-hotplug-mount.sh)"; clear_dpc 2>/dev/null; log "DPC cleared"
 # 4b. the relaunched session has a new Xwayland: republish DISPLAY/XAUTHORITY (else "Unable to open a connection to X")
-for _ in $(seq 1 30); do pgrep -x Xwayland >/dev/null && pgrep -x plasmashell >/dev/null && break; sleep 2; done; sleep 3
+if [ "$GM" = 1 ]; then for _ in $(seq 1 30); do pgrep -x 'gamescope(-wl)?' >/dev/null && pgrep -x steam >/dev/null && break; sleep 2; done
+else for _ in $(seq 1 30); do pgrep -x Xwayland >/dev/null && pgrep -x plasmashell >/dev/null && break; sleep 2; done; sleep 3; fi
 /usr/local/sbin/egpu-republish-display >/dev/null 2>&1 || true
 # 5. internal panel back on + failover watcher promotes eDP-1; audio to internal
 /usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
