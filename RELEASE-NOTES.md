@@ -31,9 +31,12 @@ older build. Not offered by the updater unless you pick it yourself.
 - **Going back.** Setup → "Install another version" lists every published release (betas marked) and installs the one
   you pick, system files and plugin together, then holds it: nothing updates it until you say so.
 - New code detects GPUs, DRM cards, the panel connector and the desktop user instead of assuming the Legion Go 2.
-- (beta3, corrected) A Legion Go 2 standby wake rule shipped in beta1/beta2 is withdrawn: not an eGPU matter.
 - **Device profile.** `egpu-detect --device` reports `legion-go-2` (the tested machine) or `generic`. Device-specific
   fixes are gated on it; other hardware only gets detected, generic behaviour.
+- **Legion Go 2: standby that ended by itself.** The detachable controllers re-enumerate on the internal USB controller
+  as the machine suspends and woke it seconds later (it then stayed awake until the battery was empty). Wake from that
+  one controller is now disabled, on the Legion Go 2 only (DMI match). The power button still wakes it; the controller
+  buttons no longer do. Not yet confirmed over a real standby.
 - The panel-off helper resolves the panel's own DRM card when two GPUs share a driver.
 
 0.7.12 — one version, every build kept, credits completed.

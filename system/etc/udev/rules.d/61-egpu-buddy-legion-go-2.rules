@@ -1,0 +1,4 @@
+# SteamOS EGPU Buddy — Legion Go 2 only (matched by DMI; does nothing on any other machine).
+# The detachable controllers re-enumerate on the internal xHCI as the machine suspends and wake it again seconds later
+# (seen 2026-09-17: 22 s of standby, then awake until the battery was empty). Wake stays on the power button.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{[dmi/id]product_family}=="Legion Go 8ASP2", ATTR{vendor}=="0x1022", ATTR{device}=="0x151f", KERNEL=="0000:c4:00.0", ATTR{power/wakeup}="disabled"
