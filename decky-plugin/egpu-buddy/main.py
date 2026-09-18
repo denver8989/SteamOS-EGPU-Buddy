@@ -443,7 +443,7 @@ class Plugin:
                 "cmdline_missing": out.replace("missing kernel parameters: ", "") if rc != 0 else "",
                 "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
                 "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "progress": _setup["progress"],
-                "can_build_driver": bool(shutil.which("pacman")), "log": tail}
+                "can_build_driver": bool(shutil.which("pacman")), "slow_build": bool(shutil.which("steamos-readonly")), "log": tail}
 
     async def apply_kernel_cmdline(self):
         rc, out, err = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--apply"], 120)

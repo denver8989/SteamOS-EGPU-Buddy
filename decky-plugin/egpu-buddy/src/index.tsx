@@ -18,7 +18,7 @@ const safeDetach = callable<[], Result>("safe_detach");
 const setPowerLimit = callable<[number], Result>("set_power_limit");
 const setCoreOffset = callable<[number], Result>("set_core_offset");
 const resetClocks = callable<[], Result>("reset_clocks");
-type Setup = { untested?: string; accepted_untested?: boolean; installed_version: string; payload_version: string; needs_reboot: boolean; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
+type Setup = { slow_build?: boolean; untested?: string; accepted_untested?: boolean; installed_version: string; payload_version: string; needs_reboot: boolean; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
 const getSetup = callable<[], Setup>("get_setup_status");
 const acceptUntested = callable<[], Result>("accept_untested");
 const installSystem = callable<[boolean], Result>("install_system");
@@ -99,12 +99,12 @@ function Content() {
           {su?.unsupported && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>{su.unsupported}</div></PanelSectionRow>}
           {su && !su.unsupported && (!su.helpers_present || su.installed_version !== su.payload_version) && !su.busy && su.rc !== 0 && (
             <>
-              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version && !su.helpers_present ? `The system integration (${su.installed_version}) is missing after an OS update.` : su.installed_version ? `Version ${su.installed_version} is installed; this plugin is ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept. Several minutes.</div></PanelSectionRow>
+              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version && !su.helpers_present ? `The system integration (${su.installed_version}) is missing after an OS update.` : su.installed_version ? `Version ${su.installed_version} is installed; this plugin is ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept. {su?.slow_build ? "On SteamOS the driver is built on /home and merged as a system extension: 15-20 minutes the first time, the system partition is not touched." : "Several minutes."}</div></PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => installClick()}>{su.installed_version && !su.helpers_present ? "Repair system integration" : su.installed_version ? "Update system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>
             </>
           )}
-          {up?.available && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Update {up.available} is available{up.auto_update ? " and will install automatically when no game is running" : ""}.</div></PanelSectionRow>}
-          {up?.available && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => run(() => checkUpdate(true))}>Update now to {up.available}</ButtonItem></PanelSectionRow>}
+          {up?.available && up.available !== PLUGIN_VERSION && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Update {up.available} is available{up.auto_update ? " and will install automatically when no game is running" : ""}.</div></PanelSectionRow>}
+          {up?.available && up.available !== PLUGIN_VERSION && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => run(() => checkUpdate(true))}>Update now to {up.available}</ButtonItem></PanelSectionRow>}
           {up?.state && <PanelSectionRow><div style={{ fontSize: "12px", color: up.state.includes("failed") ? "#ff6b6b" : "#4caf50" }}>{up.state}</div></PanelSectionRow>}
           {su?.busy && <PanelSectionRow><Progress pct={su.progress} title={(su.step.startsWith("update") || up?.state.startsWith("installing")) ? "Updating" : "Installing"} step={su.step} /></PanelSectionRow>}
           {su && !su.busy && su.rc === 0 && (
