@@ -57,12 +57,10 @@ corruption and page-flip timeouts. We call it the AMD crosstalk.
 
 **How it is circumvented: the docked session runs NVIDIA-only.**
 
-1. `egpu-hotplug-mount.sh` bind-mounts a file containing `1` over the eGPU's read-only `boot_vga` sysfs flag and
-   `0` over the iGPU's, so every compositor picks the NVIDIA card as primary. (Same trick as all-ways-egpu method 2.)
-2. The compositor is told to open only the NVIDIA card: `KWIN_DRM_DEVICES=/dev/dri/<nvidia card>` and
+1. The compositor is told to open only the NVIDIA card: `KWIN_DRM_DEVICES=/dev/dri/<nvidia card>` and
    `KWIN_RENDER_NODES` for KWin; `OUTPUT_CONNECTOR=<eGPU DP>,*,eDP-1` for gamescope, so Game Mode composites on
    the eGPU and scans out on the eGPU's own connector.
-3. Rendering is pinned to NVIDIA for everything in the session: `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` point at
+2. Rendering is pinned to NVIDIA for everything in the session: `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` point at
    `nvidia_icd.json`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, `__EGL_VENDOR_LIBRARY_FILENAMES` at the NVIDIA vendor
    file, `PROTON_HIDE_NVIDIA_GPU=0`, NVAPI on. Games never touch the iGPU.
 4. A hot plug after login cannot re-route a running compositor, so the tool restarts the session: in Game Mode
@@ -300,9 +298,11 @@ say where it came from. The same list is kept in [CREDITS.md](CREDITS.md) and sh
   around the same approach (udev-driven attach, setpci ASPM/link control, boltctl authorization, P0 lock) for Blackwell
   eGPUs; not used here, listed because the approach is the same lineage.
 - **ewagner12 — [all-ways-egpu](https://github.com/ewagner12/all-ways-egpu)** (MIT) — the `boot_vga` bind-mount
-  technique (its "Method 2") is reimplemented in `egpu-hotplug-mount.sh` so that compositors pick the eGPU as primary;
-  no code was copied, the idea and the file layout (a `0`/`1` file bind-mounted over the sysfs flag, a list of mounted
-  paths for cleanup) are his.
+  technique (its "Method 2") is reimplemented in the experimental non-NVIDIA path of the 0.8.0 betas so that
+  compositors pick a Mesa eGPU as primary; no code was copied, the idea and the file layout (a `0`/`1` file
+  bind-mounted over the sysfs flag, a list of mounted paths for cleanup) are his. Correction (0.7.14): this release
+  was documented as using it too, but its copy of the step had never actually executed (a scripting error); the
+  NVIDIA-only session rests on the KWin / gamescope device pinning alone, and the dead step was removed.
 - The PCIe DPC handling (clearing the containment trigger so the second USB4 port forms its tunnel, re-arming it before
   the driver loads), freeing the enclosure's empty Thunderbolt sibling ports so the 16 GB BAR fits, and the flood lockout
   that breaks a reboot loop were worked out on this machine.

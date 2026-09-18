@@ -1,3 +1,13 @@
+0.7.14 — two attach fixes found while testing on the eGPU.
+
+- **Panel stayed on next to the eGPU display after an automatic hot-plug (Desktop).** The attach script's panel-off
+  step ran as a background job; the script is a transient systemd service, and when its main process exited systemd
+  killed the job. It had only ever completed when the script was run by hand. The script now waits for it.
+- **The boot_vga step in the attach never ran.** Its functions were defined after the script's `exit`, so the call
+  failed silently every time since August. The NVIDIA-only session works on the compositor device pinning alone, so
+  the dead step was removed rather than switched on; README and credits corrected (all-ways-egpu's technique is now
+  used only by the experimental non-NVIDIA path in the 0.8.0 betas).
+
 0.7.13 — hot-plug after a Desktop safe-detach left both screens on (KWin on both GPUs).
 
 - The Desktop safe-detach hides the NVIDIA userspace (Vulkan/EGL ICD files, NVML) so nothing re-opens the card. A
