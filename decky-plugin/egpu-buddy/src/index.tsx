@@ -30,7 +30,7 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 
-const PLUGIN_VERSION = "0.7.12";
+const PLUGIN_VERSION = "0.7.13";
 
 const Progress = ({ pct, title, step }: { pct: number; title: string; step: string }) => (
   <div style={{ width: "100%", boxSizing: "border-box", padding: "4px 0" }}>

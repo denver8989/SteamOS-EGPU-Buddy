@@ -100,7 +100,7 @@ const applyCmdline = callable("apply_kernel_cmdline");
 const getUpdate = callable("get_update_status");
 const setAutoUpdate = callable("set_auto_update");
 const checkUpdate = callable("check_update");
-const PLUGIN_VERSION = "0.7.12";
+const PLUGIN_VERSION = "0.7.13";
 const Progress = ({ pct, title, step }) => (SP_JSX.jsxs("div", { style: { width: "100%", boxSizing: "border-box", padding: "4px 0" }, children: [SP_JSX.jsxs("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }, children: [SP_JSX.jsx("span", { children: title }), SP_JSX.jsxs("span", { children: [Math.round(pct), "%"] })] }), SP_JSX.jsx("div", { style: { width: "100%", height: "6px", borderRadius: "3px", background: "rgba(255,255,255,0.15)", overflow: "hidden" }, children: SP_JSX.jsx("div", { style: { width: `${Math.max(0, Math.min(100, pct))}%`, height: "100%", background: "#1a9fff", transition: "width .4s" } }) }), SP_JSX.jsx("div", { style: { fontSize: "11px", opacity: 0.75, marginTop: "4px", whiteSpace: "normal", wordBreak: "break-word" }, children: step.length > 70 ? step.slice(0, 70) + "…" : step })] }));
 const Row = ({ k, v }) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Field, { label: k, focusable: false, bottomSeparator: "none", children: SP_JSX.jsx("span", { style: { fontSize: "12px", wordBreak: "break-all" }, children: v || "—" }) }) }));
 function stateLine(s) {

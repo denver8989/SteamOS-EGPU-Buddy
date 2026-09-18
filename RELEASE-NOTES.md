@@ -1,3 +1,10 @@
+0.7.13 — hot-plug after a Desktop safe-detach left both screens on (KWin on both GPUs).
+
+- The Desktop safe-detach hides the NVIDIA userspace (Vulkan/EGL ICD files, NVML) so nothing re-opens the card. A
+  later hot-plug never un-hid them: the login-time routing script saw them missing, left KWin at its default, and the
+  desktop came back on both GPUs with the handheld screen still on. The attach now restores them before restaging the
+  session. (Seen 2026-09-18; the Reattach button already did this, the automatic hot-plug path did not.)
+
 0.7.12 — one version, every build kept, credits completed.
 
 - The plugin now carries the release version; the first page shows a single "EGPU Buddy 0.7.12" (with "system files
