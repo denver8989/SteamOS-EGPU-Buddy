@@ -1,6 +1,8 @@
 [Unit]
 Description=SteamOS EGPU Buddy: re-apply the eGPU integration after an OS update (script lives in the user home)
 After=local-fs.target
+# SteamOS mounts /home with "nofail": without this the condition below can be evaluated before /home is there
+RequiresMountsFor=/home/deck/.local/share/steamos-egpu-buddy
 Before=egpu-boot-enumerate.service
 ConditionPathExists=/home/deck/.local/share/steamos-egpu-buddy/selfheal.sh
 

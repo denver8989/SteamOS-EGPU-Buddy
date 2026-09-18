@@ -131,8 +131,9 @@ cd '$SYS_TMP'; find . -type f | while read -r f; do d=\"\${f#.}\"; mkdir -p \"\$
 [ -f /etc/sudoers.d/steamos-egpu-buddy ] && { chmod 0440 /etc/sudoers.d/steamos-egpu-buddy; visudo -cf /etc/sudoers.d/steamos-egpu-buddy >/dev/null; }
 chmod 0755 /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* /usr/local/bin/nv-egpu-offset-helper 2>/dev/null || true
 mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/version
-udevadm control --reload; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
-systemctl daemon-reload
+# reloads are conveniences (a reboot applies everything); they have nothing to talk to in a chroot/container
+udevadm control --reload >/dev/null 2>&1 || true; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
+systemctl daemon-reload >/dev/null 2>&1 || true
 for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal egpu-buddy-resume; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
 if [ -f /etc/pacman.conf ]; then
   # pin the NVIDIA userspace to the patched modules' version: append to an existing IgnorePkg line, never replace it
@@ -145,7 +146,7 @@ true
 "
 fi
 rm -rf "$SYS_TMP"
-userctl daemon-reload
+userctl daemon-reload >/dev/null 2>&1 || true   # no user session bus (install at boot, chroot): the next login picks the units up
 want core && { userctl enable egpu-display-failover.service; userctl enable --now egpu-wake-guard.service; } >/dev/null 2>&1 || true
 
 # ---- gamescope with GBM scan-out (NVIDIA scan-out corruption fix) --------------------------------
@@ -187,10 +188,32 @@ if want decky; then
   fi
 fi
 
+# ---- SteamOS: tell the OS updater which of our /etc files to carry over ---------------------------------------------
+# An update keeps /etc/systemd/system/*.service (+ wants) and whatever /etc/atomic-update.conf.d/*.conf lists
+# (/usr/lib/rauc/atomic-update-keep.conf on Valve's image). Everything else in /etc is reset.
+if [ "$MODE" = install ] && [ -d /etc/atomic-update.conf.d ]; then
+  say "== SteamOS: registering the integration's /etc files with the OS updater"
+  sudo tee /etc/atomic-update.conf.d/egpu-buddy.conf >/dev/null <<'KEEP'
+/etc/extensions/**
+/etc/default/grub.d/egpu-buddy.cfg
+/etc/udev/rules.d/*egpu*.rules
+/etc/modprobe.d/*egpu*.conf
+/etc/modules-load.d/egpu-thunderbolt.conf
+/etc/sudoers.d/steamos-egpu-buddy
+/etc/nv-egpu-buddy/**
+/etc/pacman.d/gnupg/**
+KEEP
+fi
+
 # ---- patched NVIDIA driver (optional, Arch-based) ------------------------------------------------
 if want driver; then
   PKGV="$(sed -n 's/^pkgver=//p' "$ROOT/packaging/nvidia-open-egpu/PKGBUILD")-$(sed -n 's/^pkgrel=//p' "$ROOT/packaging/nvidia-open-egpu/PKGBUILD")"
   if command -v pacman >/dev/null && [ "${EGPU_DRIVER_FORCE:-0}" != 1 ] && pacman -Q nvidia-open-egpu-dkms 2>/dev/null | grep -q "$PKGV\$"; then say "== patched driver package $PKGV already installed (EGPU_DRIVER_FORCE=1 to rebuild)"
+  elif command -v steamos-readonly >/dev/null 2>&1; then
+    # SteamOS: the system partition has ~870 MB free (measured on Valve's 3.8.14 image) and an update replaces it, so the
+    # driver goes into a system extension on /home, built in a SteamOS build root there. Nothing is written to /usr.
+    say "== SteamOS: building the patched NVIDIA driver into a system extension on /home (15-20 minutes the first time)"
+    sudo bash "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" || echo "warning: the driver extension was not built (see above); the rest is installed. Do NOT connect the eGPU until it is."
   elif command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
 else
   say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."

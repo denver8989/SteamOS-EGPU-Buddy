@@ -67,6 +67,7 @@ if [ ! -e /run/egpu-rearmed ]; then
 fi
 
 log "=== hotplug-mount triggered ==="
+gate_fail(){ log "NOT attaching: $1"; mkdir -p /run/nvegpu; printf '{"state":"FAILED","message":"%s"}\n' "$1" > /run/nvegpu/gm-status.json; exit 0; }
 # wait for boltd to authorize the dock (udev add fires before authorization)
 dock=""
 for _ in $(seq 1 6); do dock=$(authorized_dock || true); [ -n "$dock" ] && break; sleep 1; done
@@ -94,6 +95,9 @@ if [ -z "$gpu" ]; then
   for _ in $(seq 1 20); do gpu=$(find_gpu || true); [ -n "$gpu" ] && break; sleep 1; done
 fi
 [ -n "$gpu" ] || { log "GPU did not enumerate — exit"; exit 0; }
+# an NVIDIA eGPU is on the bus: only now do the two preconditions matter (a plain Thunderbolt dock must not trip them)
+modinfo -n nvidia >/dev/null 2>&1 || gate_fail "No NVIDIA driver for this kernel yet (after a system update it is rebuilt in the background). Unplug the eGPU and try again later."
+/usr/local/sbin/egpu-kernel-cmdline --check >/dev/null 2>&1 || gate_fail "The eGPU kernel parameters are not active. Reboot once, then plug the eGPU in."
 
 cfg=$(xxd -l4 "/sys/bus/pci/devices/$gpu/config" 2>/dev/null | awk '{print $2$3}')
 if [ "$cfg" = "ffffffff" ] || [ "$(cat /sys/bus/pci/devices/$gpu/current_link_width 2>/dev/null)" = "63" ]; then

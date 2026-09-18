@@ -4,6 +4,29 @@ Everything below was verified on the single machine described in the README (Leg
 5120×1440 DisplayPort monitor, CachyOS Deckify, nvidia-open 610.57.04). "Verified" means it was exercised
 repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing here has been run on a second machine.
 
+## SteamOS: verified in a container built from Valve's image, not on a device (0.7.17)
+
+Test environment: the root filesystem of Valve's `steamdeck-oobe-repair-20260707.10-3.8.14` image, run with
+`systemd-nspawn --read-only`, a writable `/etc` overlay, a separate small `/var`, `/home` and `/usr/local` on their own
+(as SteamOS mounts them), Valve's real `pacman.conf`, repositories and keyrings, no compiler on the host.
+
+| Verified there | Result |
+|---|---|
+| Full `install.sh` as root with the Decky plugin's component list, no prompts | exit 0, "driver 610.57.04 active ... system partition untouched" |
+| pacman keyring initialisation on a stock image | works (this was the first failure on a real Legion Go, SteamOS) |
+| Kernel headers for the exact running kernel (`valve24.4`, while the repository offers `valve24.5`) | fetched from Valve's mirror by version |
+| Patched 610.57.04 modules compiled against Valve's 6.16.12 kernel | `modinfo`: version 610.57.04, matching vermagic, hot-unplug patch strings present |
+| System extension merged into a read-only `/usr` | libraries visible, 102 NVIDIA entries in the loader cache, `modprobe --show-depends nvidia_drm` resolves |
+| Simulated reboot (extension unmerged) -> self-heal | re-activated offline |
+| Simulated kernel change (modules removed) -> boot path | modules rebuilt, driver active |
+| Safe Detach hide/restore on the read-only merged `/usr` | 10 files covered by bind mounts, unreadable to users, restored, no mounts left |
+| OS-update keep-list, GRUB drop-in (as Valve's `grub-mkconfig` sources it) | written; resulting command line contains the parameters |
+| Uninstall | nothing left: extension, build environment, keep-list, drop-in, units, scripts |
+
+**Not verified anywhere:** a real SteamOS device. Unknown until someone runs it there: boot ordering on real hardware,
+GRUB regeneration on the device, a real OS update, loading the modules with an eGPU attached, and everything the
+NVIDIA path does at attach time on a non-Legion-Go-2 machine.
+
 ## Verified
 
 Re-verified on 2026-09-18 (0.7.15), each ending with a game launched and displayed on the eGPU monitor: Safe Detach from

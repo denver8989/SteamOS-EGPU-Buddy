@@ -1,3 +1,23 @@
+0.7.17 — SteamOS: the patched driver without touching the 5 GB system partition; self-healing across OS updates.
+
+- Measured on Valve's SteamOS 3.8.14 image: 870 MB free on the system partition, the tested driver needs 1.5-2.1 GB,
+  `/var` is 256 MB, no compiler, and Arch's 610.57.04 userspace needs `egl-wayland2`, which SteamOS 3.8 lacks. The old
+  approach could not work there. Patching SteamOS's own 575 driver was ruled out: the hot-unplug patches do not apply.
+- New on SteamOS: the same tested 610.57.04 driver is built in a SteamOS build environment on `/home` against the
+  exact running kernel and delivered as a systemd system extension on `/home`; kernel parameters as a GRUB drop-in;
+  the integration's `/etc` files registered with the OS updater; the self-heal service re-activates the extension at
+  boot and rebuilds the modules after an update that brings a new kernel. See README, "Surviving OS updates".
+- **The attach script now refuses to bring the eGPU up when the driver or the kernel parameters are missing** and says
+  so in the plugin (on a complete system both checks pass and nothing changes).
+- The userspace packages are installed as checksum-verified local files instead of by URL (an older keyring does not
+  know newer packagers).
+- Safe Detach hides the NVIDIA userspace with bind mounts where `/usr` is read-only.
+- The plugin runs the installer in its own systemd unit: a Steam or Decky restart no longer kills a long install.
+  Install and uninstall from the plugin need no password.
+- Uninstall also removes the driver extension, the build environment, the keep-list and the GRUB drop-in.
+- The installer no longer treats a failed udev/systemd/user-session reload as fatal (install at boot, chroot).
+- Verified in a container built from Valve's image (TESTED.md). **Not yet run on a real SteamOS device.**
+
 0.7.16 — first real SteamOS install attempt (Legion Go, SteamOS): install failed; fixed. Untested-hardware notice.
 
 - **"Install failed (rc 1)" on SteamOS.** Near its end the installer records the installed NVIDIA package versions for

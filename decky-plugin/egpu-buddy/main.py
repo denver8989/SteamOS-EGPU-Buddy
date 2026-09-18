@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.16"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.17"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -47,7 +47,7 @@ def _latest_release():
     return data.get("tag_name", "").lstrip("v")
 STAGES = (("== preflight", 8), ("== installing user files", 20), ("== installing system files", 40),
           ("== building GBM-scanout gamescope", 55), ("== no build toolchain", 60), ("== installing the EGPU Buddy desktop app", 75),
-          ("== building the patched nvidia-open", 78), ("pinning NVIDIA userspace", 80), ("==> Making package", 82), ("==> Starting build()", 84),
+          ("== building the patched nvidia-open", 78), ("== SteamOS: building the patched NVIDIA driver", 62), ("== creating the build environment", 66), ("== kernel headers:", 72), ("== building the patched NVIDIA", 76), ("== assembling the system extension", 93), ("active for", 96), ("pinning NVIDIA userspace", 80), ("==> Making package", 82), ("==> Starting build()", 84),
           ("==> Entering fakeroot", 88), ("==> Finished making", 90), ("installed: nvidia-open-egpu-dkms", 94), ("== patched driver not installed", 94), ("== writing the kernel parameters", 97), ("== done", 100),
           ("restored ", 50), ("removed  ", 50), ("done. The stock", 100))
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -256,6 +256,12 @@ def _fetch_payload(version=None):
 
 def _run_logged(cmd, env, cwd):
     """Run the installer, stream its output into the log, and turn its stage lines into progress."""
+    # Run the installer in its OWN transient systemd unit: on SteamOS the driver build takes 15-20 minutes, and as a child
+    # of Decky it would die with any Decky/Steam restart. --pipe keeps the output streaming back for the progress bar.
+    if shutil.which("systemd-run"):
+        keep = [f"--setenv={k}={v}" for k, v in env.items() if k.startswith("EGPU_") or k in ("HOME", "PATH", "STOCK_GAMESCOPE_SESSION")]
+        cmd = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", f"--unit=egpu-buddy-setup-{int(time.time())}",
+               f"--working-directory={cwd}", "--property=TimeoutStartSec=7200", *keep, *cmd]
     with open(SETUP_LOG, "a") as log:
         pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd, text=True)
         for line in pr.stdout:

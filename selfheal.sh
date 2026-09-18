@@ -23,15 +23,27 @@ if [ $need = 1 ]; then
     EGPU_ACCEPT_UNTESTED=1 bash "$HERE/install.sh" >/tmp/egpu-buddy-selfheal.log 2>&1 && log "repair done" || log "repair reported errors (see /tmp/egpu-buddy-selfheal.log)"
   [ -n "$ro" ] && $ro enable >/dev/null 2>&1
 fi
+# SteamOS: the driver is a system extension on /home (the 5 GB system partition cannot hold it). Re-activate it now;
+# when the OS update brought a new kernel, rebuild the modules for it in the background (needs the network, minutes).
+SX="$HERE/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
+if [ -n "$ro" ] && [ -x "$SX" ] && [ -d /home/.egpu-buddy ]; then
+  if bash "$SX" --activate >>/tmp/egpu-buddy-selfheal.log 2>&1; then log "driver extension active"
+  else
+    log "driver extension has no modules for $(uname -r): rebuilding in the background"
+    systemd-run --quiet --collect --unit=egpu-buddy-driver-build --property=TimeoutStartSec=5400 /bin/bash -c \
+      "for i in \$(seq 1 40); do curl -fsI --max-time 8 https://steamdeck-packages.steamos.cloud/ >/dev/null 2>&1 && break; sleep 30; done; bash '$SX' --boot >>/tmp/egpu-buddy-selfheal.log 2>&1" \
+      || log "could not start the background rebuild"
+  fi
+fi
 # patched driver package: restore from cache (done above) or rebuild from the payload's PKGBUILD (source cached)
-if command -v pacman >/dev/null 2>&1 && ! pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1 && [ -x "$HERE/packaging/nvidia-open-egpu/install-patched-nvidia.sh" ] && [ -f "/usr/lib/modules/$(uname -r)/build/Makefile" ]; then
+if [ -z "$ro" ] && command -v pacman >/dev/null 2>&1 && ! pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1 && [ -x "$HERE/packaging/nvidia-open-egpu/install-patched-nvidia.sh" ] && [ -f "/usr/lib/modules/$(uname -r)/build/Makefile" ]; then
   log "patched driver package missing: rebuilding from the payload"; [ -n "$ro" ] && $ro disable >/dev/null 2>&1
   EGPU_TARGET_USER=$USER_NAME bash "$HERE/packaging/nvidia-open-egpu/install-patched-nvidia.sh" >>/tmp/egpu-buddy-selfheal.log 2>&1 && log "driver package rebuilt" || log "driver rebuild failed (see /tmp/egpu-buddy-selfheal.log)"
   [ -n "$ro" ] && $ro enable >/dev/null 2>&1
 fi
 # kernel modules for the running kernel: DKMS rebuild if possible, else the cached modules of this exact kernel
 K=$(uname -r)
-if ! modinfo -n nvidia >/dev/null 2>&1 || [ ! -f "/usr/lib/modules/$K/updates/dkms/nvidia.ko.zst" ]; then
+if [ -z "$ro" ] && { ! modinfo -n nvidia >/dev/null 2>&1 || [ ! -f "/usr/lib/modules/$K/updates/dkms/nvidia.ko.zst" ]; }; then   # not on SteamOS: the extension carries the modules
   if command -v dkms >/dev/null 2>&1 && [ -f "/usr/lib/modules/$K/build/Makefile" ]; then
     log "no patched modules for $K: dkms autoinstall"; [ -n "$ro" ] && $ro disable >/dev/null 2>&1; dkms autoinstall -k "$K" >/dev/null 2>&1 && log "dkms built for $K" || log "dkms build failed for $K"; [ -n "$ro" ] && $ro enable >/dev/null 2>&1
   elif [ -d "$HERE/modcache/$K" ]; then

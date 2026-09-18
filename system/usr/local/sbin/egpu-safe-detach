@@ -23,14 +23,18 @@ HIDE_LIST="/usr/lib/libnvidia-ml.so.1 /usr/lib/libnvidia-ml.so.610.57.04 /usr/li
 nv_drm_nodes(){ g=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$g" ] || return 0
   for n in /sys/class/drm/card[0-9]* /sys/class/drm/renderD*; do [ "$(basename "$(readlink -f "$n/device" 2>/dev/null)")" = "$g" ] && echo "/dev/dri/$(basename "$n")"; done; }
 panel_bl(){ for b in /sys/class/backlight/*; do echo "$1" > "$b/bl_power" 2>/dev/null; done; }
-# SteamOS keeps / read-only; the files hidden/restored below live under /usr. Make it writable only for that moment and
-# put it back the way it was (steamos-readonly status: exit 0 = read-only). No-op everywhere else.
-rw_begin(){ RO_WAS=0; if command -v steamos-readonly >/dev/null 2>&1 && steamos-readonly status >/dev/null 2>&1; then steamos-readonly disable >/dev/null 2>&1 && RO_WAS=1; fi; }
-rw_end(){ [ "${RO_WAS:-0}" = 1 ] && steamos-readonly enable >/dev/null 2>&1; RO_WAS=0; return 0; }
-hide_nv(){ rw_begin; panel_bl 0; /usr/local/sbin/egpu-panel on >/dev/null 2>&1; for f in $HIDE_LIST; do [ -e "$f" ] && mv -f "$f" "$f.egpu-off"; done; ldconfig 2>/dev/null
-  rw_end; }
-restore_nv(){ rw_begin; for f in $HIDE_LIST; do [ -e "$f.egpu-off" ] && mv -f "$f.egpu-off" "$f"; done; ldconfig 2>/dev/null
-  for d in $(nv_drm_nodes); do case "$d" in */card*) chmod 660 "$d"; chgrp video "$d" ;; *) chmod 666 "$d";; esac; done 2>/dev/null; rw_end; }
+# Hiding = renaming the file. Where /usr cannot be written (SteamOS: the driver is a read-only system extension merged
+# into /usr) the file is covered with a bind mount of an empty, unreadable file instead: same effect for every loader
+# ("not readable" / "not a library"), nothing on disk changes, and it is undone with umount.
+HID=/run/nvegpu/hidden-file; BINDS=/run/nvegpu/bind-hidden
+hide_one(){ mv -f "$1" "$1.egpu-off" 2>/dev/null && return 0
+  mkdir -p /run/nvegpu; [ -e $HID ] || { : > $HID; chmod 000 $HID; }
+  mount --bind $HID "$1" 2>/dev/null && echo "$1" >> $BINDS; }
+unhide_all(){ [ -r $BINDS ] && { tac $BINDS | while read -r b; do [ -n "$b" ] && umount "$b" 2>/dev/null; done; rm -f $BINDS; }; return 0; }
+hide_nv(){ panel_bl 0; /usr/local/sbin/egpu-panel on >/dev/null 2>&1; for f in $HIDE_LIST; do [ -e "$f" ] && hide_one "$f"; done; ldconfig 2>/dev/null
+  : ; }
+restore_nv(){ unhide_all; for f in $HIDE_LIST; do [ -e "$f.egpu-off" ] && mv -f "$f.egpu-off" "$f"; done; ldconfig 2>/dev/null
+  for d in $(nv_drm_nodes); do case "$d" in */card*) chmod 660 "$d"; chgrp video "$d" ;; *) chmod 666 "$d";; esac; done 2>/dev/null; }
 case "${1:-}" in
   --prep)    [ "$(id -u)" = 0 ] || exit 1; hide_nv; echo "nvidia userspace hidden"; exit 0 ;;
   --restore) [ "$(id -u)" = 0 ] || exit 1; restore_nv; echo "nvidia userspace restored"; exit 0 ;;

@@ -106,16 +106,36 @@ not the default.
 - If a new kernel refuses to build the pinned 610.57.04 modules, hold the kernel (`IgnorePkg`) until a release
   with a newer driver exists; `dkms status` and the system journal (`egpu-buddy-post-upgrade`) tell you.
 
-**SteamOS (experimental, self-healing).** SteamOS A/B updates replace `/usr` wholesale, which takes `/usr/local`
-and every pacman-installed package with it, while `/etc` and `/home` persist. So the install keeps a complete copy of
-the release under `~/.local/share/steamos-egpu-buddy`, together with a cache of the pacman packages it installed and
-of the patched kernel modules for the running kernel, and enables `egpu-buddy-selfheal.service`: a unit in `/etc`
-whose script lives in that home directory. At every boot it checks the root-side integration and, after an update
-has wiped it, re-applies it from the copy, restores the cached packages, rebuilds the driver with DKMS if the new
-kernel's headers exist or restores the cached modules if the kernel is unchanged, re-applies the kernel parameters,
-and logs what it could not do (a new kernel without headers means no eGPU until a release with modules for it). The
-plugin's first page shows **Repair system integration** for the same job on demand. None of this has been exercised
-on a real SteamOS update yet.
+**SteamOS (experimental, self-healing).** The facts this is built on were read from Valve's own SteamOS 3.8.14
+image: the system partition is a fixed 5 GB with about 870 MB free, `/var` is a 256 MB partition, there is no compiler,
+an OS update replaces `/usr` wholesale, `/usr/local` and `/home` persist, and of `/etc` an update keeps the systemd
+units plus whatever `/etc/atomic-update.conf.d/*.conf` lists. The tested NVIDIA driver needs 1.5-2.1 GB, so on SteamOS
+**nothing is installed into the system partition**:
+
+- The driver is the same patched 610.57.04 as everywhere else. It is built inside a small SteamOS build environment
+  on `/home` (Valve's own repositories and keyring), against the headers of the *exact* running kernel (fetched from
+  Valve's mirror by version, because the repository database moves on while devices stay on older builds).
+- The NVIDIA userspace, the few EGL packages SteamOS lacks and the built modules are collected into a **systemd system
+  extension** on `/home` (`/home/.egpu-buddy`), which systemd merges into `/usr` (SteamOS enables `systemd-sysext` by
+  default). Module dependency data is generated into the extension, so `modprobe` works as usual.
+- The kernel parameters go into `/etc/default/grub.d/egpu-buddy.cfg` (Valve's `grub-mkconfig` reads that directory)
+  rather than into `/etc/default/grub`, which an update replaces.
+- The integration's `/etc` files are registered in `/etc/atomic-update.conf.d/egpu-buddy.conf` so an update carries
+  them over.
+- `egpu-buddy-selfheal.service` (kept by updates) re-activates the extension at every boot and, when an update
+  brought a **new kernel**, rebuilds the modules for it in the background. Until that is done the attach script
+  **refuses to bring the eGPU up** (no driver, or kernel parameters not active) and says so in the plugin, instead of
+  risking the unprotected first connection.
+- Safe Detach hides the NVIDIA userspace with bind mounts where `/usr` cannot be written.
+- From the Decky plugin all of this runs as root without a password, in its own systemd unit (a Steam or Decky
+  restart does not interrupt the 15-20 minute first build). **Uninstall** removes the extension, the build
+  environment, the keep-list and the GRUB drop-in.
+
+How far this is verified: the complete install, the boot-time re-activation, a simulated kernel change, Safe Detach's
+hide/restore and the uninstall were run inside a container made from Valve's 3.8.14 image with a read-only system,
+a separate small `/var` and `/home` (see `TESTED.md`). **It has not yet run on a real SteamOS device**: real boot
+ordering, the GRUB regeneration on the device, an actual OS update and loading the modules on a real eGPU are
+unconfirmed. The plugin's first page shows **Repair system integration** for the self-heal job on demand.
 
 **Bazzite (rpm-ostree): untested.** `/usr/local` and `/etc` persist there, kernel parameters go through
 `rpm-ostree kargs` (handled), but the patched driver is an Arch package and cannot be layered, so a cable yank may

@@ -26,7 +26,15 @@ elif [ -f /etc/default/limine ]; then                                 # CachyOS 
   cur=$(sed -n 's/^KERNEL_CMDLINE\[default\]="\(.*\)"$/\1/p' /etc/default/limine | head -1); new=$(merge "$cur")
   edit /etc/default/limine "s|^KERNEL_CMDLINE\[default\]=\".*\"|KERNEL_CMDLINE[default]=\"$new\"|" && did=1
   [ $DRY = 1 ] || { command -v limine-update >/dev/null && limine-update >/dev/null 2>&1 && echo "limine-update done" || echo "run limine-update (or regenerate your Limine entries) to apply"; }
-elif [ -f /etc/default/grub ]; then                                   # GRUB (Arch, SteamOS)
+elif [ -f /etc/default/grub ] && command -v steamos-readonly >/dev/null 2>&1; then   # SteamOS: GRUB drop-in
+  # An OS update replaces /etc/default/grub, but grub-mkconfig also reads /etc/default/grub.d/*.cfg and SteamOS keeps
+  # files listed in /etc/atomic-update.conf.d across updates (install.sh lists this one). Verified on the 3.8.14 image.
+  d=/etc/default/grub.d/egpu-buddy.cfg
+  if [ $DRY = 1 ]; then echo "would write $d"; else mkdir -p /etc/default/grub.d
+    printf '# SteamOS EGPU Buddy: kernel parameters the eGPU path needs (kept across OS updates)\nGRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} %s"\n' "$WANT" > "$d"; echo "wrote $d"; did=1; fi
+  cfg=$(ls /efi/EFI/steamos/grub.cfg /boot/efi/EFI/steamos/grub.cfg /boot/grub/grub.cfg 2>/dev/null | head -1)
+  [ $DRY = 1 ] || { [ -n "$cfg" ] && grub-mkconfig -o "$cfg" >/dev/null 2>&1 && echo "grub config regenerated: $cfg" || echo "could not regenerate the GRUB config; run: sudo update-grub"; }
+elif [ -f /etc/default/grub ]; then                                   # GRUB (Arch)
   cur=$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' /etc/default/grub | head -1); new=$(merge "$cur")
   edit /etc/default/grub "s|^GRUB_CMDLINE_LINUX_DEFAULT=\".*\"|GRUB_CMDLINE_LINUX_DEFAULT=\"$new\"|" && did=1
   cfg=$(ls /boot/grub/grub.cfg /boot/efi/EFI/*/grub.cfg /boot/grub2/grub.cfg 2>/dev/null | head -1)
