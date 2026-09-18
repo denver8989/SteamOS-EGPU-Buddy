@@ -203,6 +203,9 @@ pin_link_speed(){
 }
 pin_link_speed "$gpu"
 
+# a Desktop safe-detach hides the NVIDIA userspace (ICD/EGL json, NVML) so nothing re-opens the card; a later hot-plug
+# must un-hide it before the session is restaged, or the login env script leaves KWin on both GPUs (seen 2026-09-18)
+/usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1 || true
 log "GPU $gpu healthy (cfg=$cfg) — load driver + display stack"
 "$PRIV" load-nvidia >/dev/null 2>&1 || true
 [ -L "$GDEV/driver" ] || "$PRIV" bind-nvidia >/dev/null 2>&1 || true
