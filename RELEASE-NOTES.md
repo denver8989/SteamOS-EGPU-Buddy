@@ -1,3 +1,18 @@
+0.7.19 — plugin: a calm first page; the disclaimer is a dialog, not a banner.
+
+- The first page shows the eGPU state and the controls. When something needs you there is one short neutral line and
+  one button; the explanation is in the dialog that opens. No coloured paragraphs; colour is kept for a failure and for
+  the live attach/detach status.
+- The untested-hardware notice is a dialog that must be accepted once, before the first install **or update**, also
+  on a machine where an earlier partial install had let it slip past. It no longer sits on the first page; the Setup
+  page keeps the note, together with the kernel-parameter details.
+- One button per job: the separate "Update now" pair only appears when a newer release exists (it used to show next to
+  "Update system integration" for the same version).
+- On SteamOS the dialog states the real duration (15-20 minutes the first time).
+- With automatic updates switched on, untested hardware still never installs in the background before the notice was
+  accepted.
+- Each release page now carries only its own notes (all existing pages were rewritten accordingly).
+
 0.7.18 — updates are opt-in, and the update controls are where you can find them.
 
 - **Automatic updates are off by default.** A new release is announced on the first page with an Update button; it

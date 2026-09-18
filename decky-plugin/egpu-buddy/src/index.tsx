@@ -31,7 +31,7 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 
-const PLUGIN_VERSION = "0.7.18";
+const PLUGIN_VERSION = "0.7.19";
 
 const Progress = ({ pct, title, step }: { pct: number; title: string; step: string }) => (
   <div style={{ width: "100%", boxSizing: "border-box", padding: "4px 0" }}>
@@ -79,11 +79,15 @@ function Content() {
   const plMin = Number(tel["power.min_limit"] ?? 100), plMax = Number(tel["power.max_limit"] ?? 320);
   const plNow = pl ?? Math.round(Number(tel["power.limit"] ?? plMax));
   const controlsOk = !!(s?.present && s?.driver_loaded && s?.on_egpu);
-  const installClick = () => {
-    if (su?.untested && !su.accepted_untested) {
-      showModal(<ConfirmModal strTitle="Not tested on this hardware" strDescription={`${su.untested}\n\nSteamOS EGPU Buddy was verified on one machine only (Legion Go 2 + RTX 5060 Ti on CachyOS). On this system it may not work, may leave the screen dark, or may need a reboot to recover. You install and test it at your own risk.`} strOKButtonText="I accept the risk, install" onOK={() => run(async () => { await acceptUntested(); return installSystem(false); })} />);
-    } else run(() => installSystem(false));
+  const WHAT = "Installs the hot-plug scripts, the Game Mode session, the GBM gamescope, the boot policy, the desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept.";
+  const confirmInstall = (title: string, go: () => Promise<Result>) => {
+    const needAccept = !!(su?.untested && !su.accepted_untested);
+    const time = su?.slow_build ? " On SteamOS the driver is built on /home and merged as a system extension: 15-20 minutes the first time; the system partition is not touched." : " Several minutes.";
+    const disclaimer = needAccept ? `NOT TESTED ON THIS HARDWARE: ${su!.untested!.split("\n").join("; ")}. This project was verified on one machine only (Legion Go 2, RTX 5060 Ti, CachyOS). Here it may not work, may leave the screen dark, or may need a reboot to recover. You install and test it at your own risk.\n\n` : "";
+    showModal(<ConfirmModal strTitle={needAccept ? `${title} (untested hardware)` : title} strDescription={disclaimer + WHAT + time} strOKButtonText={needAccept ? "I accept the risk" : "Continue"}
+      onOK={() => run(async () => { if (needAccept) await acceptUntested(); return go(); })} />);
   };
+  const installClick = () => confirmInstall(su?.installed_version ? "Update the system files" : "Install", () => installSystem(false));
 
   return (
     <>
@@ -95,28 +99,27 @@ function Content() {
       {tab === "main" && (
         <PanelSection title="eGPU">
           <PanelSectionRow><div className={staticClasses.Text}>{s ? stateLine(s) : "Loading…"}</div></PanelSectionRow>
-          {su?.untested && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Untested hardware: {su.untested.split("\n").join("; ")}. Use at your own risk.</div></PanelSectionRow>}
           {su?.unsupported && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>{su.unsupported}</div></PanelSectionRow>}
           {su && !su.unsupported && (!su.helpers_present || su.installed_version !== su.payload_version) && !su.busy && su.rc !== 0 && (
             <>
-              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>{su.installed_version && !su.helpers_present ? `The system integration (${su.installed_version}) is missing after an OS update.` : su.installed_version ? `Version ${su.installed_version} is installed; this plugin is ${su.payload_version}.` : "The eGPU system integration is not installed yet."} One press installs everything: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept. {su?.slow_build ? "On SteamOS the driver is built on /home and merged as a system extension: 15-20 minutes the first time, the system partition is not touched." : "Several minutes."}</div></PanelSectionRow>
+              <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>{su.installed_version && !su.helpers_present ? "System files are missing (OS update)." : su.installed_version ? `System files ${su.installed_version}, plugin ${su.payload_version}.` : "Not installed yet."}</div></PanelSectionRow>
               <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => installClick()}>{su.installed_version && !su.helpers_present ? "Repair system integration" : su.installed_version ? "Update system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>
             </>
           )}
-          {up?.available && up.available !== PLUGIN_VERSION && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Update {up.available} is available{up.auto_update ? " and will install automatically when no game is running" : ""}.</div></PanelSectionRow>}
-          {up?.available && up.available !== PLUGIN_VERSION && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => run(() => checkUpdate(true))}>Update now to {up.available}</ButtonItem></PanelSectionRow>}
-          {up?.state && <PanelSectionRow><div style={{ fontSize: "12px", color: up.state.includes("failed") ? "#ff6b6b" : "#4caf50" }}>{up.state}</div></PanelSectionRow>}
+          {up?.available && up.available !== PLUGIN_VERSION && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Version {up.available} is available.</div></PanelSectionRow>}
+          {up?.available && up.available !== PLUGIN_VERSION && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => confirmInstall(`Update to ${up.available}`, () => checkUpdate(true))}>Update to {up.available}</ButtonItem></PanelSectionRow>}
+          {up?.state && <PanelSectionRow><div style={{ fontSize: "12px", color: up.state.includes("failed") ? "#ff6b6b" : undefined, opacity: up.state.includes("failed") ? 1 : 0.8 }}>{up.state}</div></PanelSectionRow>}
           {su?.busy && <PanelSectionRow><Progress pct={su.progress} title={(su.step.startsWith("update") || up?.state.startsWith("installing")) ? "Updating" : "Installing"} step={su.step} /></PanelSectionRow>}
           {su && !su.busy && su.rc === 0 && (
             <>
               {su.needs_reboot ? (
                 <>
-                  <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. The driver or kernel parameters changed, so a full reboot is needed (with the eGPU disconnected on a first install).</div></PanelSectionRow>
+                  <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installed. Reboot with the eGPU unplugged.</div></PanelSectionRow>
                   <PanelSectionRow><ButtonItem layout="below" onClick={() => run(rebootSystem)}>Reboot the system</ButtonItem></PanelSectionRow>
                 </>
               ) : (
                 <>
-                  <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Installed. No reboot needed: hot-plug scripts are live now; the Game Mode session pieces apply when Game Mode restarts.</div></PanelSectionRow>
+                  <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installed. Restart Game Mode to finish.</div></PanelSectionRow>
                   <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => run(restartGamemode)}>Restart Game Mode now</ButtonItem></PanelSectionRow>
                 </>
               )}
@@ -124,8 +127,8 @@ function Content() {
           )}
           {su && !su.busy && su.helpers_present && su.cmdline_missing && (
             <>
-              <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>Kernel parameters missing: {su.cmdline_missing}. Without them the eGPU can fail to enumerate or crash the boot. One press writes them to the bootloader (backup kept); reboot before plugging the eGPU in.</div></PanelSectionRow>
-              <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(applyCmdline)}>Apply kernel parameters</ButtonItem></PanelSectionRow>
+              <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Kernel parameters not active.</div></PanelSectionRow>
+              <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => showModal(<ConfirmModal strTitle="Kernel parameters" strDescription={`Missing: ${su.cmdline_missing}. Without them the eGPU can fail to enumerate or crash the boot. They are written to the bootloader configuration (backup kept). Reboot afterwards, before plugging the eGPU in.`} strOKButtonText="Apply" onOK={() => run(applyCmdline)} />)}>Apply kernel parameters</ButtonItem></PanelSectionRow>
             </>
           )}
           {su && !su.busy && su.rc !== null && su.rc !== 0 && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>Install failed (rc {su.rc}). Log: /tmp/egpu-buddy-setup.log</div></PanelSectionRow>}
@@ -134,7 +137,7 @@ function Content() {
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy || !s?.game_mode || gameUp || (s?.present && s?.on_egpu)} onClick={() => showModal(<ConfirmModal strTitle="Attach the eGPU" strDescription="Game Mode restarts on the eGPU display: the screen goes dark for a few seconds. When it is back, reopen this menu to see the result." strOKButtonText="Attach" onOK={() => run(() => attach(false))} />)}>Attach eGPU</ButtonItem>
           </PanelSectionRow>
-          {gameUp && s?.game_mode && <PanelSectionRow><div style={{ fontSize: "12px", color: "#f0b429" }}>A game is running. Close it before attaching or detaching (both restart Game Mode).</div></PanelSectionRow>}
+          {gameUp && s?.game_mode && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>A game is running. Close it before attaching or detaching (both restart Game Mode).</div></PanelSectionRow>}
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy || !s?.game_mode || !s?.present || gameUp} onClick={() => showModal(<ConfirmModal strTitle="Safe Detach" strDescription="Game Mode moves to the handheld screen and the eGPU is removed from the bus: the screen goes dark for a few seconds and the monitor loses signal. Do not unplug yet. When the handheld screen is back, reopen this menu: it says when it is safe to unplug the cable." strOKButtonText="Detach" bDestructiveWarning onOK={() => run(safeDetach)} />)}>Safe Detach</ButtonItem>
           </PanelSectionRow>
@@ -192,6 +195,8 @@ function Content() {
           <PanelSectionRow><div style={{ fontSize: "12px" }}>
             {su ? (su.installed_version ? `Installed: ${su.installed_version}` : "Not installed") : "…"}
           </div></PanelSectionRow>
+          {su?.untested && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Hardware: {su.untested.split("\n").join("; ")}. {su.accepted_untested ? "Risk notice accepted." : "Risk notice not accepted yet."}</div></PanelSectionRow>}
+          {su?.cmdline_missing && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Kernel parameters not active: {su.cmdline_missing}</div></PanelSectionRow>}
           <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Reinstalls everything the first page installs. Everything replaced is backed up. The payload ships inside this plugin; the driver build needs the Arch mirrors.</div></PanelSectionRow>
           {su?.busy && <PanelSectionRow><Progress pct={su.progress} title="Installing" step={su.step} /></PanelSectionRow>}
           {su && !su.busy && su.rc !== null && <PanelSectionRow><div style={{ fontSize: "12px", color: su.rc === 0 ? "#4caf50" : "#ff6b6b" }}>{su.rc === 0 ? "Finished. Reboot to activate." : `Failed (rc ${su.rc}); log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}

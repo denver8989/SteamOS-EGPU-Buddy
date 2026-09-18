@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.18"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.19"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -330,8 +330,8 @@ def _untested():
 
 
 def _accepted():
-    """The untested-hardware notice was accepted, or the integration is already installed (accepted at that time)."""
-    return bool(_settings().get("accepted_untested")) or os.path.exists(VERSION_FILE)
+    """The untested-hardware notice was accepted explicitly in the dialog (an old or partial install does not count)."""
+    return bool(_settings().get("accepted_untested"))
 
 
 def _unsupported():
@@ -405,6 +405,8 @@ def _check_update(install=False):
     target = latest if _vt(latest) > _vt(PAYLOAD_VERSION) else PAYLOAD_VERSION
     newer = bool(installed) and _vt(target) > _vt(installed)
     _update["available"] = target if newer else ""
+    if newer and install and _untested() and not _accepted():
+        return   # untested hardware: only the button (with its dialog) installs, never the background check
     if newer and install and not _operation_in_progress() and time.time() - _started > 300:
         _setup.update(busy=True, rc=None, step="update", progress=0)
         try: os.remove(SETUP_LOG)
