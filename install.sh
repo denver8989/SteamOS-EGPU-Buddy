@@ -216,8 +216,8 @@ if want driver; then
   elif command -v steamos-readonly >/dev/null 2>&1; then
     # SteamOS: the system partition has ~870 MB free (measured on Valve's 3.8.14 image) and an update replaces it, so the
     # driver goes into a system extension on /home, built in a SteamOS build root there. Nothing is written to /usr.
-    say "== SteamOS: building the patched NVIDIA driver into a system extension on /home (15-20 minutes the first time)"
-    sudo bash "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" || echo "warning: the driver extension was not built (see above); the rest is installed. Do NOT connect the eGPU until it is."
+    say "== SteamOS: building the patched NVIDIA driver into a system extension on /home (10-20 minutes the first time, mostly downloads)"
+    sudo bash "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" || { DRIVER_FAILED=1; echo "warning: the driver extension was not built (see above); the rest is installed. Do NOT connect the eGPU until it is."; }
   elif command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
 else
   say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
@@ -247,4 +247,6 @@ if [ "${CMDLINE_MISSING:-0}" = 1 ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "Write the missing kernel parameters into the bootloader configuration now? (backup kept) [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== writing the kernel parameters"; sudo /usr/local/sbin/egpu-kernel-cmdline --apply || echo "warning: could not write the kernel parameters; see README 'Kernel command line'"; fi
 fi
+# SteamOS has no NVIDIA driver of its own: without the extension the eGPU cannot work at all, so this is not a "done"
+if [ "${DRIVER_FAILED:-0}" = 1 ]; then say "== NOT finished: the NVIDIA driver was not built. Keep the eGPU unplugged and run the install again (needs internet)."; exit 20; fi
 say "== done. Reboot with the eGPU disconnected, then plug it in. Read TESTED.md before relying on any of this."

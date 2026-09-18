@@ -1,5 +1,5 @@
 import { ButtonItem, ConfirmModal, Field, PanelSection, PanelSectionRow, SliderField, ToggleField, Router, showModal, staticClasses } from "@decky/ui";
-import { callable, definePlugin, useQuickAccessVisible } from "@decky/api";
+import { callable, definePlugin, toaster, useQuickAccessVisible } from "@decky/api";
 import { useEffect, useState, useRef } from "react";
 import { FaPlug } from "react-icons/fa";
 
@@ -18,7 +18,7 @@ const safeDetach = callable<[], Result>("safe_detach");
 const setPowerLimit = callable<[number], Result>("set_power_limit");
 const setCoreOffset = callable<[number], Result>("set_core_offset");
 const resetClocks = callable<[], Result>("reset_clocks");
-type Setup = { slow_build?: boolean; cmdline_pending?: boolean; untested?: string; accepted_untested?: boolean; installed_version: string; payload_version: string; needs_reboot: boolean; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
+type Setup = { started?: number; expect?: string; driver_ready?: boolean; slow_build?: boolean; cmdline_pending?: boolean; untested?: string; accepted_untested?: boolean; installed_version: string; payload_version: string; needs_reboot: boolean; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
 const getSetup = callable<[], Setup>("get_setup_status");
 const acceptUntested = callable<[], Result>("accept_untested");
 const installSystem = callable<[boolean], Result>("install_system");
@@ -29,16 +29,22 @@ type Upd = { auto_update: boolean; available: string; state: string; checked: nu
 const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
+const popNotice = callable<[], string>("pop_notice");
+const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
-const PLUGIN_VERSION = "0.7.20";
+const PLUGIN_VERSION = "0.7.21";
 
-const Progress = ({ pct, title, step }: { pct: number; title: string; step: string }) => (
+const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+// The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
+const Progress = ({ pct, title, step, started, expect }: { pct: number; title: string; step: string; started?: number; expect?: string }) => (
   <div style={{ width: "100%", boxSizing: "border-box", padding: "4px 0" }}>
     <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }}><span>{title}</span><span>{Math.round(pct)}%</span></div>
     <div style={{ width: "100%", height: "6px", borderRadius: "3px", background: "rgba(255,255,255,0.15)", overflow: "hidden" }}>
       <div style={{ width: `${Math.max(0, Math.min(100, pct))}%`, height: "100%", background: "#1a9fff", transition: "width .4s" }} />
     </div>
-    <div style={{ fontSize: "11px", opacity: 0.75, marginTop: "4px", whiteSpace: "normal", wordBreak: "break-word" }}>{step.length > 70 ? step.slice(0, 70) + "…" : step}</div>
+    <div style={{ fontSize: "12px", marginTop: "4px", whiteSpace: "normal" }}>{step}</div>
+    <div style={{ fontSize: "11px", opacity: 0.75, marginTop: "2px", whiteSpace: "normal" }}>{started ? `${mmss(Date.now() / 1000 - started)} elapsed` : ""}{expect ? ` · usually ${expect}` : ""}</div>
+    <div style={{ fontSize: "11px", opacity: 0.75, marginTop: "2px", whiteSpace: "normal" }}>You can close this menu: it continues, and a notification appears when it is done.</div>
   </div>
 );
 
@@ -81,11 +87,16 @@ function Content() {
   const WHAT = "Installs the hot-plug scripts, the Game Mode session, the GBM gamescope, the boot policy, the desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept.";
   const confirmInstall = (title: string, go: () => Promise<Result>) => {
     const needAccept = !!(su?.untested && !su.accepted_untested);
-    const time = su?.slow_build ? " On SteamOS the driver is built on /home and merged as a system extension: 15-20 minutes the first time; the system partition is not touched." : " Several minutes.";
+    const time = ` Expected time: ${su?.expect ?? "several minutes"}.` + (su?.slow_build ? " The driver is built on /home; the system partition is not touched. Keep the charger connected and the eGPU unplugged." : "") + " You can close the menu meanwhile; a notification appears when it is done.";
     const disclaimer = needAccept ? `NOT TESTED ON THIS HARDWARE: ${su!.untested!.split("\n").join("; ")}. This project was verified on one machine only (Legion Go 2, RTX 5060 Ti, CachyOS). Here it may not work, may leave the screen dark, or may need a reboot to recover. You install and test it at your own risk.\n\n` : "";
     showModal(<ConfirmModal strTitle={needAccept ? `${title} (untested hardware)` : title} strDescription={disclaimer + WHAT + time} strOKButtonText={needAccept ? "I accept the risk" : "Continue"}
       onOK={() => run(async () => { if (needAccept) await acceptUntested(); return go(); })} />);
   };
+  // setup state comes from the SYSTEM, not from the last run: it is the same after closing the menu, a Decky restart or a reboot
+  const driverMissing = !!(su?.slow_build && su.installed_version && su.helpers_present && su.driver_ready === false);
+  const behind = !!(su?.installed_version && vt(su.installed_version) < vt(su.payload_version));
+  const needsInstall = !!(su && !su.unsupported && (!su.helpers_present || !su.installed_version || behind || (!!su.cmdline_missing && !su.cmdline_pending) || driverMissing));
+  const updateReady = !!(up?.available && vt(up.available) > vt(PLUGIN_VERSION) && !needsInstall);   // an update is offered only when one was detected AND the setup is complete
   const installClick = () => confirmInstall(su?.installed_version ? "Update the system files" : "Install", () => installSystem(false));
 
   return (
@@ -99,16 +110,16 @@ function Content() {
         <PanelSection title="eGPU">
           <PanelSectionRow><div className={staticClasses.Text}>{s ? stateLine(s) : "Loading…"}</div></PanelSectionRow>
           {su?.unsupported && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>{su.unsupported}</div></PanelSectionRow>}
-          {su && !su.unsupported && (!su.helpers_present || su.installed_version !== su.payload_version || (!!su.cmdline_missing && !su.cmdline_pending)) && !su.busy && su.rc !== 0 && (
+          {needsInstall && su && !su.busy && su.rc !== 0 && (
             <>
-              <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>{su.installed_version && !su.helpers_present ? "System files are missing (OS update)." : su.installed_version && su.installed_version !== su.payload_version ? `System files ${su.installed_version}, plugin ${su.payload_version}.` : su.installed_version ? "Setup is incomplete." : "Not installed yet."}</div></PanelSectionRow>
-              <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => installClick()}>{su.installed_version && su.installed_version !== su.payload_version && su.helpers_present ? "Update system integration" : su.installed_version ? "Repair system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>
+              <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>{su.installed_version && !su.helpers_present ? "System files are missing (OS update)." : behind ? `System files ${su.installed_version}, plugin ${su.payload_version}.` : driverMissing ? "The NVIDIA driver is not installed. Keep the eGPU unplugged." : su.installed_version ? "Setup is incomplete." : "Not installed yet."}</div></PanelSectionRow>
+              <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => installClick()}>{behind && su.helpers_present ? "Update system integration" : su.installed_version ? "Repair system integration" : "Install system integration"}</ButtonItem></PanelSectionRow>
             </>
           )}
-          {up?.available && up.available !== PLUGIN_VERSION && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Version {up.available} is available.</div></PanelSectionRow>}
-          {up?.available && up.available !== PLUGIN_VERSION && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => confirmInstall(`Update to ${up.available}`, () => checkUpdate(true))}>Update to {up.available}</ButtonItem></PanelSectionRow>}
+          {updateReady && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Version {up!.available} is available.</div></PanelSectionRow>}
+          {updateReady && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => confirmInstall(`Update to ${up!.available}`, () => checkUpdate(true))}>Update to {up!.available}</ButtonItem></PanelSectionRow>}
           {up?.state && <PanelSectionRow><div style={{ fontSize: "12px", color: up.state.includes("failed") ? "#ff6b6b" : undefined, opacity: up.state.includes("failed") ? 1 : 0.8 }}>{up.state}</div></PanelSectionRow>}
-          {su?.busy && <PanelSectionRow><Progress pct={su.progress} title={(su.step.startsWith("update") || up?.state.startsWith("installing")) ? "Updating" : "Installing"} step={su.step} /></PanelSectionRow>}
+          {su?.busy && <PanelSectionRow><Progress pct={su.progress} title={(su.step.startsWith("update") || up?.state.startsWith("installing")) ? "Updating" : "Installing"} step={su.step} started={su.started} expect={su.expect} /></PanelSectionRow>}
           {su && !su.busy && su.rc === 0 && (
             <>
               {su.needs_reboot ? (
@@ -130,7 +141,7 @@ function Content() {
               <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => run(rebootSystem)}>Reboot the system</ButtonItem></PanelSectionRow>
             </>
           )}
-          {su && !su.busy && su.rc !== null && su.rc !== 0 && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>Install failed (rc {su.rc}). Log: /tmp/egpu-buddy-setup.log</div></PanelSectionRow>}
+          {su && !su.busy && su.rc !== null && su.rc !== 0 && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>{su.rc === 20 ? "Everything is installed except the NVIDIA driver, which could not be built. Keep the eGPU unplugged, check the internet connection and press Repair. Details: Show setup & updates." : `Install failed (rc ${su.rc}). Log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}
           {s && !s.game_mode && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>In Desktop mode use the EGPU Buddy desktop app.</div></PanelSectionRow>}
           {s?.attach_pending && <PanelSectionRow><div style={{ fontSize: "12px" }}>eGPU plugged in. Close the game, then press Attach.</div></PanelSectionRow>}
           <PanelSectionRow>
@@ -197,10 +208,10 @@ function Content() {
           {su?.untested && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Hardware: {su.untested.split("\n").join("; ")}. {su.accepted_untested ? "Risk notice accepted." : "Risk notice not accepted yet."}</div></PanelSectionRow>}
           {su?.cmdline_missing && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Kernel parameters not active: {su.cmdline_missing}</div></PanelSectionRow>}
           <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Reinstalls everything the first page installs. Everything replaced is backed up. The payload ships inside this plugin; the driver build needs the Arch mirrors.</div></PanelSectionRow>
-          {su?.busy && <PanelSectionRow><Progress pct={su.progress} title="Installing" step={su.step} /></PanelSectionRow>}
+          {su?.busy && <PanelSectionRow><Progress pct={su.progress} title="Installing" step={su.step} started={su.started} expect={su.expect} /></PanelSectionRow>}
           {su && !su.busy && su.rc !== null && <PanelSectionRow><div style={{ fontSize: "12px", color: su.rc === 0 ? "#4caf50" : "#ff6b6b" }}>{su.rc === 0 ? "Finished. Reboot to activate." : `Failed (rc ${su.rc}); log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => showModal(<ConfirmModal strTitle={su?.installed_version ? "Reinstall the system integration" : "Install the system integration"} strDescription="Runs the full installer as root: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, patched driver, kernel parameters. Everything replaced is backed up. Takes several minutes. Do this only if something is broken or after a reinstall of the OS." strOKButtonText={su?.installed_version ? "Reinstall" : "Install"} onOK={() => run(() => installSystem(false))} />)}>
+            <ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => showModal(<ConfirmModal strTitle={su?.installed_version ? "Reinstall the system integration" : "Install the system integration"} strDescription={`Runs the full installer as root: hot-plug scripts, Game Mode session, GBM gamescope, boot policy, desktop app, patched driver, kernel parameters. Everything replaced is backed up. Expected time: ${su?.expect ?? "several minutes"}. Do this only if something is broken or after a reinstall of the OS.`} strOKButtonText={su?.installed_version ? "Reinstall" : "Install"} onOK={() => run(() => installSystem(false))} />)}>
               {confirmSetup === "install" ? "Press again to confirm install" : (su?.installed_version ? "Reinstall / update system integration" : "Install system integration")}
             </ButtonItem>
           </PanelSectionRow>
@@ -223,9 +234,14 @@ function Content() {
   );
 }
 
-export default definePlugin(() => ({
+export default definePlugin(() => {
+  // the finish line must reach the user even when the menu was closed or Decky restarted (plugin update) meanwhile
+  const notices = setInterval(async () => { try { const t = await popNotice(); if (t) toaster.toast({ title: "EGPU Buddy", body: t, duration: 15000 }); } catch { /* backend not up yet */ } }, 5000);
+  return {
   name: "EGPU Buddy",
   title: <div className={staticClasses.Title}>EGPU Buddy</div>,
   content: <Content />,
   icon: <FaPlug />,
-}));
+  onDismount() { clearInterval(notices); },
+};
+});

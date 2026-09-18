@@ -1,3 +1,25 @@
+0.7.21 — SteamOS: the driver extension now works on a real device; an honest progress bar; a visible finish line.
+
+- **SteamOS, found on a real Legion Go:** the driver compiled, then the install stopped at `overlay: case-insensitive
+  capable filesystem ... not supported`. SteamOS formats `/home` as ext4 with case-folding and its kernel's overlayfs
+  refuses directories there, which also rules out a directory-based system extension. The extension is now one
+  squashfs image (about 520 MB instead of a 1.5 GB directory) and the module dependency step works on tmpfs. If you
+  hit this: press **Repair**; the compiled driver is reused, it takes about a minute.
+- A failed driver step no longer ends in "done": the installer says the driver was not built and the plugin shows it,
+  with a **Repair** button, until the driver really is there. The state is read from the system, so it is the same
+  after closing the menu, a Decky restart or a reboot.
+- The message when you plug the eGPU in without a driver now says what to do (wait for a running build, or Repair).
+- **Much shorter driver build on SteamOS:** the compile ran on one CPU core (makepkg's default); it now uses all of them.
+- **Progress bar:** percentages follow measured time per stage, the compile advances with its real output, the line
+  under the bar is a short plain label that fits, a running clock shows it is alive, and the expected duration is
+  stated before you start and while it runs.
+- **Finish line:** a notification appears when the install ends, also when the menu was closed or Decky restarted
+  meanwhile.
+- **Updates:** the update button only appears when a newer release was detected and the setup is complete; a first
+  install is never mixed with an update. A plugin left behind by an interrupted update is brought level on its own,
+  without reinstalling the system files.
+- Nothing in the attach, detach or recovery paths changed; CachyOS / Legion Go 2 behaviour is untouched.
+
 0.7.20 — one click really is one click: no separate "Apply kernel parameters".
 
 - The install always wrote the kernel parameters as its last step, yet the plugin showed a second "Apply kernel

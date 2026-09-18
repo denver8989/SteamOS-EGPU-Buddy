@@ -9,7 +9,10 @@
 #      (install-patched-nvidia.sh: 610.57.04 userspace from checksummed files + the patched modules, built with DKMS
 #       against the headers of the EXACT running kernel),
 #   3. the NVIDIA files and the built modules are collected into a systemd system extension (sysext) on /home, which
-#      systemd merges into /usr (SteamOS enables systemd-sysext by default),
+#      systemd merges into /usr (SteamOS enables systemd-sysext by default). The extension is ONE squashfs IMAGE file:
+#      SteamOS formats /home as ext4 with case-folding, and overlayfs (which sysext uses) refuses directories on such a
+#      filesystem ("case-insensitive capable filesystem ... not supported", seen on a real device 2026-09-19); an image
+#      is loop-mounted as its own filesystem, so where the file lives does not matter,
 #   4. module dependency data is generated into the extension, the extension is activated, the library cache refreshed.
 # Self-healing: everything lives on /home or in /etc paths that SteamOS keeps across updates (see install.sh). After an
 # OS update with a NEW KERNEL this script is simply run again by the self-heal service: steps 1-2 are incremental and
@@ -21,29 +24,33 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
-BASE=${EGPU_SYSEXT_BASE:-/home/.egpu-buddy}; BR=$BASE/buildroot; NAME=egpu-nvidia; SX=$BASE/sysext/$NAME; CACHE=$BASE/pkgcache
+BASE=${EGPU_SYSEXT_BASE:-/home/.egpu-buddy}; BR=$BASE/buildroot; NAME=egpu-nvidia; SX=$BASE/sysext/$NAME; IMG=$SX.raw; MANIFEST=$SX.manifest; CACHE=$BASE/pkgcache
 K=${EGPU_KERNEL:-$(uname -r)}; PV=$(sed -n 's/^pkgver=//p' "$HERE/PKGBUILD")
 say(){ printf '== %s\n' "$*"; }
 P(){ pacman --root "$BR" --dbpath "$BR/var/lib/pacman" --cachedir "$CACHE" --gpgdir /etc/pacman.d/gnupg --config "$BASE/pacman.conf" --noconfirm "$@"; }
-have_modules(){ ls "$SX/usr/lib/modules/$K"/kernel/drivers/video/nvidia.ko* >/dev/null 2>&1; }
-active(){ [ "$(readlink -f /etc/extensions/$NAME 2>/dev/null)" = "$SX" ] && ls "/usr/lib/modules/$K"/kernel/drivers/video/nvidia.ko* >/dev/null 2>&1 && [ -e /usr/lib/libnvidia-ml.so.1 ]; }
+# the manifest lists what the image holds: "userspace <version>" and one "kernel <release>" line per built kernel
+have_modules(){ [ -s "$IMG" ] && grep -qxF "kernel $K" "$MANIFEST" 2>/dev/null; }
+link_ext(){ mkdir -p /etc/extensions; rm -f /etc/extensions/$NAME; ln -sfn "$IMG" /etc/extensions/$NAME.raw; }   # (the first name is the pre-image directory link)
+# merging attaches the image to a loop device; a device that is still being released makes that fail once in a while
+merge(){ local i; for i in 1 2 3; do systemd-sysext refresh >/dev/null 2>&1 && break; sleep 2; done; ldconfig 2>/dev/null || true; }
+active(){ [ "$(readlink -f /etc/extensions/$NAME.raw 2>/dev/null)" = "$IMG" ] && ls "/usr/lib/modules/$K"/kernel/drivers/video/nvidia.ko* >/dev/null 2>&1 && [ -e /usr/lib/libnvidia-ml.so.1 ]; }
 
 case "${1:-}" in
   --status)
-    echo "kernel: $K"; echo "extension: $([ -d "$SX/usr" ] && echo present || echo absent)  userspace: $(ls "$SX"/usr/lib/libnvidia-ml.so.$PV >/dev/null 2>&1 && echo $PV || echo none)"
+    echo "kernel: $K"; echo "extension image: $([ -s "$IMG" ] && echo present || echo absent)  userspace: $(sed -n 's/^userspace //p' "$MANIFEST" 2>/dev/null | grep . || echo none)"
     echo "modules for this kernel: $(have_modules && echo yes || echo NO)   merged into /usr: $(active && echo yes || echo NO)"
     active && have_modules; exit $? ;;
   --activate)   # fast, offline, never builds: merge what exists (first thing at boot)
     have_modules || { echo "no modules for kernel $K in the extension"; exit 4; }
-    mkdir -p /etc/extensions; ln -sfn "$SX" /etc/extensions/$NAME; systemd-sysext refresh >/dev/null 2>&1 || true; ldconfig 2>/dev/null || true
+    link_ext; merge
     active && { echo "driver extension active for $K"; exit 0; }; echo "extension present but not merged"; exit 9 ;;
   --boot)   # every boot (self-heal): re-activate what exists; rebuild only when the kernel changed
-    if have_modules; then mkdir -p /etc/extensions; ln -sfn "$SX" /etc/extensions/$NAME; systemd-sysext refresh >/dev/null 2>&1 || true; ldconfig 2>/dev/null || true
+    if have_modules; then link_ext; merge
       active && { echo "driver extension active for $K"; exit 0; }; echo "extension present but not merged"; exit 9; fi
     [ -d "$BR" ] || { echo "no driver extension installed"; exit 0; }
     echo "no modules for kernel $K (OS update?): rebuilding" ;;
   --remove)
-    rm -f /etc/extensions/$NAME; systemd-sysext refresh >/dev/null 2>&1 || true; ldconfig 2>/dev/null || true
+    rm -f /etc/extensions/$NAME /etc/extensions/$NAME.raw; systemd-sysext refresh >/dev/null 2>&1 || true; ldconfig 2>/dev/null || true
     rm -rf "$BASE"; echo "removed"; exit 0 ;;
 esac
 
@@ -98,6 +105,7 @@ if ! ls "$BR/usr/lib/modules/$K"/kernel/drivers/video/nvidia.ko* >/dev/null 2>&1
   cat > "$BR/opt/build.sh" <<'EOS'
 #!/bin/bash
 set -e; export PATH=/usr/local/bin:$PATH
+export MAKEFLAGS="-j$(nproc)"   # makepkg.conf ships with MAKEFLAGS commented out = the whole driver on ONE core
 id builder >/dev/null 2>&1 || useradd -m -u 1000 builder
 cd /opt/pkg && EGPU_TARGET_USER=builder EGPU_WANT_LIB32=1 bash ./install-patched-nvidia.sh
 K=$(uname -r); ls /usr/lib/modules/$K/kernel/drivers/video/nvidia.ko* >/dev/null 2>&1 || dkms autoinstall -k "$K"
@@ -110,8 +118,7 @@ fi
 
 # ---- 3. collect the extension ---------------------------------------------------------------------------------------
 say "assembling the system extension in $SX"
-was_active=0; [ -L /etc/extensions/$NAME ] && { was_active=1; rm -f /etc/extensions/$NAME; systemd-sysext refresh >/dev/null 2>&1 || true; }
-rm -rf "$SX.new"; mkdir -p "$SX.new/usr/lib/extension-release.d"
+rm -rf "$SX" "$SX.new"; mkdir -p "$SX.new/usr/lib/extension-release.d"
 # every package the driver's userspace pulled into the build root that the HOST does not have
 declare -A seen=(); queue=(nvidia-utils lib32-nvidia-utils); pkgs=()
 while [ ${#queue[@]} -gt 0 ]; do p=${queue[0]}; queue=("${queue[@]:1}"); [ -z "${seen[$p]:-}" ] || continue; seen[$p]=1
@@ -134,16 +141,23 @@ for kd in "$BR"/usr/lib/modules/*/; do kk=$(basename "$kd"); ls "$kd"kernel/driv
 printf 'ID=_any\n' > "$SX.new/usr/lib/extension-release.d/extension-release.$NAME"
 
 # ---- 4. module dependency data INTO the extension: depmod over (system modules + ours) -------------------------------
+# The overlay's writable layer is on tmpfs (/run), never on /home: overlayfs refuses a case-folding ext4 (see the header).
 if [ -d "/usr/lib/modules/$K" ]; then
-  m=$(mktemp -d); mkdir -p "$m/root/usr/lib/modules/$K" "$BASE/ovl-work"; ln -s usr/lib "$m/root/lib"
-  mount -t overlay overlay -o "lowerdir=/usr/lib/modules/$K,upperdir=$SX.new/usr/lib/modules/$K,workdir=$BASE/ovl-work" "$m/root/usr/lib/modules/$K"
-  depmod -b "$m/root" "$K" || { umount "$m/root/usr/lib/modules/$K"; echo "depmod failed"; exit 8; }
-  umount "$m/root/usr/lib/modules/$K"; rm -rf "$m" "$BASE/ovl-work"
+  m=$(mktemp -d /run/egpu-depmod.XXXXXX); mkdir -p "$m/root/usr/lib/modules/$K" "$m/upper" "$m/work"; ln -s usr/lib "$m/root/lib"
+  cp -a "$SX.new/usr/lib/modules/$K/." "$m/upper/"
+  mount -t overlay overlay -o "lowerdir=/usr/lib/modules/$K,upperdir=$m/upper,workdir=$m/work" "$m/root/usr/lib/modules/$K"
+  depmod -b "$m/root" "$K" || { umount "$m/root/usr/lib/modules/$K"; rm -rf "$m"; echo "depmod failed"; exit 8; }
+  umount "$m/root/usr/lib/modules/$K"; cp -a "$m/upper"/modules.* "$SX.new/usr/lib/modules/$K/"; rm -rf "$m"
 fi
-rm -rf "$SX.old"; [ -d "$SX" ] && mv "$SX" "$SX.old"; mv "$SX.new" "$SX"; rm -rf "$SX.old"
 
-# ---- 5. activate ---------------------------------------------------------------------------------------------------
-mkdir -p /etc/extensions; ln -sfn "$SX" /etc/extensions/$NAME
-systemd-sysext refresh; ldconfig
-if active; then say "driver $PV active for $K (extension on $(df -P "$BASE" | awk 'NR==2{print $6}'), system partition untouched)"
-else echo "the extension was written but is not merged into /usr; see: systemd-sysext status"; exit 9; fi
+# ---- 5. one image file, then activate --------------------------------------------------------------------------------
+say "packing the extension image"
+{ echo "userspace $PV"; for kd in "$SX.new"/usr/lib/modules/*/; do echo "kernel $(basename "$kd")"; done; } > "$MANIFEST.new"
+rm -f "$IMG.new"; mksquashfs "$SX.new" "$IMG.new" -noappend -comp zstd -quiet -no-progress >/dev/null
+rm -rf "$SX.new"
+# unmerge before swapping the file that is loop-mounted
+rm -f /etc/extensions/$NAME /etc/extensions/$NAME.raw; systemd-sysext refresh >/dev/null 2>&1 || true
+mv -f "$IMG.new" "$IMG"; mv -f "$MANIFEST.new" "$MANIFEST"
+link_ext; merge
+if active; then say "driver $PV active for $K (extension image on $(df -P "$BASE" | awk 'NR==2{print $6}'), system partition untouched)"
+else systemd-sysext refresh || true; echo "the extension was written but is not merged into /usr (the message above says why)"; exit 9; fi

@@ -117,7 +117,10 @@ units plus whatever `/etc/atomic-update.conf.d/*.conf` lists. The tested NVIDIA 
   Valve's mirror by version, because the repository database moves on while devices stay on older builds).
 - The NVIDIA userspace, the few EGL packages SteamOS lacks and the built modules are collected into a **systemd system
   extension** on `/home` (`/home/.egpu-buddy`), which systemd merges into `/usr` (SteamOS enables `systemd-sysext` by
-  default). Module dependency data is generated into the extension, so `modprobe` works as usual.
+  default). The extension is one squashfs **image file** (about 520 MB): SteamOS formats `/home` as ext4 with
+  case-folding, and its kernel's overlayfs refuses directories on such a filesystem, so a directory extension cannot
+  work there (found on a real device). Module dependency data is generated into the extension, so `modprobe` works
+  as usual.
 - The kernel parameters go into `/etc/default/grub.d/egpu-buddy.cfg` (Valve's `grub-mkconfig` reads that directory)
   rather than into `/etc/default/grub`, which an update replaces.
 - The integration's `/etc` files are registered in `/etc/atomic-update.conf.d/egpu-buddy.conf` so an update carries
@@ -129,14 +132,15 @@ units plus whatever `/etc/atomic-update.conf.d/*.conf` lists. The tested NVIDIA 
 - None of the above is applied on other systems: CachyOS and Arch keep their own NVIDIA packages and behave as before.
 - Safe Detach hides the NVIDIA userspace with bind mounts where `/usr` cannot be written.
 - From the Decky plugin all of this runs as root without a password, in its own systemd unit (a Steam or Decky
-  restart does not interrupt the 15-20 minute first build). **Uninstall** removes the extension, the build
+  restart does not interrupt the first build: 10-20 minutes, mostly downloads; the compile uses all CPU cores). **Uninstall** removes the extension, the build
   environment, the keep-list and the GRUB drop-in.
 
 How far this is verified: the complete install, the boot-time re-activation, a simulated kernel change, Safe Detach's
 hide/restore and the uninstall were run inside a container made from Valve's 3.8.14 image with a read-only system,
-a separate small `/var` and `/home` (see `TESTED.md`). **It has not yet run on a real SteamOS device**: real boot
-ordering, the GRUB regeneration on the device, an actual OS update and loading the modules on a real eGPU are
-unconfirmed. The plugin's first page shows **Repair system integration** for the self-heal job on demand.
+a separate small `/var` and `/home` (see `TESTED.md`). On a real device (Legion Go, SteamOS 3.8) the build
+environment, the exact-kernel headers and the driver compile have run; the first attempt then failed at the
+case-folding `/home` described above, which is what 0.7.21 fixes. **Still unconfirmed on a real device**: the merged
+extension, real boot ordering, the GRUB regeneration, an actual OS update and loading the modules on a real eGPU. The plugin's first page shows **Repair system integration** for the self-heal job on demand.
 
 **Bazzite (rpm-ostree): untested.** `/usr/local` and `/etc` persist there, kernel parameters go through
 `rpm-ostree kargs` (handled), but the patched driver is an Arch package and cannot be layered, so a cable yank may

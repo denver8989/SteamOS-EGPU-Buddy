@@ -18,10 +18,10 @@ sudo bash -c "$(declare -f restore_or_remove); systemctl disable egpu-mount.serv
 [ "${EGPU_KEEP_PLUGIN:-0}" = 1 ] || sudo rm -rf "$USER_HOME/homebrew/plugins/EGPU-Buddy"
 [ "${EGPU_KEEP_PLUGIN:-0}" = 1 ] || rm -rf "$USER_HOME/.local/share/steamos-egpu-buddy"; rm -rf "$USER_HOME/.local/share/egpu-buddy" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
 # SteamOS: the driver extension and build root on /home, the OS-update keep-list, the GRUB drop-in (+ regenerate GRUB)
-if [ -d /home/.egpu-buddy ] || [ -L /etc/extensions/egpu-nvidia ]; then
+if [ -d /home/.egpu-buddy ] || [ -L /etc/extensions/egpu-nvidia ] || [ -L /etc/extensions/egpu-nvidia.raw ]; then
   echo "removing the NVIDIA driver extension (SteamOS)"
   if [ -x "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" ]; then sudo bash "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" --remove
-  else sudo rm -f /etc/extensions/egpu-nvidia; sudo systemd-sysext refresh >/dev/null 2>&1 || true; sudo ldconfig 2>/dev/null || true; sudo rm -rf /home/.egpu-buddy; fi
+  else sudo rm -f /etc/extensions/egpu-nvidia /etc/extensions/egpu-nvidia.raw; sudo systemd-sysext refresh >/dev/null 2>&1 || true; sudo ldconfig 2>/dev/null || true; sudo rm -rf /home/.egpu-buddy; fi
 fi
 sudo rm -f /etc/atomic-update.conf.d/egpu-buddy.conf
 if [ -f /etc/default/grub.d/egpu-buddy.cfg ]; then sudo rm -f /etc/default/grub.d/egpu-buddy.cfg

@@ -23,7 +23,16 @@ Test environment: the root filesystem of Valve's `steamdeck-oobe-repair-20260707
 | OS-update keep-list, GRUB drop-in (as Valve's `grub-mkconfig` sources it) | written; resulting command line contains the parameters |
 | Uninstall | nothing left: extension, build environment, keep-list, drop-in, units, scripts |
 
-**Not verified anywhere:** a real SteamOS device. Unknown until someone runs it there: boot ordering on real hardware,
+**Real device, 2026-09-19 (Legion Go, SteamOS 3.8, kernel 6.16.12-valve24.5):** with 0.7.20 the build environment,
+the headers for the exact kernel and the driver compile all succeeded; assembling the extension then failed with
+`overlay: case-insensitive capable filesystem ... not supported`, because SteamOS formats `/home` as case-folding ext4
+and the test container's `/home` was not. Since 0.7.21 the extension is a squashfs image and no overlay layer is ever
+placed on `/home`; the container's `/home` is now a case-folding ext4 too, and a shim there refuses overlay layers on
+it the way Valve's kernel does (the development kernel is newer and no longer refuses). Re-verified there: full
+install exit 0, image merged (layers: `/run/systemd/sysext/...` and `/usr` only), modules and libraries resolve,
+boot re-activation, from-scratch driver build 2 min 56 s on 16 threads.
+
+**Not yet verified on a real SteamOS device:** the merged extension and everything after it. Unknown until someone runs it there: boot ordering on real hardware,
 GRUB regeneration on the device, a real OS update, loading the modules with an eGPU attached, and everything the
 NVIDIA path does at attach time on a non-Legion-Go-2 machine.
 

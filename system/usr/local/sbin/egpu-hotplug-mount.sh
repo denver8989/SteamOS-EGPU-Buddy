@@ -98,7 +98,10 @@ fi
 # SteamOS only: after an OS update the driver extension may still be rebuilding and the kernel parameters may not be
 # active yet; bringing the eGPU up in that window is the unprotected first connection. No other system gets this gate.
 if command -v steamos-readonly >/dev/null 2>&1; then
-modinfo -n nvidia >/dev/null 2>&1 || gate_fail "No NVIDIA driver for this kernel yet (after a system update it is rebuilt in the background). Unplug the eGPU and try again later."
+if ! modinfo -n nvidia >/dev/null 2>&1; then
+  if pgrep -f install-steamos-sysext >/dev/null 2>&1; then gate_fail "The NVIDIA driver is being built right now. Unplug the eGPU and plug it in again when the build has finished."
+  else gate_fail "The NVIDIA driver is not installed. Unplug the eGPU, then open EGPU Buddy and press Repair (needs internet)."; fi
+fi
 /usr/local/sbin/egpu-kernel-cmdline --check >/dev/null 2>&1 || gate_fail "The eGPU kernel parameters are not active. Reboot once, then plug the eGPU in."
 fi
 
