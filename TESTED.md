@@ -14,6 +14,10 @@ built-in AMD GPU (same driver). Attach, Game Mode routing, safe detach and cable
 
 ## Verified
 
+Re-verified on 2026-09-18 (0.7.15), each ending with a game launched and displayed on the eGPU monitor: Safe Detach from
+the plugin -> physical unplug -> replug; cable yank in Game Mode -> replug. Both need no reboot and no enclosure power
+cycle.
+
 | Feature | How it was verified |
 |---|---|
 | Hot-plug attach into Game Mode on the external display | replug → Game Mode on the monitor in ~22 s, repeatedly |

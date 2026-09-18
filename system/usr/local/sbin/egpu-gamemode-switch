@@ -15,6 +15,8 @@ if game_running && [ "$force" = 0 ]; then
   date +%s > $ST/gm-attach-pending; log "a game is running -> attach deferred (close the game, then Attach)"; exit 3
 fi
 rm -f $ST/gm-attach-pending
+# Desktop display/routing variables must never ride into a Game Mode session (they made every game black, 2026-09-18)
+as_deck systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XAUTHORITY KWIN_RENDER_NODES >/dev/null 2>&1
 gpu=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}')
 log "restarting gamescope-session (eGPU=${gpu:-absent}, force=$force)"
 echo '{"state":"SWITCHING","message":"Restarting Game Mode onto the eGPU display..."}' > $ST/gm-status.json

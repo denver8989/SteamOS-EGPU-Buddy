@@ -6,7 +6,9 @@
   session wrapper stops waiting the moment the eGPU leaves the bus, the recovery hides the NVIDIA userspace first,
   never touches the relaunched session's processes, and does not restart a session systemd is already relaunching.
   Verified with four real yanks and replugs on the Legion Go 2.
-- **Safe detach in Game Mode no longer shuts Steam down a second time** during the teardown (about 12 s less).
+- Includes the 0.7.15 fixes (games black after a re-attach; yank recovery without the environment leak).
+- Withdrawn from this beta: the "skip the second Steam shutdown" detach speed-up. One GPU lock-up occurred on a re-attach
+  that followed it; it has not been shown to be the cause, and it stays out until it is shown not to be.
 - **Untested hardware notice.** Plugin, `.run` and curl installs compare the machine with the tested configuration
   and require an explicit acceptance ("at your own risk") when it differs; the plugin keeps a reminder line.
 - Verified today on the Legion Go 2: physical unplug after Safe Detach (status retires itself), physical replug into
@@ -52,6 +54,39 @@ older build. Not offered by the updater unless you pick it yourself.
   one controller is now disabled, on the Legion Go 2 only (DMI match). The power button still wakes it; the controller
   buttons no longer do. Not yet confirmed over a real standby.
 - The panel-off helper resolves the panel's own DRM card when two GPUs share a driver.
+
+0.7.15 — games black after a re-attach, and the cable-yank recovery, both fixed and verified on real replugs.
+
+- **Every game black (or crashing at launch) after re-attaching the eGPU, until a reboot.** The Steam UI was fine, games
+  rendered on the eGPU but never reached the screen. Cause, A/B-tested four times on one boot: resizing the GPU's memory
+  window (256 MB -> 16 GB) right before the driver loads leaves the card in a state only a fresh enumeration clears. A
+  cable pull resets the window to 256 MB, so every replug ran into it. The attach now skips the resize when the window
+  already is 16 GB (software re-attach), and after a real resize removes and re-scans the GPU once and resets it again
+  before the driver loads (about two seconds, no session involved). Verified: Safe Detach -> unplug -> replug -> play.
+- **Cable yank in Game Mode.** The recovery could not tell it was in Game Mode once gamescope had died with the card,
+  took the Desktop route (three relaunches over four minutes, measured), and left Desktop display variables
+  (WAYLAND_DISPLAY, DISPLAY, KWIN_RENDER_NODES) in the user environment until the next reboot, which by itself made
+  game windows invisible. Now: the session records its type, the recovery detects it first, applies no Desktop routing
+  in Game Mode and clears any stray variables, never touches the relaunched session, and the session script stops
+  waiting as soon as the eGPU leaves the bus. One relaunch, no Steam restart. The Game Mode attach clears the same
+  variables as a second line of defence. Verified: yank -> handheld back -> replug -> play.
+
+0.7.14 — two attach fixes found while testing on the eGPU.
+
+- **Panel stayed on next to the eGPU display after an automatic hot-plug (Desktop).** The attach script's panel-off
+  step ran as a background job; the script is a transient systemd service, and when its main process exited systemd
+  killed the job. It had only ever completed when the script was run by hand. The script now waits for it.
+- **The boot_vga step in the attach never ran.** Its functions were defined after the script's `exit`, so the call
+  failed silently every time since August. The NVIDIA-only session works on the compositor device pinning alone, so
+  the dead step was removed rather than switched on; README and credits corrected (all-ways-egpu's technique is now
+  used only by the experimental non-NVIDIA path in the 0.8.0 betas).
+
+0.7.13 — hot-plug after a Desktop safe-detach left both screens on (KWin on both GPUs).
+
+- The Desktop safe-detach hides the NVIDIA userspace (Vulkan/EGL ICD files, NVML) so nothing re-opens the card. A
+  later hot-plug never un-hid them: the login-time routing script saw them missing, left KWin at its default, and the
+  desktop came back on both GPUs with the handheld screen still on. The attach now restores them before restaging the
+  session. (Seen 2026-09-18; the Reattach button already did this, the automatic hot-plug path did not.)
 
 0.7.12 — one version, every build kept, credits completed.
 
