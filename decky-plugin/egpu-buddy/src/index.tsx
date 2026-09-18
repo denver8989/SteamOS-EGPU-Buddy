@@ -33,7 +33,7 @@ type Versions = { ok: boolean; message?: string; current?: string; versions: { v
 const listVersions = callable<[], Versions>("list_versions");
 const installVersion = callable<[string], Result>("install_version");
 
-const PLUGIN_VERSION = "0.8.0-beta1";
+const PLUGIN_VERSION = "0.8.0-beta2";
 
 const Progress = ({ pct, title, step }: { pct: number; title: string; step: string }) => (
   <div style={{ width: "100%", boxSizing: "border-box", padding: "4px 0" }}>

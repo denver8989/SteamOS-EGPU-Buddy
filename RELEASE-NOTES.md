@@ -1,3 +1,11 @@
+0.8.0-beta2 — PRE-RELEASE. Same as beta1 plus two fixes, and this time run on the NVIDIA eGPU.
+
+- Includes the 0.7.13 fix (hot-plug after a Desktop safe-detach restores the hidden NVIDIA userspace).
+- The updater's pre-update backup now lives outside Decky's plugins directory (Decky loaded it as a second plugin).
+- Verified on the Legion Go 2 + RTX 5060 Ti: Desktop hot-plug to NVIDIA-only, Game Mode on the eGPU display, Safe
+  Detach from the plugin (78 s to "safe to unplug"), Attach without a replug (21 s), and the version picker installing
+  0.7.13 and holding it. The AMD path remains untested.
+
 0.8.0-beta1 — PRE-RELEASE. AMD eGPU path (experimental, untested), updates become your choice, going back to an
 older build. Not offered by the updater unless you pick it yourself.
 
