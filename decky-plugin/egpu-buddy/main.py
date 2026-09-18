@@ -447,7 +447,9 @@ def _start_update(version, hold=False):
 class Plugin:
     async def get_update_status(self):
         d = _settings()
-        return {"auto_update": d.get("auto_update", False), "held_version": d.get("held_version", ""), "available": _update["available"], "state": _update["state"],
+        held = d.get("held_version", "")
+        if held and held != _read(VERSION_FILE): held = ""   # installed by other means since: the hold no longer describes this machine
+        return {"auto_update": d.get("auto_update", False), "held_version": held, "available": _update["available"], "state": _update["state"],
                 "checked": _update["checked"], "last_error": _update["last_error"], "installed": _read(VERSION_FILE)}
 
     async def set_auto_update(self, enabled: bool):
