@@ -1,3 +1,14 @@
+0.7.20 — one click really is one click: no separate "Apply kernel parameters".
+
+- The install always wrote the kernel parameters as its last step, yet the plugin showed a second "Apply kernel
+  parameters" button: after every install until the reboot (it only looked at the running kernel), and after an install
+  that had died before its last step. Now the first page says **Reboot to activate** when the parameters are written
+  but not active yet, and an incomplete setup is handled by the one Install / Repair button. The Apply button is gone.
+- The installer now checks that the parameters are **persisted in the bootloader configuration**, not merely present in
+  the running kernel. On the development machine the boot entries had been edited by hand while the file they are
+  regenerated from still held an older set; a kernel update would have brought the old parameters back unnoticed.
+  `egpu-kernel-cmdline --written` / `--pending` report these states.
+
 0.7.19 — plugin: a calm first page; the disclaimer is a dialog, not a banner.
 
 - The first page shows the eGPU state and the controls. When something needs you there is one short neutral line and

@@ -80,8 +80,13 @@ if [ "$MODE" = install ]; then
   if [ -d /sys/bus/thunderbolt/devices/domain0 ]; then say "== USB4/Thunderbolt controller present ($(cat /sys/bus/thunderbolt/devices/domain0/security 2>/dev/null || echo ?) security level)"
   else echo "WARNING: no USB4/Thunderbolt controller is visible to the kernel. Enable USB4 / Thunderbolt in the firmware (BIOS) settings, then reboot; the eGPU cannot attach without it."; fi
 fi
-if m=$(bash "$ROOT/system/usr/local/sbin/egpu-kernel-cmdline" --check 2>/dev/null); then :; else
-  echo "warning: $m"; echo "         run 'sudo egpu-kernel-cmdline --apply' after this install (edits the bootloader config, backup kept), then reboot BEFORE plugging the eGPU in"
+# What counts is whether the parameters are PERSISTED in the bootloader configuration (the running kernel can have them
+# from hand-edited entries that the next kernel update regenerates without them). Written but not active = just reboot.
+KC="$ROOT/system/usr/local/sbin/egpu-kernel-cmdline"
+if bash "$KC" --written >/dev/null 2>&1; then
+  bash "$KC" --check >/dev/null 2>&1 || echo "note: the kernel parameters are written; they become active with the next reboot (before plugging the eGPU in)"
+else
+  echo "note: the eGPU kernel parameters are not in the bootloader configuration yet; this install writes them (backup kept). Reboot BEFORE plugging the eGPU in."
   CMDLINE_MISSING=1
 fi
 

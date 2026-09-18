@@ -1,5 +1,5 @@
 #!/bin/bash
-# egpu-kernel-cmdline --check | --apply [--dry-run]
+# egpu-kernel-cmdline --check | --written | --pending | --apply [--dry-run]
 # The kernel parameters the eGPU path needs (README "Kernel command line"), and how to persist them per bootloader.
 # --check prints the parameters missing from the RUNNING kernel (exit 1 if any). --apply writes them into the
 # bootloader config (backup kept) and regenerates it; a reboot is needed afterwards.
@@ -10,6 +10,18 @@ missing(){ local cur; cur=$(cat /proc/cmdline); for p in $WANT; do case " $cur "
 merge(){ # $1 = existing cmdline string -> string with our params (replacing any pci=/nvidia-drm.modeset=/pcie_aspm=/iommu= token)
   local out=""; for t in $1; do case "$t" in pci=*|nvidia-drm.modeset=*|pcie_aspm=*|thunderbolt.host_reset=*|thunderbolt.clx=*|iommu=*|pcie_ports=*) ;; *) out="$out $t";; esac; done
   printf '%s %s' "${out# }" "$WANT"; }
+# --pending: exit 0 when the parameters are WRITTEN to the bootloader configuration but the running kernel does not
+# have them yet (= a reboot is all that is missing). The plugin shows "reboot" then, not another "apply".
+written(){ local cfg
+  if command -v rpm-ostree >/dev/null 2>&1; then cfg=$(rpm-ostree kargs 2>/dev/null)
+  elif [ -f /etc/default/limine ]; then cfg=$(cat /etc/default/limine 2>/dev/null)
+  else cfg=$(cat /etc/default/grub /etc/default/grub.d/*.cfg /boot/loader/entries/*.conf 2>/dev/null); fi
+  for p in $WANT; do case "$cfg" in *"$p"*) ;; *) return 1;; esac; done; return 0; }
+# --written: exit 0 when the bootloader CONFIGURATION carries all parameters (they survive the next kernel update).
+# A running kernel can have them from hand-edited boot entries while the configuration they are regenerated from
+# does not (found on the development machine, 2026-09-19): then --check passes and the next kernel update drops them.
+if [ "$MODE" = --written ]; then written && { echo "kernel parameters persisted"; exit 0; }; echo "kernel parameters are NOT in the bootloader configuration"; exit 1; fi
+if [ "$MODE" = --pending ]; then [ -n "$(missing)" ] && written && { echo "kernel parameters written; reboot to activate"; exit 0; }; exit 1; fi
 if [ "$MODE" = --check ]; then m=$(missing); [ -z "$m" ] && { echo "kernel command line: ok"; exit 0; }; echo "missing kernel parameters: $m"; exit 1; fi
 [ "$MODE" = --apply ] || { echo "usage: $0 --check | --apply [--dry-run]"; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "--apply needs root"; exit 1; }
