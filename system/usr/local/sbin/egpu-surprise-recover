@@ -14,7 +14,7 @@ pgrep -f '/usr/local/sbin/egpu-safe-detach' >/dev/null && { log "skip: safe-deta
 lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { log "skip: GPU still on the bus"; exit 0; }
 exec 9>/run/egpu-surprise-recover.lock; flock -n 9 || { log "skip: already running"; exit 0; }
 log "SURPRISE removal detected (GPU gone from bus)"
-T0=$(date +%s); mkdir -p /run/nvegpu; date +%s > /run/nvegpu/surprise-pending   # hotplug-mount: stale modules -> unbind+FLR+rebind on next attach
+T0=$(date +%s); SELF_START=$(awk '{print $22}' /proc/self/stat); mkdir -p /run/nvegpu; date +%s > /run/nvegpu/surprise-pending   # hotplug-mount: stale modules -> unbind+FLR+rebind on next attach
 # 1. user-manager env -> iGPU immediately (the relaunching session must not point at the dead card)
 igpu=$(for c in /sys/class/drm/card[0-9]; do [ "$(cat $c/device/vendor 2>/dev/null)" = 0x1002 ] && basename $c && break; done)
 runuser -u deck -- env $RUNENV systemctl --user set-environment \
@@ -45,7 +45,7 @@ for h in /etc/nv-egpu-buddy/hooks.d/pre-unload/*; do [ -x "$h" ] && "$h" >/dev/n
 sleep 1
 # pre-removal user processes still holding dmabufs (e.g. a Steam Proton helper) keep NVIDIA-exported buffers -> pin nvidia_drm
 for p in $(pgrep -u 1000); do
-  age=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' '); [ -n "$age" ] && [ "$age" -gt $(( $(date +%s) - T0 )) ] || continue   # only processes older than the removal
+  ps0=$(awk '{print $22}' /proc/$p/stat 2>/dev/null); [ -n "$ps0" ] && [ "$ps0" -lt "$SELF_START" ] || continue   # only processes started before this recovery (10 ms ticks)
   ls -l /proc/$p/fd 2>/dev/null | grep -qE 'dmabuf|sync_file' || continue
   case "$(cat /proc/$p/comm 2>/dev/null)" in kwin_wayland|Xwayland|plasmashell|pipewire*|wireplumber|systemd*) ;; *) kill -9 "$p" 2>/dev/null; log "killed pre-removal dmabuf holder $p ($(cat /proc/$p/comm 2>/dev/null))";; esac
 done
