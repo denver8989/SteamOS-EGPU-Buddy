@@ -7,8 +7,10 @@
   exact running kernel and delivered as a systemd system extension on `/home`; kernel parameters as a GRUB drop-in;
   the integration's `/etc` files registered with the OS updater; the self-heal service re-activates the extension at
   boot and rebuilds the modules after an update that brings a new kernel. See README, "Surviving OS updates".
-- **The attach script now refuses to bring the eGPU up when the driver or the kernel parameters are missing** and says
-  so in the plugin (on a complete system both checks pass and nothing changes).
+- **On SteamOS only**, the attach script refuses to bring the eGPU up while the driver or the kernel parameters are
+  missing (the window after an OS update) and says so in the plugin. No other system gets this gate.
+- Nothing SteamOS-specific is applied elsewhere: on CachyOS and Arch the distro's own NVIDIA packages are kept, the
+  driver step pins nothing when the installed userspace already matches, and attach/detach behave as in 0.7.16.
 - The userspace packages are installed as checksum-verified local files instead of by URL (an older keyring does not
   know newer packagers).
 - Safe Detach hides the NVIDIA userspace with bind mounts where `/usr` is read-only.

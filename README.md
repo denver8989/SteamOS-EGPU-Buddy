@@ -125,7 +125,8 @@ units plus whatever `/etc/atomic-update.conf.d/*.conf` lists. The tested NVIDIA 
 - `egpu-buddy-selfheal.service` (kept by updates) re-activates the extension at every boot and, when an update
   brought a **new kernel**, rebuilds the modules for it in the background. Until that is done the attach script
   **refuses to bring the eGPU up** (no driver, or kernel parameters not active) and says so in the plugin, instead of
-  risking the unprotected first connection.
+  risking the unprotected first connection. This gate exists on SteamOS only.
+- None of the above is applied on other systems: CachyOS and Arch keep their own NVIDIA packages and behave as before.
 - Safe Detach hides the NVIDIA userspace with bind mounts where `/usr` cannot be written.
 - From the Decky plugin all of this runs as root without a password, in its own systemd unit (a Steam or Decky
   restart does not interrupt the 15-20 minute first build). **Uninstall** removes the extension, the build

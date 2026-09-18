@@ -99,7 +99,7 @@ if ! ls "$BR/usr/lib/modules/$K"/kernel/drivers/video/nvidia.ko* >/dev/null 2>&1
 #!/bin/bash
 set -e; export PATH=/usr/local/bin:$PATH
 id builder >/dev/null 2>&1 || useradd -m -u 1000 builder
-cd /opt/pkg && EGPU_TARGET_USER=builder bash ./install-patched-nvidia.sh
+cd /opt/pkg && EGPU_TARGET_USER=builder EGPU_WANT_LIB32=1 bash ./install-patched-nvidia.sh
 K=$(uname -r); ls /usr/lib/modules/$K/kernel/drivers/video/nvidia.ko* >/dev/null 2>&1 || dkms autoinstall -k "$K"
 EOS
   chmod +x "$BR/opt/build.sh"

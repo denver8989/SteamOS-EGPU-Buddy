@@ -8,15 +8,6 @@ if [ "$(id -u)" = 0 ]; then U=${EGPU_TARGET_USER:-${SUDO_USER:-}}; [ -n "$U" ] &
 command -v makepkg >/dev/null && command -v pacman >/dev/null || { echo "makepkg/pacman not found: the patched driver is Arch-based only"; exit 1; }
 PV=$(sed -n 's/^pkgver=//p' "$HERE/PKGBUILD"); ALA=https://archive.archlinux.org/packages
 UH=$(getent passwd "$U" | cut -d: -f6); PERSIST=$UH/.local/share/steamos-egpu-buddy; mkdir -p "$PERSIST/pkgcache"
-free_mb(){ df -Pm "$1" 2>/dev/null | awk 'NR==2{print $4}'; }
-
-# space: the userspace alone unpacks to ~930 MB and SteamOS's system partition is 5 GB. Refuse BEFORE touching anything.
-need=1700; pacman -Q nvidia-utils 2>/dev/null | grep -q " $PV-1\$" && need=500   # userspace already in place: only toolchain + modules
-have=$(free_mb /usr); have=${have:-0}
-if [ "$have" -lt "$need" ]; then
-  echo "NOT ENOUGH SPACE on the system partition for the NVIDIA driver: ${have} MB free on /usr, about ${need} MB needed."
-  echo "Nothing was changed. (On SteamOS the system partition is fixed at 5 GB; the rest of EGPU Buddy is installed.)"; exit 3
-fi
 
 K=$(uname -r)
 if [ ! -f "/usr/lib/modules/$K/build/Makefile" ]; then
@@ -26,19 +17,6 @@ if [ ! -f "/usr/lib/modules/$K/build/Makefile" ]; then
   [ -f "/usr/lib/modules/$K/build/Makefile" ] || echo "warning: no kernel headers for $K; install the matching -headers package or the DKMS build will fail"
 fi
 $R pacman -S --needed --noconfirm dkms base-devel >/dev/null
-# DKMS builds under /var/lib/dkms. On SteamOS /var is a 256 MB partition and the NVIDIA build peaks far above that.
-# With an empty DKMS tree and less than 3 GB there, move the tree to the big partition (dkms >= 3.0 reads the drop-in).
-dt=/var/lib/dkms; $R mkdir -p "$dt"
-if [ "$(free_mb "$dt")" -lt 3000 ] && [ -z "$(ls -A "$dt" 2>/dev/null | grep -v '^dkms_dbversion$')" ]; then
-  nt=/home/.egpu-buddy/dkms; [ -d /home/.steamos/offload ] && nt=/home/.steamos/offload/var/lib/egpu-buddy-dkms
-  if [ "$(free_mb "$(dirname "$(dirname "$nt")")")" -ge 3000 ]; then
-    $R mkdir -p "$nt" /etc/dkms/framework.conf.d
-    printf '# SteamOS EGPU Buddy: /var is too small for the NVIDIA DKMS build\ndkms_tree="%s"\n' "$nt" | $R tee /etc/dkms/framework.conf.d/egpu-buddy.conf >/dev/null
-    echo "DKMS tree moved to $nt (only $(free_mb "$dt") MB free under $dt)"
-  else echo "warning: little space for the DKMS build under $dt and nowhere larger to move it"; fi
-fi
-# the kernel modules and the userspace must be the same version: pin nvidia-utils (+lib32 if present) to the
-# version this package is built for, from the Arch Linux Archive, and IgnorePkg (set by install.sh) keeps it there
 # The userspace must be exactly the patched modules' version. It comes from the Arch archive as CHECKSUMMED LOCAL FILES:
 # installing by URL makes pacman verify the packager's signature against the local keyring, and an older distro
 # snapshot (SteamOS 3.8) does not know 2026 packagers. Checksums were taken from the archive on 2026-09-19.
@@ -62,11 +40,11 @@ cur=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}')
 if ! pacman -Q egl-wayland2 >/dev/null 2>&1 && ! pacman -Si egl-wayland2 >/dev/null 2>&1; then
   pin+=("$(fetch_pinned egl-wayland2 egl-wayland2-1.0.2-1-x86_64.pkg.tar.zst)")
 fi
-# 32-bit userspace (32-bit games): when already present, or when there is room for its ~570 MB
+# 32-bit userspace (32-bit games): only where it is already installed, as before; the SteamOS build root asks for it
 l32=$(pacman -Q lib32-nvidia-utils 2>/dev/null | awk '{print $2}')
-if [ "$l32" != "$PV-1" ] && { [ -n "$l32" ] || [ "$have" -ge $((need + 900)) ]; }; then
+if [ "$l32" != "$PV-1" ] && { [ -n "$l32" ] || [ "${EGPU_WANT_LIB32:-0}" = 1 ]; }; then
   pin+=("$(fetch_pinned lib32-nvidia-utils "lib32-nvidia-utils-$PV-1-x86_64.pkg.tar.zst")")
-elif [ -z "$l32" ]; then echo "note: lib32-nvidia-utils left out (not enough room); 32-bit games will not see the NVIDIA GPU"; fi
+fi
 for f in "${pin[@]}"; do [ -n "$f" ] && [ -s "$f" ] || { echo "could not fetch the pinned NVIDIA userspace; nothing was changed"; exit 4; }; done
 # unsigned local files need LocalFileSigLevel=Optional (the default); a stricter pacman.conf gets a temporary copy
 PCONF=(); if command -v pacman-conf >/dev/null && ! pacman-conf LocalFileSigLevel 2>/dev/null | grep -qiE 'Optional|Never'; then

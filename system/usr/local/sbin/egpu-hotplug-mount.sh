@@ -95,9 +95,12 @@ if [ -z "$gpu" ]; then
   for _ in $(seq 1 20); do gpu=$(find_gpu || true); [ -n "$gpu" ] && break; sleep 1; done
 fi
 [ -n "$gpu" ] || { log "GPU did not enumerate — exit"; exit 0; }
-# an NVIDIA eGPU is on the bus: only now do the two preconditions matter (a plain Thunderbolt dock must not trip them)
+# SteamOS only: after an OS update the driver extension may still be rebuilding and the kernel parameters may not be
+# active yet; bringing the eGPU up in that window is the unprotected first connection. No other system gets this gate.
+if command -v steamos-readonly >/dev/null 2>&1; then
 modinfo -n nvidia >/dev/null 2>&1 || gate_fail "No NVIDIA driver for this kernel yet (after a system update it is rebuilt in the background). Unplug the eGPU and try again later."
 /usr/local/sbin/egpu-kernel-cmdline --check >/dev/null 2>&1 || gate_fail "The eGPU kernel parameters are not active. Reboot once, then plug the eGPU in."
+fi
 
 cfg=$(xxd -l4 "/sys/bus/pci/devices/$gpu/config" 2>/dev/null | awk '{print $2$3}')
 if [ "$cfg" = "ffffffff" ] || [ "$(cat /sys/bus/pci/devices/$gpu/current_link_width 2>/dev/null)" = "63" ]; then
