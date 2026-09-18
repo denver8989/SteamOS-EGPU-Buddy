@@ -44,6 +44,18 @@ for c in systemctl udevadm lspci; do command -v $c >/dev/null || { echo "missing
 # eGPU vendor: detected, never asked. NVIDIA-only pieces (driver packages, patched modules, GBM-scanout gamescope) are
 # skipped only when a non-NVIDIA eGPU is actually on the bus (or EGPU_VENDOR=amd). With nothing connected they are
 # installed: an NVIDIA eGPU's first connection without them is the dangerous case, an unused package is not.
+# ---- untested hardware: say so, and get an explicit acceptance before anything is installed ----
+if [ "$MODE" = install ] && untested=$(bash "$ROOT/system/usr/local/sbin/egpu-detect" --untested 2>/dev/null); then
+  echo; echo "*** THIS HARDWARE OR SYSTEM HAS NOT BEEN TESTED WITH SteamOS EGPU Buddy ***"
+  printf '%s\n' "$untested" | sed 's/^/    /'
+  echo "    Everything here was verified on one machine only (see TESTED.md). On yours it may not work, may leave the"
+  echo "    screen dark, or may need a reboot to recover. You install and test it AT YOUR OWN RISK."
+  if [ "${EGPU_ACCEPT_UNTESTED:-0}" != 1 ]; then
+    if [ -t 0 ]; then read -rp "    Type YES to continue: " r; [ "$r" = YES ] || { echo "aborted"; exit 1; }
+    else echo "    (unattended run without EGPU_ACCEPT_UNTESTED=1: aborting)"; exit 1; fi
+  fi
+  echo
+fi
 EGPU_VENDOR=${EGPU_VENDOR:-auto}; seen=$(bash "$ROOT/system/usr/local/sbin/egpu-detect" 2>/dev/null | awk '{print $2}' || true)
 NVIDIA_STEPS=1; case "$EGPU_VENDOR:$seen" in amd:*|intel:*|auto:amd|auto:intel|auto:other) NVIDIA_STEPS=0;; esac
 if [ "$NVIDIA_STEPS" = 0 ]; then

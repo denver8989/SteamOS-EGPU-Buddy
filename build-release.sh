@@ -23,7 +23,7 @@ for f in ("plugin.json","package.json"):
 t=open(f"{p}/src/index.tsx").read(); t=re.sub(r'const PLUGIN_VERSION = "[^"]*";', f'const PLUGIN_VERSION = "{ver}";', t); open(f"{p}/src/index.tsx","w").write(t)
 PY
 (cd "$P" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1)
-mkdir -p dist/plugin/EGPU-Buddy/payload && cp "dist/$NAME.tar.gz" dist/plugin/EGPU-Buddy/payload/ && cp -r "$P/dist" "$P/main.py" "$P/plugin.json" "$P/package.json" "$P/README.md" "$P/LICENSE" dist/plugin/EGPU-Buddy/
+mkdir -p dist/plugin/EGPU-Buddy/payload && cp "dist/$NAME.tar.gz" dist/plugin/EGPU-Buddy/payload/ && cp system/usr/local/sbin/egpu-detect dist/plugin/EGPU-Buddy/ && cp -r "$P/dist" "$P/main.py" "$P/plugin.json" "$P/package.json" "$P/README.md" "$P/LICENSE" dist/plugin/EGPU-Buddy/
 (cd dist/plugin && python3 -c "import shutil,sys; shutil.make_archive(sys.argv[1], 'zip', '.', 'EGPU-Buddy')" "../EGPU-Buddy-Decky-$VER")
 # self-extracting: shell header + tarball
 {

@@ -1,3 +1,17 @@
+0.8.0-beta4 — PRE-RELEASE. Cable-yank recovery rebuilt and verified, faster safe detach, untested-hardware notice.
+
+- **Cable yank in Game Mode: 1.5 s to the handheld screen, one relaunch** (was ~20 s and, as found today, up to three
+  relaunches: the recovery could not tell it was Game Mode once gamescope had died with the card, took the Desktop
+  route, killed the relaunched session and restarted Steam). The session now records its type for the recovery, the
+  session wrapper stops waiting the moment the eGPU leaves the bus, the recovery hides the NVIDIA userspace first,
+  never touches the relaunched session's processes, and does not restart a session systemd is already relaunching.
+  Verified with four real yanks and replugs on the Legion Go 2.
+- **Safe detach in Game Mode no longer shuts Steam down a second time** during the teardown (about 12 s less).
+- **Untested hardware notice.** Plugin, `.run` and curl installs compare the machine with the tested configuration
+  and require an explicit acceptance ("at your own risk") when it differs; the plugin keeps a reminder line.
+- Verified today on the Legion Go 2: physical unplug after Safe Detach (status retires itself), physical replug into
+  Game Mode (22–31 s), replug after a yank.
+
 0.8.0-beta3 — PRE-RELEASE. Two more attach fixes found while testing beta2 on the NVIDIA eGPU.
 
 - **Panel stayed on next to the eGPU display after an automatic hot-plug (Desktop).** The attach script's panel-off

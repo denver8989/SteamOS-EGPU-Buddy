@@ -325,7 +325,7 @@ def _clean_env(**extra):
 
 
 def _setup_worker(action, with_driver=False, version=None):
-    env = _clean_env(EGPU_TARGET_USER=USER, HOME=USER_HOME, EGPU_AUTO_YES="1")
+    env = _clean_env(EGPU_TARGET_USER=USER, HOME=USER_HOME, EGPU_AUTO_YES="1", EGPU_ACCEPT_UNTESTED="1" if _accepted() else "0")
     ro = shutil.which("steamos-readonly")
     try:
         if action == "install":
@@ -359,6 +359,21 @@ def _setup_worker(action, with_driver=False, version=None):
         _setup["busy"] = False
 
 
+def _untested():
+    """Lines describing how this machine differs from the one tested configuration ('' when it matches)."""
+    det = os.path.join(PLUGIN_DIR, "egpu-detect")   # copy shipped in the plugin zip for the first install, before /usr/local has it
+    for cand in (DETECT, det):
+        if os.path.exists(cand):
+            rc, out, _ = _sh(["bash", cand, "--untested"], 10)
+            return out.strip() if rc == 0 else ""
+    return ""
+
+
+def _accepted():
+    """The untested-hardware notice was accepted, or the integration is already installed (accepted at that time)."""
+    return bool(_settings().get("accepted_untested")) or os.path.exists(VERSION_FILE)
+
+
 def _unsupported():
     try:
         osr = dict(l.split("=", 1) for l in open("/etc/os-release").read().splitlines() if "=" in l)
@@ -372,6 +387,8 @@ def _unsupported():
 def _start_setup(action, with_driver=False, version=None):
     if action == "install" and _unsupported():
         return {"ok": False, "message": _unsupported()}
+    if action == "install" and _untested() and not _accepted():
+        return {"ok": False, "message": "This hardware is untested. Read the notice and accept it first."}
     if _setup["busy"]:
         return {"ok": False, "message": "Setup is already running."}
     _setup.update(busy=True, rc=None, step="starting", progress=0)
@@ -492,7 +509,7 @@ class Plugin:
         except OSError:
             pass
         return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION, "needs_reboot": needs_reboot,
-                "unsupported": _unsupported(),
+                "unsupported": _unsupported(), "untested": _untested(), "accepted_untested": _accepted(),
                 "cmdline_missing": out.replace("missing kernel parameters: ", "") if rc != 0 else "",
                 "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
                 "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "progress": _setup["progress"],
@@ -516,6 +533,9 @@ class Plugin:
 
     async def install_system(self, with_driver: bool = False):
         return _start_setup("install", bool(with_driver))
+
+    async def accept_untested(self):
+        d = _settings(); d["accepted_untested"] = True; _save_settings(d); return {"ok": True, "message": "accepted"}
 
     async def uninstall_system(self):
         return _start_setup("uninstall")

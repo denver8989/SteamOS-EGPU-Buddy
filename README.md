@@ -47,6 +47,12 @@ Any other vendor takes `egpu-generic`, which leaves out everything that only exi
 | Telemetry, power limit | `nvidia-smi` | amdgpu sysfs / hwmon (`power1_cap`); no clock offsets |
 | Installer | installs NVIDIA packages, pins them, builds driver + gamescope | skips all of those when a non-NVIDIA eGPU is on the bus (or `EGPU_VENDOR=amd`) |
 
+**Untested hardware notice.** Every install path (plugin, `.run`, curl) compares the machine with the one tested
+configuration (Legion Go 2, RTX 5060 Ti, CachyOS). When anything differs it says exactly what, states that the
+project has not been tested there and that you install and test at your own risk, and installs nothing until you
+accept. The plugin keeps a one-line reminder on its first page afterwards. `egpu-detect --untested` prints the
+differences.
+
 With no eGPU connected at install time the installer cannot know the vendor and installs NVIDIA support, because an
 NVIDIA eGPU's first connection without it is the dangerous case and an unused package is not.
 

@@ -64,6 +64,18 @@ Remove SteamOS EGPU Buddy and restore the backed-up originals?" || exit 0
   exit 0
 fi
 
+# ---------------------------------------------------------------- untested hardware: explicit acceptance first
+if untested=$(bash "$ROOT/system/usr/local/sbin/egpu-detect" --untested 2>/dev/null); then
+  ask "NOT TESTED ON THIS HARDWARE
+
+$untested
+
+SteamOS EGPU Buddy was verified on one machine only (Legion Go 2 + RTX 5060 Ti on CachyOS; see TESTED.md). On this system it may not work, may leave the screen dark, or may need a reboot to recover.
+
+You install and test it AT YOUR OWN RISK. Continue?" || exit 0
+  export EGPU_ACCEPT_UNTESTED=1
+fi
+
 # ---------------------------------------------------------------- component choice
 ALL="core,session,gamescope,decky,bootpolicy,desktopapp$([ $ARCH_LIKE = 1 ] && echo ,driver)"
 if [ $ADV = 0 ]; then
