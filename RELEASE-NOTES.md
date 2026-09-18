@@ -1,3 +1,10 @@
+0.7.18 — updates are opt-in, and the update controls are where you can find them.
+
+- **Automatic updates are off by default.** A new release is announced on the first page with an Update button; it
+  installs by itself only if you switch Automatic updates on in Setup. (Anyone who had switched it on keeps that.)
+- **Check for updates** is now a button at the bottom of the plugin's first page. Before, it was only on the Setup page,
+  which is reached by pressing the top button twice, and was reported as missing.
+
 0.7.17 — SteamOS: the patched driver without touching the 5 GB system partition; self-healing across OS updates.
 
 - Measured on Valve's SteamOS 3.8.14 image: 870 MB free on the system partition, the tested driver needs 1.5-2.1 GB,

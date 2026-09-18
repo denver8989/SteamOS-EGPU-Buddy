@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.17"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.18"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -415,7 +415,7 @@ def _check_update(install=False):
 class Plugin:
     async def get_update_status(self):
         d = _settings()
-        return {"auto_update": d.get("auto_update", True), "available": _update["available"], "state": _update["state"],
+        return {"auto_update": d.get("auto_update", False), "available": _update["available"], "state": _update["state"],
                 "checked": _update["checked"], "last_error": _update["last_error"], "installed": _read(VERSION_FILE)}
 
     async def set_auto_update(self, enabled: bool):
@@ -536,7 +536,7 @@ class Plugin:
         await asyncio.sleep(300)
         while True:  # automatic updates: hourly check; install only if enabled, already installed, and no game running
             try:
-                _check_update(install=_settings().get("auto_update", True))
+                _check_update(install=_settings().get("auto_update", False))
             except Exception as ex:  # noqa: BLE001
                 decky.logger.error(f"update check: {ex}")
             await asyncio.sleep(3600)

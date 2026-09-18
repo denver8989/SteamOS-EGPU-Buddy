@@ -179,10 +179,11 @@ the plugin's automatic updates follow the newest release only.
 When everything is installed and current that page shows only the eGPU controls; **Setup** (two presses of the
 top button) reinstalls or uninstalls.
 
-**Automatic updates.** The plugin checks this repository's releases every hour. With *Automatic updates* on (the
-default, in Setup) a new release installs itself when no game is running: the system integration through the same
-verified installer, then the plugin's own files, then Decky reloads and the first page asks for a reboot. With it off
-the first page shows an *Update now* button instead. It never performs a first install on its own.
+**Updates are your choice.** The plugin checks this repository's releases (hourly, and whenever you open it after a
+while) and announces a new one on its first page with an *Update now* button; **Check for updates** sits at the bottom
+of that page. Nothing installs by itself unless you switch *Automatic updates* on in Setup; it is **off by default**.
+An update installs the system integration through the same verified installer, then the plugin's own files, then Decky
+reloads and the first page asks for a restart. It never performs a first install on its own.
 
 ### Method 2 — from the Desktop, with the graphical installer
 
