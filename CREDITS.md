@@ -58,7 +58,8 @@ say where it came from.
   around the same approach (udev-driven attach, setpci ASPM/link control, boltctl authorization, P0 lock) for Blackwell
   eGPUs; not used here, listed because the approach is the same lineage.
 - **ewagner12 — [all-ways-egpu](https://github.com/ewagner12/all-ways-egpu)** (MIT) — the `boot_vga` bind-mount
-  technique (its "Method 2") is reimplemented in `egpu-hotplug-mount.sh` so that compositors pick the eGPU as primary;
+  technique (its "Method 2") is reimplemented in the experimental `egpu-generic` path (non-NVIDIA eGPUs) so that
+  compositors pick the eGPU as primary; the NVIDIA path does not use it (its copy never ran and was removed in 0.8.0);
   no code was copied, the idea and the file layout (a `0`/`1` file bind-mounted over the sysfs flag, a list of mounted
   paths for cleanup) are his.
 - The PCIe DPC handling (clearing the containment trigger so the second USB4 port forms its tunnel, re-arming it before

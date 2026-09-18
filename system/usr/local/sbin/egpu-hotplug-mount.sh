@@ -236,17 +236,8 @@ relogin_session(){
   [ -n "$nvcard" ] || { log "no NVIDIA DRM card — cannot route KWin"; return 1; }
   runenv="XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus"
 
-  # 2026-08-20 BOOT_VGA PRIMARY (technique learned from ewagner12/all-ways-egpu
-  # Method 2, reimplemented here so we keep one automount and no extra tooling).
-  # Wayland compositors (KWin/mutter/wlroots) choose their PRIMARY GPU from the
-  # read-only sysfs flag boot_vga (and drm/cardN/boot_display). It cannot be
-  # written, so bind-mount a file containing "1" over the eGPU's flag and "0"
-  # over the iGPU's. Without this KWin treats NVIDIA as SECONDARY and composites
-  # its outputs (NATIVE_PRESENT_PATH_PLAN.md:50-52) -- the crosstalk, and the
-  # multi-GPU compositing that trips the nvidia-drm pageflip timeout.
-  # MUST run BEFORE the compositor (re)starts, so it is ordered above the
-  # set-environment + KWin restart below.
-  egpu_set_boot_vga_primary "$(basename "$GDEV")"
+  # (2026-09-18) A boot_vga bind-mount step used to be called here; its functions were defined after `exit 0`, so it
+  # never ran. The NVIDIA-only session works on KWIN_DRM_DEVICES alone; the step is gone rather than switched on.
 
   log "routing KWin to NVIDIA-only: KWIN_DRM_DEVICES=/dev/dri/$nvcard (AMD masked)"
   runuser -u deck -- env $runenv systemctl --user set-environment \
@@ -383,48 +374,7 @@ if [ "$crosstalk" = 1 ]; then
 else
   log "eGPU display up + already NVIDIA-only desktop -> leave as-is"
 fi
+# egpu_external_only runs in the background; this script is a transient systemd unit, and when its main process exits
+# systemd kills the rest of the cgroup. Wait for it, or the panel stays on next to the eGPU display (2026-09-18).
+wait
 exit 0
-
-# --- boot_vga primary (see egpu_set_boot_vga_primary call site above) ---------
-EGPU_BINDDIR=/run/egpu-bootvga
-
-egpu_clear_boot_vga(){
-  # Unmount in reverse order; ignore anything already gone.
-  if [ -r "$EGPU_BINDDIR/bind-paths" ]; then
-    tac "$EGPU_BINDDIR/bind-paths" 2>/dev/null | while read -r bp; do
-      [ -n "$bp" ] && umount -l "$bp" 2>/dev/null
-    done
-    rm -f "$EGPU_BINDDIR/bind-paths"
-  fi
-}
-
-egpu_set_boot_vga_primary(){
-  local gpu=$1 card path found=0
-  [ -n "$gpu" ] || return 0
-  mkdir -p "$EGPU_BINDDIR" 2>/dev/null
-  printf '1\n' > "$EGPU_BINDDIR/1" 2>/dev/null
-  printf '0\n' > "$EGPU_BINDDIR/0" 2>/dev/null
-  egpu_clear_boot_vga
-
-  # Every display-class PCI device: 0300 (VGA), 0302 (3D), 0380 (other display).
-  for card in $( (lspci -D -d ::0300 -n; lspci -D -d ::0302 -n; lspci -D -d ::0380 -n) 2>/dev/null \
-                 | awk '{print $1}' | sort -u); do
-    for path in $(find /sys/bus/pci/devices/"$card"/ -maxdepth 3 -name 'boot_*' 2>/dev/null); do
-      if [ "$card" = "$gpu" ]; then
-        if mount -n --bind -o ro "$EGPU_BINDDIR/1" "$path" 2>/dev/null; then
-          echo "$path" >> "$EGPU_BINDDIR/bind-paths"; found=1
-        fi
-      elif grep -q 1 "$path" 2>/dev/null; then
-        if mount -n --bind -o ro "$EGPU_BINDDIR/0" "$path" 2>/dev/null; then
-          echo "$path" >> "$EGPU_BINDDIR/bind-paths"
-        fi
-      fi
-    done
-  done
-
-  if [ "$found" = 1 ]; then
-    log "BOOT_VGA: $gpu is now primary (iGPU masked to 0) — KWin will pick the eGPU"
-  else
-    log "BOOT_VGA: no boot_* flag found for $gpu; primary unchanged"
-  fi
-}

@@ -68,7 +68,7 @@ flood lockout so a bad link cannot loop the boot.
 **Cause.** The AMD iGPU owns `boot_vga`, so KWin/gamescope composite on it and copy each frame over the USB4
 tunnel to the NVIDIA connector. The copy saturates the tunnel and the NVIDIA side sees late, cross-device buffers.
 
-**Fix here.** The whole docked session is made NVIDIA-only: `boot_vga` bind-mounted (eGPU=1, iGPU=0),
+**Fix here.** The whole docked session is made NVIDIA-only:
 `KWIN_DRM_DEVICES`/`OUTPUT_CONNECTOR` restricted to the NVIDIA card, Vulkan/GL pinned to the NVIDIA ICD, and the
 session restarted on hot plug because a running compositor cannot be re-routed. See README, *How it works*.
 

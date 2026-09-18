@@ -1,3 +1,14 @@
+0.8.0-beta3 — PRE-RELEASE. Two more attach fixes found while testing beta2 on the NVIDIA eGPU.
+
+- **Panel stayed on next to the eGPU display after an automatic hot-plug (Desktop).** The attach script's panel-off
+  step ran as a background job; the script is a transient systemd service, and when its main process exited systemd
+  killed the job. It had only ever completed when the script was run by hand. The script now waits for it.
+- **The boot_vga step in the NVIDIA attach never ran.** Its functions were defined after the script's `exit`, so the
+  call failed silently every time since August. The NVIDIA-only session works on the compositor device pinning alone,
+  so the dead step was removed rather than switched on; README and credits corrected (all-ways-egpu's technique is
+  used only by the experimental non-NVIDIA path).
+- A version hold is only shown while the held version is the installed one.
+
 0.8.0-beta2 — PRE-RELEASE. Same as beta1 plus two fixes, and this time run on the NVIDIA eGPU.
 
 - Includes the 0.7.13 fix (hot-plug after a Desktop safe-detach restores the hidden NVIDIA userspace).
