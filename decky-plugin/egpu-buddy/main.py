@@ -392,7 +392,8 @@ def _update_plugin_files(version):
     if not want or want != hashlib.sha256(open(dst, "rb").read()).hexdigest(): raise RuntimeError("checksum mismatch on the plugin zip")
     import zipfile
     tmp = f"/tmp/egpu-buddy-plugin-{version}"; shutil.rmtree(tmp, ignore_errors=True); zipfile.ZipFile(dst).extractall(tmp)
-    src = os.path.join(tmp, "EGPU-Buddy"); bak = PLUGIN_LIVE + ".bak-egpu-buddy"
+    src = os.path.join(tmp, "EGPU-Buddy"); bak = f"{USER_HOME}/homebrew/egpu-buddy-backups/EGPU-Buddy.bak"   # outside plugins/: Decky loads every directory in there
+    os.makedirs(os.path.dirname(bak), exist_ok=True)
     shutil.rmtree(bak, ignore_errors=True); shutil.copytree(PLUGIN_LIVE, bak)
     for entry in os.listdir(PLUGIN_LIVE):
         pth = os.path.join(PLUGIN_LIVE, entry); shutil.rmtree(pth, ignore_errors=True) if os.path.isdir(pth) else os.remove(pth)
