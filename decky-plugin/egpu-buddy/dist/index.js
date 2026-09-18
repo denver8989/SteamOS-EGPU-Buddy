@@ -116,20 +116,29 @@ function Content() {
     const [tab, setTab] = SP_REACT.useState("main");
     const [su, setSu] = SP_REACT.useState(null);
     const [up, setUp] = SP_REACT.useState(null);
+    const staleChecked = SP_REACT.useRef(false);
     const [confirmSetup, setConfirmSetup] = SP_REACT.useState("");
     const [s, setS] = SP_REACT.useState(null);
     const [msg, setMsg] = SP_REACT.useState("");
     const [busy, setBusy] = SP_REACT.useState(false);
     const [pl, setPl] = SP_REACT.useState(null);
     const [off, setOff] = SP_REACT.useState(0);
-    const refresh = async () => { try {
-        setS(await getStatus());
-        setSu(await getSetup());
-        setUp(await getUpdate());
-    }
-    catch (e) {
-        setMsg(`status error: ${e}`);
-    } };
+    const refresh = async () => {
+        try {
+            setS(await getStatus());
+            setSu(await getSetup());
+            const u = await getUpdate();
+            setUp(u);
+            // the hourly check only counts awake time: after a night of sleep the status is stale, so re-check on open (wall clock)
+            if (!staleChecked.current && (!u.checked || Date.now() / 1000 - u.checked > 600)) {
+                staleChecked.current = true;
+                checkUpdate(false);
+            }
+        }
+        catch (e) {
+            setMsg(`status error: ${e}`);
+        }
+    };
     SP_REACT.useEffect(() => { if (!visible)
         return; refresh(); const t = setInterval(refresh, su?.busy ? 1000 : 3000); return () => clearInterval(t); }, [visible, su?.busy]);
     const gameUp = !!(s?.game_running || DFL.Router.MainRunningApp);

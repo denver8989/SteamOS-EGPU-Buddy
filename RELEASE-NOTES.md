@@ -16,6 +16,8 @@
 - Safe Detach hides the NVIDIA userspace with bind mounts where `/usr` is read-only.
 - The plugin runs the installer in its own systemd unit: a Steam or Decky restart no longer kills a long install.
   Install and uninstall from the plugin need no password.
+- The plugin re-checks for updates when it is opened and the last check is older than ten minutes (the hourly timer
+  only counts awake time, so after a night of sleep it showed a stale "up to date").
 - Uninstall also removes the driver extension, the build environment, the keep-list and the GRUB drop-in.
 - The installer no longer treats a failed udev/systemd/user-session reload as fatal (install at boot, chroot).
 - Verified in a container built from Valve's image (TESTED.md). **Not yet run on a real SteamOS device.**

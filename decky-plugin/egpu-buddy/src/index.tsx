@@ -1,6 +1,6 @@
 import { ButtonItem, ConfirmModal, Field, PanelSection, PanelSectionRow, SliderField, ToggleField, Router, showModal, staticClasses } from "@decky/ui";
 import { callable, definePlugin, useQuickAccessVisible } from "@decky/api";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { FaPlug } from "react-icons/fa";
 
 type Status = {
@@ -58,6 +58,7 @@ function Content() {
   const [tab, setTab] = useState<"main" | "details" | "setup">("main");
   const [su, setSu] = useState<Setup | null>(null);
   const [up, setUp] = useState<Upd | null>(null);
+  const staleChecked = useRef(false);
   const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall">("");
   const [s, setS] = useState<Status | null>(null);
   const [msg, setMsg] = useState("");
@@ -65,7 +66,10 @@ function Content() {
   const [pl, setPl] = useState<number | null>(null);
   const [off, setOff] = useState(0);
 
-  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); setUp(await getUpdate()); } catch (e) { setMsg(`status error: ${e}`); } };
+  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); const u = await getUpdate(); setUp(u);
+    // the hourly check only counts awake time: after a night of sleep the status is stale, so re-check on open (wall clock)
+    if (!staleChecked.current && (!u.checked || Date.now() / 1000 - u.checked > 600)) { staleChecked.current = true; checkUpdate(false); }
+  } catch (e) { setMsg(`status error: ${e}`); } };
   useEffect(() => { if (!visible) return; refresh(); const t = setInterval(refresh, su?.busy ? 1000 : 3000); return () => clearInterval(t); }, [visible, su?.busy]);
 
   const gameUp = !!(s?.game_running || Router.MainRunningApp);
