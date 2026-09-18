@@ -49,6 +49,24 @@ miss=""; for c in setpci:pciutils modetest:libdrm fuser:psmisc jq:jq xxd:vim per
 STOCK=${STOCK_GAMESCOPE_SESSION:-}; [ -n "$STOCK" ] || for s in /usr/lib/steamos/gamescope-session /usr/bin/gamescope-session /usr/bin/gamescope-session-plus; do [ -f "$s" ] && { STOCK=$s; break; }; done
 [ -n "$STOCK" ] || echo "warning: no gamescope-session script found; Game Mode pieces will be inert"
 # NVIDIA userspace + driver packages (the hot-plug path loads nvidia-open; nvidia-smi/NVML drive the controls)
+# ---- untested hardware: say so, and get an explicit acceptance before anything is installed ----
+if [ "$MODE" = install ] && untested=$(bash "$ROOT/system/usr/local/sbin/egpu-detect" --untested 2>/dev/null); then
+  echo; echo "*** THIS HARDWARE OR SYSTEM HAS NOT BEEN TESTED WITH SteamOS EGPU Buddy ***"
+  printf '%s\n' "$untested" | sed 's/^/    /'
+  echo "    Everything here was verified on one machine only (see TESTED.md). On yours it may not work, may leave the"
+  echo "    screen dark, or may need a reboot to recover. You install and test it AT YOUR OWN RISK."
+  if [ "${EGPU_ACCEPT_UNTESTED:-0}" != 1 ]; then
+    if [ -t 0 ]; then read -rp "    Type YES to continue: " r; [ "$r" = YES ] || { echo "aborted"; exit 1; }
+    else echo "    (unattended run without EGPU_ACCEPT_UNTESTED=1: aborting)"; exit 1; fi
+  fi
+  echo
+fi
+# stock SteamOS ships pacman without an initialised keyring: every package operation then fails ("keyring is not
+# writable / required key missing"). Initialise and populate it once (seen on a Legion Go, SteamOS, 2026-09-18).
+if [ "$MODE" = install ] && command -v pacman-key >/dev/null 2>&1 && ! sudo pacman-key --list-keys >/dev/null 2>&1; then
+  say "== initialising the pacman keyring (first package operation on this system)"
+  { sudo pacman-key --init && sudo pacman-key --populate; } >/dev/null 2>&1 || echo "warning: could not initialise the pacman keyring; package steps will fail"
+fi
 if ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "NVIDIA packages are missing. Install nvidia-open-dkms + nvidia-utils now with pacman? [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== installing nvidia-open-dkms nvidia-utils lib32-nvidia-utils"; sudo pacman -S --needed --noconfirm nvidia-open-dkms nvidia-utils lib32-nvidia-utils || echo "warning: NVIDIA package install failed; install them by hand"; else echo "warning: no nvidia-smi; install nvidia-open-dkms + nvidia-utils before plugging the eGPU in"; fi
@@ -186,7 +204,7 @@ fi
 if command -v pacman >/dev/null 2>&1; then
   umkdir "$PERSIST/pkgcache" "$PERSIST/modcache/$(uname -r)"
   # cache the exact installed versions for an offline restore: pacman cache -> our build dir -> Arch Linux Archive
-  for pk in nvidia-utils lib32-nvidia-utils bolt dkms nvidia-open-egpu-dkms; do v=$(pacman -Q "$pk" 2>/dev/null | awk '{print $2}'); [ -n "$v" ] || continue
+  for pk in nvidia-utils lib32-nvidia-utils bolt dkms nvidia-open-egpu-dkms; do v=$(pacman -Q "$pk" 2>/dev/null | awk '{print $2}' || true); [ -n "$v" ] || continue   # not installed (stock SteamOS) must not abort the install
     ls "$PERSIST"/pkgcache/"$pk"-"$v"-*.pkg.tar.* >/dev/null 2>&1 && continue
     f=$( { ls /var/cache/pacman/pkg/"$pk"-"$v"-*.pkg.tar.* "$USER_HOME"/.cache/egpu-buddy/driver-build/"$pk"-"$v"-*.pkg.tar.* 2>/dev/null || true; } | grep -v '\.sig$' | head -1 || true)
     if [ -n "$f" ]; then cp -n "$f" "$PERSIST/pkgcache/" 2>/dev/null || true

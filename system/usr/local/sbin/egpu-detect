@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# SteamOS EGPU Buddy — vendor-neutral eGPU detection. Source it for the functions, or run it:
+#   egpu-detect            -> "BDF VENDOR CARD" of the eGPU (exit 1 when none)   VENDOR = nvidia|amd|intel|other
+#   egpu-detect --igpu     -> BDF of the built-in GPU
+#   egpu-detect --device   -> device profile: legion-go-2 (the tested machine, device-specific fixes apply) | generic
+#   egpu-detect --untested -> one line per difference from the tested configuration (exit 0 = differs, lines printed; 1 = matches the tested machine)
+#   egpu-detect --selftest -> check the logic against a fake sysfs tree
+# The eGPU is the display-class PCI device that does NOT drive the built-in panel and sits behind a
+# bridge chain (root port -> dock switch -> GPU). Override: EGPU_PCI_BDF in /etc/nv-egpu-buddy/egpu.conf.
+# ponytail: depth>=3 also matches an internal dGPU that has its own PCIe switch (desktop Navi); this
+# project targets handhelds. Upgrade path = walk ancestors for a Thunderbolt/USB4 tunnel port.
+
+EGPU_SYSFS_ROOT=${EGPU_SYSFS_ROOT:-}
+[ -r /etc/nv-egpu-buddy/egpu.conf ] && [ -z "$EGPU_SYSFS_ROOT" ] && . /etc/nv-egpu-buddy/egpu.conf
+
+_egpu_is_display() { case "$(cat "$1/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) return 0 ;; esac; return 1; }
+
+egpu_igpu_bdf() {
+  local c dev
+  for c in "$EGPU_SYSFS_ROOT"/sys/class/drm/card*-eDP-*; do
+    [ -e "$c" ] || continue
+    dev=$(readlink -f "${c%-eDP-*}/device") && { basename "$dev"; return 0; }
+  done
+  # no panel connector visible (headless, or the panel's card is mid-reset): shallowest display device
+  for dev in "$EGPU_SYSFS_ROOT"/sys/bus/pci/devices/*; do
+    _egpu_is_display "$dev" || continue
+    [ "$(_egpu_depth "$dev")" -le 2 ] && { basename "$dev"; return 0; }
+  done
+  return 1
+}
+
+# number of PCI functions in the device's path below the host bridge (iGPU = 2, tunneled GPU >= 3)
+_egpu_depth() { readlink -f "$1" | grep -oE '[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]' | wc -l; }
+
+egpu_vendor_name() { case "$1" in 0x10de) echo nvidia ;; 0x1002) echo amd ;; 0x8086) echo intel ;; *) echo other ;; esac; }
+
+# prints "BDF VENDOR CARD" (CARD empty until a DRM driver has bound)
+egpu_find() {
+  local igpu dev bdf card
+  igpu=$(egpu_igpu_bdf || true)
+  for dev in "$EGPU_SYSFS_ROOT"/sys/bus/pci/devices/*; do
+    bdf=$(basename "$dev")
+    if [ -n "${EGPU_PCI_BDF:-}" ]; then [ "$bdf" = "$EGPU_PCI_BDF" ] || continue
+    else
+      _egpu_is_display "$dev" || continue
+      [ "$bdf" != "$igpu" ] || continue
+      [ "$(_egpu_depth "$dev")" -ge 3 ] || continue
+    fi
+    card=$(ls "$dev/drm" 2>/dev/null | grep -m1 -E '^card[0-9]+$' || true)
+    echo "$bdf $(egpu_vendor_name "$(cat "$dev/vendor" 2>/dev/null)") $card"
+    return 0
+  done
+  return 1
+}
+
+# Device profile. The tested NVIDIA scripts are, in effect, the Legion Go 2 profile; anything else gets only detected,
+# generic behaviour. Device-specific fixes must be gated on this, never applied blindly.
+egpu_device_profile() {
+  case "$(cat "$EGPU_SYSFS_ROOT"/sys/class/dmi/id/product_family 2>/dev/null)" in
+    "Legion Go 8ASP2") echo legion-go-2 ;;
+    *) echo generic ;;
+  esac
+}
+
+# The one configuration this project has been verified on. Anything else is untested and the user must be told so.
+TESTED_DEVICE="Legion Go 8ASP2"; TESTED_GPU_ID="0x2d04"; TESTED_GPU_NAME="NVIDIA GeForce RTX 5060 Ti"; TESTED_DISTRO="cachyos"
+egpu_untested() {
+  local r=1 fam gpu vend id name distro
+  fam=$(cat "$EGPU_SYSFS_ROOT"/sys/class/dmi/id/product_family 2>/dev/null); fam=${fam:-$(cat "$EGPU_SYSFS_ROOT"/sys/class/dmi/id/product_name 2>/dev/null)}
+  [ "$fam" = "$TESTED_DEVICE" ] || { echo "device: ${fam:-unknown} (tested: Lenovo Legion Go 2)"; r=0; }
+  if read -r gpu vend _ < <(egpu_find 2>/dev/null); then
+    id=$(cat "$EGPU_SYSFS_ROOT/sys/bus/pci/devices/$gpu/vendor" 2>/dev/null):$(cat "$EGPU_SYSFS_ROOT/sys/bus/pci/devices/$gpu/device" 2>/dev/null)
+    name=$(lspci -s "$gpu" 2>/dev/null | sed 's/^[^:]*: //; s/ (rev.*//'); name=${name:-$id}
+    [ "$id" = "0x10de:$TESTED_GPU_ID" ] || { echo "eGPU: $name (tested: $TESTED_GPU_NAME)"; r=0; }
+  fi
+  distro=$(. "$EGPU_SYSFS_ROOT"/etc/os-release 2>/dev/null; echo "${ID:-unknown}")
+  [ "$distro" = "$TESTED_DISTRO" ] || { echo "distro: $distro (tested: CachyOS)"; r=0; }
+  return $r
+}
+
+# connected outputs of a DRM card, e.g. "DP-1 HDMI-A-1"
+egpu_connected_outputs() {
+  local n; for n in "$EGPU_SYSFS_ROOT"/sys/class/drm/"$1"-*; do
+    [ "$(cat "$n/status" 2>/dev/null)" = connected ] && echo "${n##*/"$1"-}"
+  done
+}
+
+_egpu_selftest() {
+  local t; t=$(mktemp -d); trap 'rm -rf "$t"' RETURN
+  mk() { # path class vendor
+    mkdir -p "$t/sys/devices/$1" "$t/sys/bus/pci/devices" "$t/sys/class/drm"
+    echo "$2" > "$t/sys/devices/$1/class"; echo "$3" > "$t/sys/devices/$1/vendor"
+    ln -s "$t/sys/devices/$1" "$t/sys/bus/pci/devices/${1##*/}"; }
+  mk pci0000:00/0000:00:08.1 0x060400 0x1022
+  mk pci0000:00/0000:00:08.1/0000:c2:00.0 0x038000 0x1002
+  mkdir -p "$t/sys/devices/pci0000:00/0000:00:08.1/0000:c2:00.0/drm/card1"
+  mkdir -p "$t/sys/class/drm/card1-eDP-1"; ln -s "$t/sys/devices/pci0000:00/0000:00:08.1/0000:c2:00.0/drm/card1" "$t/sys/class/drm/card1"
+  ln -s ../../../0000:c2:00.0 "$t/sys/devices/pci0000:00/0000:00:08.1/0000:c2:00.0/drm/card1/device"
+  EGPU_SYSFS_ROOT=$t; unset EGPU_PCI_BDF
+  [ "$(egpu_igpu_bdf)" = 0000:c2:00.0 ] || { echo "FAIL igpu"; return 1; }
+  egpu_find >/dev/null && { echo "FAIL: iGPU-only tree reported an eGPU"; return 1; }
+  mk pci0000:00/0000:00:01.1/0000:60:00.0/0000:61:00.0/0000:62:00.0 0x030000 0x1002
+  mkdir -p "$t/sys/devices/pci0000:00/0000:00:01.1/0000:60:00.0/0000:61:00.0/0000:62:00.0/drm/card0"
+  [ "$(egpu_find)" = "0000:62:00.0 amd card0" ] || { echo "FAIL amd: $(egpu_find)"; return 1; }
+  echo 0x10de > "$t/sys/devices/pci0000:00/0000:00:01.1/0000:60:00.0/0000:61:00.0/0000:62:00.0/vendor"
+  [ "$(egpu_find)" = "0000:62:00.0 nvidia card0" ] || { echo "FAIL nvidia: $(egpu_find)"; return 1; }
+  mkdir -p "$t/sys/class/drm/card0-DP-1" "$t/sys/class/drm/card0-DP-2"; echo connected > "$t/sys/class/drm/card0-DP-2/status"; echo disconnected > "$t/sys/class/drm/card0-DP-1/status"
+  [ "$(egpu_connected_outputs card0)" = DP-2 ] || { echo "FAIL outputs"; return 1; }
+  echo "selftest OK"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    --igpu) egpu_igpu_bdf ;;
+    --device) egpu_device_profile ;;
+    --untested) egpu_untested ;;
+    --selftest) _egpu_selftest ;;
+    *) egpu_find ;;
+  esac
+fi

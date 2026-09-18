@@ -6,7 +6,13 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 if [ "$(id -u)" = 0 ]; then U=${EGPU_TARGET_USER:-${SUDO_USER:-}}; [ -n "$U" ] && [ "$U" != root ] || { echo "running as root: set EGPU_TARGET_USER=<login user>"; exit 1; }; R=""; else U=$USER; R=sudo; fi
 command -v makepkg >/dev/null && command -v pacman >/dev/null || { echo "makepkg/pacman not found: the patched driver is Arch-based only"; exit 1; }
-K=$(uname -r); [ -f "/usr/lib/modules/$K/build/Makefile" ] || echo "warning: no kernel headers for $K; install the matching -headers package or the DKMS build will fail"
+K=$(uname -r)
+if [ ! -f "/usr/lib/modules/$K/build/Makefile" ]; then
+  # no headers for the running kernel (stock SteamOS): the package that owns the kernel names its -headers sibling
+  kp=$(pacman -Qqo "/usr/lib/modules/$K/vmlinuz" 2>/dev/null || pacman -Qqo "/usr/lib/modules/$K" 2>/dev/null | head -1 || true)
+  [ -n "$kp" ] && { echo "installing kernel headers: ${kp}-headers"; $R pacman -S --needed --noconfirm "${kp}-headers" >/dev/null 2>&1 || true; }
+  [ -f "/usr/lib/modules/$K/build/Makefile" ] || echo "warning: no kernel headers for $K; install the matching -headers package or the DKMS build will fail"
+fi
 $R pacman -S --needed --noconfirm dkms base-devel >/dev/null
 # the kernel modules and the userspace must be the same version: pin nvidia-utils (+lib32 if present) to the
 # version this package is built for, from the Arch Linux Archive, and IgnorePkg (set by install.sh) keeps it there

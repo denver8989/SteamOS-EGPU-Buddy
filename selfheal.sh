@@ -20,7 +20,7 @@ if [ $need = 1 ]; then
     done
   fi
   EGPU_TARGET_USER=$USER_NAME EGPU_AUTO_YES=1 EGPU_COMPONENTS=core,session,gamescope,bootpolicy,desktopapp EGPU_PREBUILT_GAMESCOPE="$HERE/prebuilt/gamescope-gbm" \
-    bash "$HERE/install.sh" >/tmp/egpu-buddy-selfheal.log 2>&1 && log "repair done" || log "repair reported errors (see /tmp/egpu-buddy-selfheal.log)"
+    EGPU_ACCEPT_UNTESTED=1 bash "$HERE/install.sh" >/tmp/egpu-buddy-selfheal.log 2>&1 && log "repair done" || log "repair reported errors (see /tmp/egpu-buddy-selfheal.log)"
   [ -n "$ro" ] && $ro enable >/dev/null 2>&1
 fi
 # patched driver package: restore from cache (done above) or rebuild from the payload's PKGBUILD (source cached)

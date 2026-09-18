@@ -1,3 +1,20 @@
+0.7.16 — first real SteamOS install attempt (Legion Go, SteamOS): install failed; fixed. Untested-hardware notice.
+
+- **"Install failed (rc 1)" on SteamOS.** Near its end the installer records the installed NVIDIA package versions for
+  the self-heal. On a system where `nvidia-utils` is not installed the version query fails, and under the installer's
+  strict error mode that one failed query ended the whole install, just before the kernel parameters were written
+  (everything before it had been installed). Fixed; the installer was audited for the same pattern.
+- **SteamOS ships pacman without a keyring**, so every package step failed ("keyring is not writable", "required key
+  missing"). The installer now initialises and populates the keyring once when it is missing, and the driver step
+  installs the kernel's matching `-headers` package by itself.
+- **Untested-hardware notice (requested earlier, missing from the stable line until now).** The plugin, the `.run` and the
+  terminal install compare the machine with the one tested configuration (Legion Go 2, RTX 5060 Ti, CachyOS); when
+  anything differs they say what, state that the project has not been tested there and that you install and test at
+  your own risk, and install nothing until you accept. The plugin keeps a one-line reminder on its first page.
+- Honest status for SteamOS: still **experimental and unverified**. SteamOS's repositories carry NVIDIA 575.64.05, the
+  patched driver here is 610.57.04; the installer pins the 610 userspace from the Arch archive and builds the patched
+  modules for Valve's kernel, and none of that has been confirmed on a SteamOS machine yet.
+
 0.7.15 — games black after a re-attach, and the cable-yank recovery, both fixed and verified on real replugs.
 
 - **Every game black (or crashing at launch) after re-attaching the eGPU, until a reboot.** The Steam UI was fine, games
