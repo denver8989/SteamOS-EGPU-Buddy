@@ -25,14 +25,6 @@ FORMAT_FILTER=${NV_EGPU_GAMESCOPE_FORMAT_FILTER:-/home/deck/.local/lib/nv-egpu-b
 EGPU_WAIT_SECONDS=${EGPU_GAMESCOPE_EGPU_WAIT_SECONDS:-25}
 EGPU_PROBE_SECONDS=${EGPU_GAMESCOPE_EGPU_PROBE_SECONDS:-5}
 EGPU_GAMESCOPE_HDR=${NV_EGPU_GAMESCOPE_HDR:-0}
-# HDR output on this eGPU path renders washed out on SteamOS 3.8, and it is NOT this project's doing: measured on a real
-# device, gamescope's composited frame is correct (Steam UI background (14,20,27)) while the picture on the wire is not,
-# and the KDE DESKTOP is wrong there too with the identical DRM signalling (Colorspace=BT2020_RGB). The same monitor, GPU
-# and driver 610.57.04 look right under KWin 6.7.4 / kernel 7.1 on CachyOS; SteamOS 3.8 has KWin 6.4.3 / kernel 6.16.
-# So do not advertise HDR to Steam there: users only get a grey, low-contrast UI. Override: /etc/nv-egpu-buddy/force-hdr
-if [ "$EGPU_GAMESCOPE_HDR" = "1" ] && command -v steamos-readonly >/dev/null 2>&1 && [ ! -e /etc/nv-egpu-buddy/force-hdr ]; then
-  EGPU_GAMESCOPE_HDR=0
-fi
 # refresh cap for the eGPU output; 0 = none (use the display's best mode). The 60 Hz cap of the corruption era is gone
 # since the GBM-scanout gamescope; set NV_EGPU_GAMESCOPE_MAX_REFRESH in the drop-in to cap again.
 EGPU_GAMESCOPE_MAX_REFRESH=${NV_EGPU_GAMESCOPE_MAX_REFRESH:-0}
