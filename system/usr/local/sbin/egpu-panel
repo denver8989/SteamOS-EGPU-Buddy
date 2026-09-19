@@ -12,7 +12,7 @@ case "$want" in
       python3 /usr/local/sbin/egpu-crtc-off.py /dev/dri/$PC "$crtc" >/dev/null 2>&1
     done
     [ -n "$id" ] && modetest -M amdgpu -w "$id":DPMS:3 >/dev/null 2>&1
-    for b in /sys/class/backlight/*; do echo 1 > "$b/bl_power" 2>/dev/null; done ;;
+    for b in /sys/class/backlight/*; do echo 4 > "$b/bl_power" 2>/dev/null; done ;;   # 4 = FB_BLANK_POWERDOWN (1 only dims on amdgpu)
   on)
     for b in /sys/class/backlight/*; do echo 0 > "$b/bl_power" 2>/dev/null; done ;;
 esac

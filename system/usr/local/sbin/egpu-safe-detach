@@ -22,7 +22,7 @@ TEARDOWN_ONLY=0
 HIDE_LIST="/usr/lib/libnvidia-ml.so.1 /usr/lib/libnvidia-ml.so.610.57.04 /usr/lib32/libnvidia-ml.so.1 /usr/lib32/libnvidia-ml.so.610.57.04 /usr/share/glvnd/egl_vendor.d/10_nvidia.json /usr/lib/gbm/nvidia-drm_gbm.so /usr/share/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/implicit_layer.d/nvidia_layers.json /usr/share/egl/egl_external_platform.d/10_nvidia_wayland.json /usr/share/egl/egl_external_platform.d/15_nvidia_gbm.json"
 nv_drm_nodes(){ g=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$g" ] || return 0
   for n in /sys/class/drm/card[0-9]* /sys/class/drm/renderD*; do [ "$(basename "$(readlink -f "$n/device" 2>/dev/null)")" = "$g" ] && echo "/dev/dri/$(basename "$n")"; done; }
-panel_bl(){ for b in /sys/class/backlight/*; do echo "$1" > "$b/bl_power" 2>/dev/null; done; }
+panel_bl(){ for b in /sys/class/backlight/*; do echo "$1" > "$b/bl_power" 2>/dev/null; done; }   # 0 = on, 4 = FB_BLANK_POWERDOWN
 # Hiding = renaming the file. Where /usr cannot be written (SteamOS: the driver is a read-only system extension merged
 # into /usr) the file is covered with a bind mount of an empty, unreadable file instead: same effect for every loader
 # ("not readable" / "not a library"), nothing on disk changes, and it is undone with umount.
@@ -40,7 +40,7 @@ case "${1:-}" in
   --restore) [ "$(id -u)" = 0 ] || exit 1; restore_nv; echo "nvidia userspace restored"; exit 0 ;;
   --unload)  [ "$(id -u)" = 0 ] || exit 1; for p in $(fuser /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm /dev/dri/renderD129 2>/dev/null | tr -s " \n" " "); do c=$(tr "\0" " " </proc/$p/cmdline 2>/dev/null); case "$c" in *kwin_wayland*) ;; *) kill "$p" 2>/dev/null;; esac; done; sleep 2; modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia 2>/dev/null; lsmod | grep -q "^nvidia" && { echo "still loaded: $(lsmod|grep "^nvidia"|awk "{print \$1\"=\"\$3}"|tr "\n" " ") holders: $(fuser -v /dev/nvidia0 /dev/dri/renderD129 2>&1 | awk "NR>1&&NF>=3{print \$NF}" | sort -u | tr "\n" " ")"; exit 5; }; echo "nvidia stack unloaded"; exit 0 ;;
   --republish) [ "$(id -u)" = 0 ] || exit 1; /usr/local/sbin/egpu-republish-display; exit 0 ;;
-  --panel-off) [ "$(id -u)" = 0 ] || exit 1; panel_bl 1; exit 0 ;;
+  --panel-off) [ "$(id -u)" = 0 ] || exit 1; panel_bl 4; exit 0 ;;
   --panel-on)  [ "$(id -u)" = 0 ] || exit 1; panel_bl 0; exit 0 ;;
 esac   # caller already moved the compositor off the eGPU; do electrical teardown only
 U=1000

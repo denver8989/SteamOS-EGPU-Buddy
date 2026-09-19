@@ -121,6 +121,10 @@ if [ "${EGPU_KEEP_PANEL_LIFELINE:-0}" = "1" ]; then
   kscreen-doctor output.$PANEL.enable output.$PANEL.priority.2 output.$PANEL.scale.1.5 >/dev/null 2>&1
 else
   kscreen-doctor output.$PANEL.disable >/dev/null 2>&1
+  # kscreen can only switch off outputs the compositor OWNS, and in the NVIDIA-only desktop it does not own the panel's
+  # card at all, so that call is a no-op there. The CRTC is then left on by whoever had it last (the previous session, or
+  # the console) and the panel sits lit and black. Ask the privileged helper, which talks to DRM directly, as well.
+  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged panel-off >/dev/null 2>&1 || true
 fi
 
 # Verify that the TV is active; rescue to the handheld if the handoff failed.
