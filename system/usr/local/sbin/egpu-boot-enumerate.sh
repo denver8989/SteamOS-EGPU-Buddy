@@ -108,9 +108,20 @@ except Exception: print(0)
 EOF
 }
 if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
+  # A device that has just had an FLR reads as a zombie (config space all-ones) until it
+  # finishes resetting, and the privileged helper refuses to resize a device in that state.
+  # Resizing immediately after the FLR therefore failed EVERY time — silently, because the
+  # first version of this loop threw the error away. Wait for it to come back, and log why
+  # if it still will not resize.
+  for _ in $(seq 1 15); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
+  _rc=1
   for _c in 14 13 12; do
-    "$PRIV" resize "$_c" >/dev/null 2>&1 && { log "BAR1 resized while driverless (size code $_c) -> $(bar1_mib "$gpu")MiB"; break; }
+    if _out=$("$PRIV" resize "$_c" 2>&1); then
+      log "BAR1 resized while driverless (size code $_c) -> $(bar1_mib "$gpu")MiB"; _rc=0; break
+    fi
+    log "BAR1 resize to size code $_c refused: ${_out:-no reason given}"
   done
+  [ "$_rc" = 0 ] || log "BAR1 stays at $(bar1_mib "$gpu")MiB — Game Mode will use the built-in screen (its readiness gate needs the resized BAR)"
 fi
 
 log "eGPU at $gpu — load driver (FLR done, BAR1 $(bar1_mib "$gpu")MiB)"

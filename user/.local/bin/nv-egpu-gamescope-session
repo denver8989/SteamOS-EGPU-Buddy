@@ -118,6 +118,19 @@ bar1_full() {
   [ "$(bar1_size_bytes)" -ge 17179869184 ]
 }
 
+# A small BAR1 is a PERFORMANCE limit, not a reason to refuse the eGPU. It used to be part of
+# the readiness gate, which meant that on any boot where the BAR could not be resized — and it
+# cannot be resized at all once the driver is bound, or when the platform's hotplug window has
+# no room for it — Game Mode silently stayed on the built-in screen with a working eGPU sitting
+# right there. The CachyOS machine this project was developed on runs with ReBAR off entirely
+# and is fine. What actually proves the GPU is healthy is NVML responding, which the attach
+# hook already gates on: a wedged init cannot answer it.
+bar1_note() {
+  bar1_full && return 0
+  log "BAR1 is $(( $(bar1_size_bytes) / 1048576 ))MiB, not resized (lower performance over Thunderbolt, but the eGPU is used anyway)"
+  return 0
+}
+
 connector_order() {
   local output first=1
   for output in $(connected_egpu_outputs); do
@@ -221,7 +234,6 @@ egpu_native_ready() {
   [ -n "$egpu_card" ] &&
     [ -n "$igpu_card" ] &&
     [ -n "$outputs" ] &&
-    bar1_full &&
     [ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]
 }
 
@@ -513,7 +525,7 @@ fi
 # NV-EGPU-Buddy safe detach (Game Mode): while the marker exists the relaunched session must NOT take the eGPU
 # even though it is still on the bus (the detach helper removes it once this session is up on the panel).
 detach_mode=0; { [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-detach-mode" ] || [ -e /run/nvegpu/gm-detach-pending ]; } && detach_mode=1
-if [ "$detach_mode" = 0 ] && [ -n "$egpu_card" ] && [ -n "$igpu_card" ] && [ -n "$outputs" ] && bar1_full && [ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
+if [ "$detach_mode" = 0 ] && [ -n "$egpu_card" ] && [ -n "$igpu_card" ] && [ -n "$outputs" ] && bar1_note && [ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
   clear_session_env
   export PATH="$SHIM_DIR:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin"
   export OUTPUT_CONNECTOR

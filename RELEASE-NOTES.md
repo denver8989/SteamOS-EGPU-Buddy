@@ -1,3 +1,27 @@
+0.7.34 — a small BAR1 no longer costs you the eGPU.
+
+Booting with the eGPU attached still landed on the built-in screen after 0.7.32, and the reason was a requirement that
+should never have been one.
+
+**Game Mode refused the eGPU unless BAR1 had been resized to 16 GiB.** That is a performance limit, not a health check.
+BAR1 can only be resized while the GPU has no driver bound, and on some boots it cannot be resized at all — the kernel
+answered `write error: No space left on device`, because a 16 GiB BAR must be 16 GiB-aligned and shares the hotplug
+window with the GPU's other BARs. So a perfectly healthy eGPU with the monitor connected sat unused while the session
+ran on the handheld screen. The development machine this project was built on runs with ReBAR off entirely and is fine.
+
+The readiness gate now asks what actually proves the GPU is alive — NVML responding, which a wedged initialisation
+cannot do — and treats BAR1 as advisory, logging "BAR1 is 256MiB, not resized (lower performance over Thunderbolt, but
+the eGPU is used anyway)".
+
+Two supporting fixes:
+
+- **The boot-time resize was failing silently.** It ran immediately after the FLR, while the GPU still reads as a zombie,
+  and the helper refused it — but the loop threw the error away, so the log said nothing. It now waits for the device to
+  come back and **logs the refusal reason** if it still will not resize.
+- **The hotplug memory window is requested as 32 GiB instead of 16 GiB**, which gives a 16 GiB BAR room to be placed at
+  boot, and the older copy of these parameters is removed from the base bootloader config so a stale value cannot sit
+  next to the new one. This only affects performance; nothing depends on it any more.
+
 0.7.33 — a stale DRM card no longer black-screens Game Mode.
 
 Found live on a Legion Go 1 that booted to a black screen with the eGPU attached. Game Mode was not merely failing to

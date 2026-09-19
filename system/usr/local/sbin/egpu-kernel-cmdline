@@ -4,7 +4,13 @@
 # --check prints the parameters missing from the RUNNING kernel (exit 1 if any). --apply writes them into the
 # bootloader config (backup kept) and regenerates it; a reboot is needed afterwards.
 set -u
-WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=16G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
+# hpmemprefsize=32G, not 16G: the GPU wants a 16GiB BAR1 that must be 16GiB-ALIGNED, and it
+# shares the hotplug window with its other BARs — so a 16G reservation cannot hold it and the
+# kernel refuses the resize with ENOSPC ("write error: No space left on device"). The BAR then
+# stays at 256MiB for the whole boot and Game Mode's readiness gate never passes, which is why
+# booting WITH the eGPU attached landed on the built-in screen while hot-plugging worked
+# (a hot-plugged device gets its window assigned fresh). Measured on a Legion Go 1 + RTX 5060 Ti.
+WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=32G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
 MODE=${1:---check}; DRY=0; [ "${2:-}" = --dry-run ] && DRY=1
 missing(){ local cur; cur=$(cat /proc/cmdline); for p in $WANT; do case " $cur " in *" $p "*) ;; *) printf '%s ' "$p";; esac; done; }
 merge(){ # $1 = existing cmdline string -> string with our params (replacing any pci=/nvidia-drm.modeset=/pcie_aspm=/iommu= token)
@@ -42,6 +48,17 @@ elif [ -f /etc/default/grub ] && command -v steamos-readonly >/dev/null 2>&1; th
   # An OS update replaces /etc/default/grub, but grub-mkconfig also reads /etc/default/grub.d/*.cfg and SteamOS keeps
   # files listed in /etc/atomic-update.conf.d across updates (install.sh lists this one). Verified on the 3.8.14 image.
   d=/etc/default/grub.d/egpu-buddy.cfg
+  # An older apply may have written these straight into /etc/default/grub. Leaving them there
+  # puts two copies on the command line, and when a VALUE changes (16G -> 32G) it is not defined
+  # which one wins. Take ours out of the base file; the drop-in below is the single source.
+  if [ $DRY = 0 ] && grep -q 'hpmemprefsize\|nvidia-drm.modeset' /etc/default/grub 2>/dev/null; then
+    cur=$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' /etc/default/grub | head -1)
+    stripped=""
+    for t in $cur; do case "$t" in pci=*|nvidia-drm.modeset=*|pcie_aspm=*|thunderbolt.host_reset=*|thunderbolt.clx=*|iommu=*|pcie_ports=*) ;; *) stripped="$stripped $t" ;; esac; done
+    cp -a /etc/default/grub "/etc/default/grub.bak-egpu-buddy-$TS"
+    sed -E -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=\".*\"|GRUB_CMDLINE_LINUX_DEFAULT=\"${stripped# }\"|" /etc/default/grub
+    echo "removed an older copy of the parameters from /etc/default/grub (backup kept)"
+  fi
   if [ $DRY = 1 ]; then echo "would write $d"; else mkdir -p /etc/default/grub.d
     printf '# SteamOS EGPU Buddy: kernel parameters the eGPU path needs (kept across OS updates)\nGRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} %s"\n' "$WANT" > "$d"; echo "wrote $d"; did=1; fi
   cfg=$(ls /efi/EFI/steamos/grub.cfg /boot/efi/EFI/steamos/grub.cfg /boot/grub/grub.cfg 2>/dev/null | head -1)
