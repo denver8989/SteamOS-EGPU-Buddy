@@ -20,6 +20,9 @@
 # ============================================================================
 printf desktop > "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/egpu-session-type" 2>/dev/null || true   # session type, read by egpu-surprise-recover
 set -u
+# Session-type marker for egpu-surprise-recover: written at EVERY Plasma login, before any early exit below
+# (the Game Mode session wrapper writes "gamemode"; whichever session started last owns the marker).
+printf desktop > "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/egpu-session-type" 2>/dev/null || true
 # eGPU PCI address is NOT fixed — it depends which USB4 port it tunneled through (seen at both
 # 62:00.0 and 03:00.0). Detect the NVIDIA-driven GPU (with a DRM node) dynamically; hardcoding it
 # made this whole autostart no-op as "eGPU absent" whenever it landed on the other address.
