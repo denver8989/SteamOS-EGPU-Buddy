@@ -1,3 +1,27 @@
+0.7.35 — this software could leave a handheld sitting at a boot menu. Update.
+
+**A SteamOS machine could be left needing a keyboard to boot.** Applying the kernel parameters regenerates the GRUB
+configuration with `grub-mkconfig` — and on SteamOS the result comes out with **no timeout directive at all**, so GRUB
+waits at a menu forever. SteamOS's own configuration is not produced by `grub-mkconfig`, so it never had this problem
+until this project regenerated it. On a handheld with no keyboard that is indistinguishable from a dead device; it
+happened to a user, who had to find a keyboard to get the machine to boot, twice.
+
+Fixed in two ways, because this one must not come back:
+
+- The drop-in this project writes now also pins `GRUB_TIMEOUT=0` and `GRUB_TIMEOUT_STYLE=hidden`, so any regeneration —
+  by us, or by anything else — produces a configuration that boots straight through.
+- After regenerating, the generated file is **checked**: if it has no timeout directive, one is written into it. A
+  config that stops and waits is never left behind.
+
+**Boot no longer stalls for two and a half minutes after a hardware reset.** When the flood lockout is set — the guard
+that pauses eGPU attach after the platform resets itself — the boot-time mount still waited 90 seconds for a GPU that
+the lockout had already refused to bring up, while holding the login manager back. A user saw "A start job is running
+for Session-independent eGPU compute mount (2min 39s)" and read it, reasonably, as a failed boot. It now skips
+immediately and says so, and the unit's timeout no longer exceeds what the helper can use.
+
+The hotplug memory window stays at the value that has always been shipped. Raising it was an untested guess at a
+performance setting, and nothing depends on the BAR size any more.
+
 0.7.34 — a small BAR1 no longer costs you the eGPU.
 
 Booting with the eGPU attached still landed on the built-in screen after 0.7.32, and the reason was a requirement that

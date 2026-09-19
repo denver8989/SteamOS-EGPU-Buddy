@@ -9,7 +9,9 @@ ConditionPathExists=/usr/local/sbin/nv-egpu-buddy-privileged
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/nv-egpu-buddy-mount
-TimeoutStartSec=150
+# just above the helper's own 90s wait: this unit holds the login manager back while it runs,
+# so every second beyond what the helper can actually use is a second of apparently dead boot
+TimeoutStartSec=110
 
 [Install]
 WantedBy=multi-user.target
