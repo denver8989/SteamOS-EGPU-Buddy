@@ -93,6 +93,10 @@ else
     # it at the iGPU + mesa and restart the compositor unit.
     say "[1/5] moving KWin off the eGPU ($IGPU_CARD, mesa render)…"
   touch "$DM"
+  # The attach pins Vulkan to the NVIDIA ICD; the detach then HIDES that file. Leaving the variable behind makes the
+  # loader report "Found no drivers" and EVERY Vulkan game fails to start until the eGPU comes back. Unset it here so the
+  # loader scans the directory again and finds the built-in GPU's driver.
+  runuser -u deck -- env $RUNENV systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES >/dev/null 2>&1
   runuser -u deck -- env $RUNENV systemctl --user set-environment \
     "KWIN_DRM_DEVICES=/dev/dri/$IGPU_CARD" \
     "KWIN_RENDER_NODES=/dev/dri/$(ls /sys/class/drm/$IGPU_CARD/device/drm 2>/dev/null | grep -m1 renderD)" \

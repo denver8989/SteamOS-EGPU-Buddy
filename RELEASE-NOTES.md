@@ -1,3 +1,22 @@
+0.7.24 — critical: a detach could leave the machine unable to start any Vulkan game.
+
+**Update immediately if you have ever used Safe Detach or unplugged the eGPU.**
+
+While the eGPU is attached, the session is pinned to the NVIDIA Vulkan driver (`VK_DRIVER_FILES`). Detaching hides that
+driver file, as it must, because the card is gone — but nothing cleared the pin. The Vulkan loader then reports
+`vkCreateInstance: Found no drivers!` and **every Vulkan game fails to start**, on the built-in GPU, with the eGPU not
+even connected. Games hang on Steam's launch screen or crash immediately, and nothing points at this software as the
+cause. A second variant set the same variables to an empty string, which the loader also reads as "no drivers at all".
+
+Fixed in all three paths that move you back to the built-in GPU: Safe Detach, the desktop Safe Detach tool, and the
+surprise-unplug recovery. They now clear the pin so the loader finds the built-in GPU's driver again.
+
+**Already affected machines repair themselves.** Every session start now checks whether the Vulkan pin names a file
+that exists, and clears it if not. That runs in both Game Mode and the desktop, so a reboot or a session restart is
+enough; no manual repair and no reinstall. A valid pin is left alone.
+
+Found on the development machine after a detach, by a user who reported that every game had started failing.
+
 0.7.23 — everything SteamOS: a real device found what a container could not.
 
 Tested end to end on a Legion Go (SteamOS 3.8, kernel 6.16 valve) with an RTX 5060 Ti in an AORUS TB5 box on a

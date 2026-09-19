@@ -130,6 +130,7 @@ status PREFLIGHT_PASS 'Moving the Desktop to the internal iGPU. Do not unplug ye
 touch "$HANDOFF_LOCK"
 touch "$RUN/egpu-detach-mode"
 IGPU_RENDER=$(ls /sys/class/drm/$IGPU_CARD/device/drm 2>/dev/null | grep -m1 renderD)
+systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES >/dev/null 2>&1   # the NVIDIA ICD is about to be hidden
 systemctl --user set-environment \
   "KWIN_DRM_DEVICES=/dev/dri/$IGPU_CARD" \
   "KWIN_RENDER_NODES=/dev/dri/${IGPU_RENDER:-renderD128}" \

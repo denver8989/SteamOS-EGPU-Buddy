@@ -33,6 +33,8 @@ if [ "$GM" = 1 ]; then
   log "Game Mode: desktop routing not applied; stray display variables cleared"
 else
 igpu=$(for c in /sys/class/drm/card[0-9]; do [ "$(cat $c/device/vendor 2>/dev/null)" = 0x1002 ] && basename $c && break; done)
+# same as the planned detach: the NVIDIA Vulkan ICD is gone with the card, so the pin to it must go too
+runuser -u deck -- env $RUNENV systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES >/dev/null 2>&1
 runuser -u deck -- env $RUNENV systemctl --user set-environment \
   "KWIN_DRM_DEVICES=/dev/dri/${igpu:-card1}" \
   "KWIN_RENDER_NODES=/dev/dri/$(ls /sys/class/drm/${igpu:-card1}/device/drm 2>/dev/null | grep -m1 renderD)" \

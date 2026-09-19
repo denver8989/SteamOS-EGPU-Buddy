@@ -244,6 +244,18 @@ _egpu_stage_desktop_kwin() {
   _egpu_emlog "Plasma pre-compositor: NVIDIA-first KWin staged for $outputs using KWIN_DRM_DEVICES=$KWIN_DRM_DEVICES"
 }
 
+# SAFETY NET: a Vulkan driver pin that names a file which no longer exists makes the loader report "Found no drivers",
+# and then NOTHING that uses Vulkan starts — not a game, not the compositor. That state can be left behind by any detach
+# (the NVIDIA ICD is hidden while the card is away) or by an older version of this software. Repair it at session start.
+for _v in VK_DRIVER_FILES VK_ICD_FILENAMES; do
+  eval "_p=\${$_v:-}"
+  if [ -n "${_p:-}" ] && [ ! -r "${_p%%:*}" ]; then
+    unset "$_v"; systemctl --user unset-environment "$_v" >/dev/null 2>&1 || true
+    logger -t egpu-buddy "repaired stale $_v (pointed at ${_p%%:*}, which does not exist)" 2>/dev/null || true
+  fi
+done
+unset _v _p
+
 _egpu_pci=${EGPU_PCI_BDF:-$(_egpu_detect_nvidia_gpu_bdf)}
 _egpu_stage_desktop_kwin
 
