@@ -1,3 +1,20 @@
+0.7.30 — a monitor in standby counts as connected, and gets driven.
+
+Correction to 0.7.29. That release would only turn the built-in panel off if an eGPU display was already **lit**, which
+is the wrong test: a monitor in standby, or with its panel switched off, is still connected — it answers on DisplayPort
+AUX / DDC and it wakes the moment a signal is driven at it. Requiring it to be lit first would refuse the very handover
+that wakes it, and would keep the session on the built-in screen for a display that was perfectly available.
+
+The test is now **connected, after asking**: every eGPU connector is probed first ("detect" makes the driver query the
+monitor), and any connected output on a card that is not the built-in GPU counts. So a sleeping or panel-off monitor is
+found, the session moves to it, and the signal wakes it.
+
+The protection is unchanged for the case that caused the trouble: with no eGPU display connected at all, the built-in
+panel is not turned off, and the machine is never left with no screen.
+
+Checked on a machine whose only external display hangs off the built-in GPU: still refused, because that display is not
+the eGPU's and darkening the panel for it would be wrong.
+
 0.7.29 — the built-in screen is never turned off unless an eGPU display is actually lit.
 
 **Update before booting with the eGPU attached.** A user booted with the eGPU plugged in and the monitor in standby and

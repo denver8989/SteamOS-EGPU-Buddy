@@ -11,33 +11,41 @@ PC=""; for c in /sys/class/drm/card*-eDP-*; do [ -e "$c" ] && { PC=${c##*/}; PC=
 OWNED=0; fuser /dev/dri/$PC >/dev/null 2>&1 && OWNED=1
 
 # THE SAFETY RULE, enforced here so every caller gets it: the built-in panel may only go
-# dark when an eGPU display is actually lit to replace it. Turning it off with nothing else
-# showing leaves the machine with NO screen at all and no way back in — which is exactly
-# what happened to a user whose monitor was asleep when the session switched over.
-# Override for the deliberate teardown paths (Safe Detach turns it off on purpose while it
-# still owns the picture): EGPU_PANEL_FORCE=1.
-egpu_display_lit() {
-  local c dev vendor igpu s
+# dark when there is an eGPU display to replace it. Turning it off with nothing else there
+# leaves the machine with NO screen at all and no way back in (a user booted with the
+# monitor asleep and lost both screens).
+#
+# "There" means CONNECTED, not lit. A monitor in standby, or one whose panel is off, is
+# still connected — it answers on DisplayPort AUX / DDC and it wakes as soon as we drive a
+# signal at it. Requiring it to be lit already would refuse the very handover that wakes it.
+# So probe first ("detect" makes the driver ask the monitor), then accept any connected
+# output on a card that is not the built-in GPU.
+# Override for teardown paths that darken the panel while they still own the picture:
+# EGPU_PANEL_FORCE=1.
+egpu_display_connected() {
+  local c dev igpu
   igpu=$(readlink -f "/sys/class/drm/$PC/device" 2>/dev/null); igpu=${igpu##*/}
+  # wake the question, not the monitor: a standby display does not assert hot-plug, so ask it
+  for c in /sys/class/drm/card[0-9]*-*/status; do
+    case "$c" in *eDP-*|*Writeback-*) continue ;; esac
+    echo detect > "$c" 2>/dev/null || true
+  done
   for c in /sys/class/drm/card[0-9]*-*; do
     [ -e "$c/status" ] || continue
-    [ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
     case "${c##*/}" in *eDP-*|*Writeback-*) continue ;; esac
+    [ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
     dev=$(readlink -f "$c/device/device" 2>/dev/null); dev=${dev##*/}
     [ -n "$dev" ] && [ "$dev" != "$igpu" ] || continue          # must be on a card that is not the built-in GPU
-    vendor=$(cat "/sys/bus/pci/devices/$dev/vendor" 2>/dev/null)
     case "$(cat "/sys/bus/pci/devices/$dev/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) ;; *) continue ;; esac
-    s=$(cat "$c/enabled" 2>/dev/null)
-    [ "$s" = enabled ] && return 0
-    [ "$(cat "$c/dpms" 2>/dev/null)" = "On" ] && return 0
+    return 0
   done
   return 1
 }
 
 case "$want" in
   off)
-    if [ "${EGPU_PANEL_FORCE:-0}" != 1 ] && ! egpu_display_lit; then
-      echo "refusing to turn the built-in panel off: no eGPU display is lit to replace it (set EGPU_PANEL_FORCE=1 to override)" >&2
+    if [ "${EGPU_PANEL_FORCE:-0}" != 1 ] && ! egpu_display_connected; then
+      echo "refusing to turn the built-in panel off: no eGPU display is connected to replace it (set EGPU_PANEL_FORCE=1 to override)" >&2
       exit 3
     fi
     if [ "$OWNED" = 0 ]; then
