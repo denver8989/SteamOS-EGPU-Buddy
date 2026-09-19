@@ -1,3 +1,17 @@
+0.7.27 — one rule, enforced at the root: hardware that is not an eGPU is never touched.
+
+Every privileged action now refuses outright if the device it was pointed at is present and is not an NVIDIA GPU. That
+is checked once, at the root-owned boundary that every attach, detach, reset, power and bus operation goes through, so
+it holds for all of them at once instead of relying on each caller getting it right. An address with nothing at it is
+still fine — that is an eGPU that has not enumerated yet, and waiting or rescanning for it touches nobody else's device.
+
+Verified against the built-in GPU: `remove-gpu`, `reset-gpu`, `dpc-off`, `load-nvidia` and `status` all refuse with
+"is not an NVIDIA GPU (vendor 0x1002); refusing to touch it".
+
+The recovery tool no longer resets a hard-coded bridge either. It finds the GPU by vendor and class, takes that card's
+own parent bridge, and refuses the Secondary Bus Reset if anything that is not part of the eGPU sits behind it — a bus
+reset hits every device under the bridge, so a dock or a drive there must never be caught by it.
+
 0.7.26 — an external display is never mistaken for an eGPU, and a dock is never mistaken for an enclosure.
 
 Follow-up to 0.7.25, from auditing every place that decides "there is an eGPU here" rather than waiting for the next

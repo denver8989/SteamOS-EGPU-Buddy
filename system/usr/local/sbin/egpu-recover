@@ -16,8 +16,33 @@ PRIV=/usr/local/sbin/nv-egpu-buddy-privileged
 say(){ printf '  %s\n' "$*"; }
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo $0"; exit 1; }
 
-GPU=0000:62:00.0
-BRIDGE=0000:61:00.0   # Barlow-Ridge bridge directly above the GPU
+# THE RULE: never operate on hardware that is not an eGPU. Find the GPU by vendor
+# and class; the configured address is only a fallback for a card that has not
+# enumerated yet, and is refused outright if something else is sitting there.
+detect_nvidia_gpu_bdf(){ local d
+  for d in /sys/bus/pci/devices/*; do
+    [ "$(cat "$d/vendor" 2>/dev/null)" = "0x10de" ] || continue
+    case "$(cat "$d/class" 2>/dev/null)" in 0x0300*|0x0302*) basename "$d"; return 0 ;; esac
+  done; return 1; }
+GPU=${EGPU_GPU_BDF:-$(detect_nvidia_gpu_bdf || true)}
+GPU=${GPU:-0000:62:00.0}
+_v=$(cat "/sys/bus/pci/devices/$GPU/vendor" 2>/dev/null || true)
+[ -z "$_v" ] || [ "$_v" = "0x10de" ] || { echo "$GPU is not an NVIDIA GPU (vendor $_v) — refusing to touch it"; exit 2; }
+# The bridge to reset is the GPU's own parent when the card is on the bus.
+if [ -e "/sys/bus/pci/devices/$GPU" ]; then
+  BRIDGE=$(basename "$(dirname "$(readlink -f "/sys/bus/pci/devices/$GPU")")")
+else
+  BRIDGE=${EGPU_BRIDGE_BDF:-0000:61:00.0}
+fi
+# A Secondary Bus Reset resets EVERYTHING behind the bridge. Only ever do that to a
+# bridge whose children are the eGPU (or nothing yet) — never one holding a dock,
+# a drive or someone's display controller.
+bridge_is_egpu_only(){ local c v
+  for c in "/sys/bus/pci/devices/$BRIDGE"/0000:*; do
+    [ -e "$c/vendor" ] || continue
+    v=$(cat "$c/vendor" 2>/dev/null)
+    [ "$v" = "0x10de" ] || [ "$v" = "0x1002" ] || return 1   # 0x1002 = the PCIe switch/bridge chips in the enclosure
+  done; return 0; }
 
 say "[1/6] unloading nvidia stack (ignore-install aware)…"
 "$PRIV" unload-nvidia 2>/dev/null || modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null || true
@@ -25,7 +50,9 @@ say "[1/6] unloading nvidia stack (ignore-install aware)…"
 say "[2/6] clearing DPC on BOTH USB4 root ports…"
 "$PRIV" dpc-off 2>/dev/null | sed 's/^/      /'
 
-if [ -e "/sys/bus/pci/devices/$BRIDGE" ]; then
+if [ -e "/sys/bus/pci/devices/$BRIDGE" ] && ! bridge_is_egpu_only; then
+  say "[3/6] bridge $BRIDGE has non-eGPU devices behind it — skipping SBR (it is not ours to reset)"
+elif [ -e "/sys/bus/pci/devices/$BRIDGE" ]; then
   say "[3/6] Secondary Bus Reset on the upstream bridge $BRIDGE…"
   # BRIDGE_CONTROL is at config offset 0x3e; bit 6 (0x40) = Secondary Bus Reset.
   setpci -s "$BRIDGE" BRIDGE_CONTROL.w=0040:0040 2>/dev/null

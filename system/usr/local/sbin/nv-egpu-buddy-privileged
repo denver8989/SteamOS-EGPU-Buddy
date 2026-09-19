@@ -29,6 +29,15 @@ die() {
   exit "${2:-1}"
 }
 
+# THE RULE: never operate on hardware that is not an eGPU. If something is sitting
+# at this address and it is not an NVIDIA GPU, it belongs to someone else — a dock,
+# a display controller, a drive — and nothing here may touch it. An address with
+# nothing at it is fine: that is an eGPU that has not enumerated yet, and waiting
+# or rescanning for it touches no one else's device.
+if [ -e "$GDEV/vendor" ] && [ "$(cat "$GDEV/vendor" 2>/dev/null)" != "0x10de" ]; then
+  die "$GPU is not an NVIDIA GPU (vendor $(cat "$GDEV/vendor" 2>/dev/null)); refusing to touch it" 2
+fi
+
 cfg0() {
   xxd -l4 "$1/config" 2>/dev/null | awk '{print $2$3}'
 }
