@@ -1,3 +1,23 @@
+0.7.41 — a partial BAR1 resize could leave you with no eGPU at all. Update if you run 0.7.38–0.7.40.
+
+**Regression, found on a real boot.** 0.7.38 resized BAR1 at boot and accepted whatever size the kernel allowed: on a
+Legion Go 1, 16 GiB and 8 GiB were refused but **4 GiB was accepted — and the driver then would not create a DRM card
+at all**. A boot that would have worked at the stock 256 MiB ended with the eGPU unusable and the session on the
+built-in screen. The recovery path made it worse by falling back to 4 GiB again, and by reloading the driver without
+clearing the residue the failed initialisation left behind.
+
+Now it is **16 GiB or nothing**. The sizes in between buy little and cost exactly this. If 16 GiB is refused, the
+Thunderbolt tunnel is re-enumerated so the kernel sizes the bridge windows the way it does for a hot-plug, and 16 GiB is
+asked for once more. If that still fails, the BAR is left at its stock size and the eGPU is used as it always was. A BAR
+that somehow ends up between the two is put back down deliberately. The recovery path now clears the failed
+initialisation before reloading, which is what it should have done.
+
+**Quiet boot, for real this time.** SteamOS's `steamenv_boot` strips `loglevel=3 quiet splash
+plymouth.ignore-serial-consoles` from the line it boots — measured in both orders: after our parameters they were
+dropped, before them they were dropped again, while everything in `GRUB_CMDLINE_LINUX` survived untouched. They are now
+restored through that variable instead. The previous release's reordering was based on the wrong conclusion and did not
+fix it.
+
 0.7.40 — attach finishes by itself after a driver build, and the reset notice is readable again.
 
 **Plugging the eGPU in while the driver was still building did nothing.** The attach hook refuses to bring an eGPU up

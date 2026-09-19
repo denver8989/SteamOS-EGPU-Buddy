@@ -106,45 +106,42 @@ except Exception: print(0)
 EOF
 }
 if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
-  # A device that has just had an FLR reads as a zombie (config space all-ones) until it
-  # finishes resetting, and the privileged helper refuses to resize a device in that state.
-  # Resizing immediately after the FLR therefore failed EVERY time — silently, because the
-  # first version of this loop threw the error away. Wait for it to come back, and log why
-  # if it still will not resize.
+  # 16GiB or nothing. A PARTIAL resize is worse than none: on a real machine 4GiB was accepted and
+  # then the driver would not create a DRM card at all, so a boot that used to work at 256MiB
+  # ended with no eGPU. The sizes in between buy little and cost that risk.
+  #
+  # A device that has just had an FLR reads as a zombie until it finishes resetting and the helper
+  # refuses to resize it, so wait for it to come back first. If 16GiB is refused (ENOSPC: the
+  # bridge windows were sized at boot for the BARs the device already had), re-enumerate the
+  # tunnel so the kernel sizes them again the way it does for a hot-plug, and ask once more.
   for _ in $(seq 1 15); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
-  _rc=1
-  for _c in 14 13 12; do
-    if _out=$("$PRIV" resize "$_c" 2>&1); then
-      log "BAR1 resized while driverless (size code $_c) -> $(bar1_mib "$gpu")MiB"; _rc=0; break
-    fi
-    log "BAR1 resize to size code $_c refused: ${_out:-no reason given}"
-  done
-  if [ "$_rc" != 0 ]; then
-    # ENOSPC means the bridge windows were sized at boot for the BARs the device already had, and
-    # a 16GiB window will not fit in them. A device that arrives AFTER boot gets the reserve from
-    # pci=hpmemprefsize instead, which is why hot-plugging has always produced a 16GiB BAR and
-    # booting with the eGPU attached produced 256MiB. So make boot look like a hot-plug: take the
-    # tunnel down and let the kernel enumerate it again, then resize. Nothing is displaying yet at
-    # this point in boot, so there is no session to disturb.
-    log "BAR1 could not be resized in place — re-enumerating the eGPU tunnel to get hot-plug sized windows"
+  if _out=$("$PRIV" resize 14 2>&1); then
+    log "BAR1 resized while driverless -> $(bar1_mib "$gpu")MiB"
+  else
+    log "BAR1 resize refused: ${_out:-no reason given}"
+    log "re-enumerating the eGPU tunnel to get hot-plug sized bridge windows"
     if "$PRIV" reenumerate-tunnel >/dev/null 2>&1; then
-      for _ in $(seq 1 30); do [ -e "/sys/bus/pci/devices/$gpu" ] && break; sleep 1; done
-      for _ in $(seq 1 15); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
+      for _ in $(seq 1 20); do [ -e "/sys/bus/pci/devices/$gpu" ] && break; sleep 1; done
+      for _ in $(seq 1 10); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
       if [ -e "/sys/bus/pci/devices/$gpu" ] && [ ! -L "/sys/bus/pci/devices/$gpu/driver" ]; then
-        for _c in 14 13 12; do
-          if _out=$("$PRIV" resize "$_c" 2>&1); then
-            log "BAR1 resized after re-enumeration (size code $_c) -> $(bar1_mib "$gpu")MiB"; _rc=0; break
-          fi
-          log "BAR1 resize to size code $_c still refused: ${_out:-no reason given}"
-        done
+        if _out=$("$PRIV" resize 14 2>&1); then
+          log "BAR1 resized after re-enumeration -> $(bar1_mib "$gpu")MiB"
+        else
+          log "BAR1 still refused after re-enumeration: ${_out:-no reason given}"
+        fi
       else
-        log "the eGPU did not come back cleanly after re-enumeration"
+        log "the eGPU did not come back driverless after re-enumeration"
       fi
     else
-      log "tunnel re-enumeration refused (see the helper's reason); leaving the BAR as it is"
+      log "tunnel re-enumeration refused; leaving the BAR as it is"
     fi
   fi
-  [ "$_rc" = 0 ] || log "BAR1 stays at $(bar1_mib "$gpu")MiB — the eGPU is used anyway, at lower bandwidth over Thunderbolt"
+  # never leave a partially resized BAR behind: it is the size that wedges the driver
+  _mib=$(bar1_mib "$gpu")
+  if [ "$_mib" -gt 256 ] && [ "$_mib" -lt 16384 ]; then
+    log "BAR1 ended at ${_mib}MiB — neither full nor stock, and that size wedges driver init: backing it down"
+    "$PRIV" resize 8 >/dev/null 2>&1 || true
+  fi
 fi
 
 log "eGPU at $gpu — load driver (FLR done, BAR1 $(bar1_mib "$gpu")MiB)"
@@ -161,7 +158,13 @@ if ! compgen -G "/sys/bus/pci/devices/$gpu/drm/card*" >/dev/null 2>&1 &&
    [ "$(bar1_mib "$gpu")" -gt 256 ]; then
   log "driver did not create a DRM card with the resized BAR — backing BAR1 down and retrying"
   "$PRIV" unbind-nvidia >/dev/null 2>&1 || true
-  "$PRIV" resize 8 >/dev/null 2>&1 || "$PRIV" resize 12 >/dev/null 2>&1 || true
+  # stock size only: 4GiB is one of the sizes that wedges init, so falling back to it is no fallback
+  "$PRIV" resize 8 >/dev/null 2>&1 || true
+  # the failed init leaves residue behind; without clearing it the reload fails the same way, which
+  # is how a machine ended up with no eGPU at all instead of the 256MiB one it would have had
+  for _ in $(seq 1 10); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
+  "$PRIV" reset-gpu >/dev/null 2>&1 || true
+  for _ in $(seq 1 10); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
   "$PRIV" load-nvidia >/dev/null 2>&1 || true
   [ -L "/sys/bus/pci/devices/$gpu/driver" ] || "$PRIV" bind-nvidia >/dev/null 2>&1 || true
   "$PRIV" load-modeset >/dev/null 2>&1 || true
