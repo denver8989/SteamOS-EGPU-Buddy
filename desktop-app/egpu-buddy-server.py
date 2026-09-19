@@ -41,11 +41,12 @@ def status():
     panel = [read(p + "/enabled") for p in __import__("glob").glob("/sys/class/drm/card*-eDP-1")]
     return {"present": bool(bdf), "bdf": bdf, "driver_loaded": driver, "tunnel": tunnel, "game_mode": game_mode,
             "gpu": gpu, "displays": displays, "panel_enabled": (panel[0] == "enabled") if panel else None,
-            "detach": jread(f"{RUN}/safe-detach-status.json"), "gm": jread("/run/nvegpu/gm-status.json"), "last": dict(LAST)}
+            "detach": jread(f"{RUN}/safe-detach-status.json"), "gm": jread("/run/nvegpu/gm-status.json"), "last": dict(LAST), "show_seq": SHOW[0]}
 
 # Long actions run in the background, but their RESULT is kept and shown by the page: a button that fails must say so
 # (Re-attach used to discard all output, so a refused attach looked like a dead button).
 LAST = {}
+SHOW = [0]   # bumped by the launcher when the app is opened again while it already runs (window hidden in the tray)
 def run_bg(name, cmd, timeout=300):
     import threading
     def work():
@@ -56,7 +57,9 @@ def run_bg(name, cmd, timeout=300):
 
 
 def action(p):
-    a = (p or {}).get("action"); s = status()
+    a = (p or {}).get("action")
+    if a == "show": SHOW[0] += 1; return {"ok": True}
+    s = status()
     if a == "safe-detach":
         if not s["present"]: return {"ok": False, "error": "no eGPU on the bus"}
         if s["game_mode"]: rc, o, e = sh(["sudo", "-n", "/usr/local/sbin/egpu-gamemode-detach"], 120); return {"ok": rc == 0, "out": o or e}

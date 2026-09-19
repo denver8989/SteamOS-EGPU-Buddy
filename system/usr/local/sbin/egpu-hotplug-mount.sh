@@ -248,6 +248,11 @@ _pv load-modeset
 _pv load-drm
 for _ in $(seq 1 15); do compgen -G "$GDEV/drm/card*" >/dev/null && break; sleep 1; done
 egpu_card=$(ls -d "$GDEV"/drm/card* 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null)
+if [ -z "$egpu_card" ]; then   # no DRM card = no display to move a session to: say so instead of "staging anyway"
+  log "NVIDIA display driver did not create a DRM card (nvidia_drm loaded: $([ -d /sys/module/nvidia_drm ] && echo yes || echo NO)) — stopping"
+  mkdir -p /run/nvegpu; printf '{"state":"FAILED","message":"%s"}\n' "The eGPU is connected but its display driver did not start. Details: /var/log/egpu-hotplug-mount.log" > /run/nvegpu/gm-status.json 2>/dev/null
+  wait; exit 0
+fi
 log "mounted $gpu + display stack ready (DRM card: $egpu_card)"
 
 # ---- display-aware session completion: land the eGPU display on a NVIDIA-ONLY session ----

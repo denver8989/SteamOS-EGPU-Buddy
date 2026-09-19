@@ -6,28 +6,29 @@ say "[1/4] PCI rescan"; echo 1 > /sys/bus/pci/rescan; sleep 4
 GPU=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$GPU" ] || { say "GPU did not enumerate"; exit 2; }; say "      GPU at $GPU"
 say "[2/4] fresh nvidia stack"; modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null
 modprobe --ignore-install nvidia && modprobe --ignore-install nvidia_modeset && modprobe --ignore-install nvidia_drm modeset=1 fbdev=1; modprobe --ignore-install nvidia_uvm 2>/dev/null
-for _ in $(seq 1 15); do [ -e /sys/class/drm/card0 ] && [ "$(basename "$(readlink -f /sys/class/drm/card0/device/driver 2>/dev/null)")" = nvidia ] && break; sleep 1; done
-[ -e /sys/class/drm/card0 ] || { say "no card0 after reload"; exit 3; }; say "      card0 up"
+# the eGPU's OWN DRM card: card0 on the Legion Go 2, but e.g. card1 where the built-in GPU registered first (Legion Go 1)
+NVC=""; for _ in $(seq 1 15); do NVC=$(ls "/sys/bus/pci/devices/$GPU/drm" 2>/dev/null | grep -m1 -E '^card[0-9]+$' || true); [ -n "$NVC" ] && break; sleep 1; done
+[ -n "$NVC" ] || { say "the NVIDIA display driver did not create a DRM card (see /var/log/egpu-hotplug-mount.log)"; exit 3; }; say "      $NVC up"
 # wait until the NVIDIA connector(s) are actually probed (link + modes) before restaging KWin,
 # otherwise KWin can start against a card0 that has no usable output yet (dark monitor 2026-09-10 01:57).
 for _ in $(seq 1 30); do
-  ok=0; for c in /sys/class/drm/card0-*; do [ "$(cat $c/status 2>/dev/null)" = connected ] && [ -s "$c/modes" ] && ok=1; done
+  ok=0; for c in /sys/class/drm/"$NVC"-*; do [ "$(cat $c/status 2>/dev/null)" = connected ] && [ -s "$c/modes" ] && ok=1; done
   [ "$ok" = 1 ] && break; sleep 1
 done
-say "      connectors: $(for c in /sys/class/drm/card0-*; do [ "$(cat $c/status)" = connected ] && printf '%s(%s modes) ' "$(basename $c)" "$(wc -l < $c/modes)"; done)"
+say "      connectors: $(for c in /sys/class/drm/"$NVC"-*; do [ "$(cat $c/status)" = connected ] && printf '%s(%s modes) ' "$(basename $c)" "$(wc -l < $c/modes)"; done)"
 say "[3/4] restage session"; systemd-run --no-block --setenv=EGPU_REATTACH_IN_PROGRESS=1 /usr/local/sbin/egpu-hotplug-mount.sh >/dev/null 2>&1
 if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then   # GAME MODE: hotplug-mount restarts gamescope onto the eGPU (or defers while a game runs)
   for _ in $(seq 1 60); do sleep 2; g=$(pgrep -n -x 'gamescope(-wl)?'); [ -n "$g" ] && [ "$(ps -o etimes= -p "$g" | tr -d ' ')" -lt 100 ] && break; done
   say "DONE (Game Mode) $(cat /run/nvegpu/gm-status.json 2>/dev/null)"; exit 0
 fi
-for _ in $(seq 1 40); do runuser -u deck -- env $RUNENV systemctl --user show-environment 2>/dev/null | grep -q 'KWIN_DRM_DEVICES=/dev/dri/card0' && break; sleep 2; done; sleep 8
+for _ in $(seq 1 40); do runuser -u deck -- env $RUNENV systemctl --user show-environment 2>/dev/null | grep -q 'KWIN_DRM_DEVICES=/dev/dri/'"$NVC" && break; sleep 2; done; sleep 8
 /usr/local/sbin/egpu-republish-display >/dev/null 2>&1
 # verify KWin is painting on the eGPU; if not, one more KWin restart now that the driver is settled
 painting(){ m=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1); [ "${m:-0}" -gt 150 ] && runuser -u deck -- env $RUNENV timeout 3 qdbus6 org.kde.KWin /KWin org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; }
 painting || { say "      KWin not painting on eGPU -> one retry"; runuser -u deck -- env $RUNENV systemctl --user restart plasma-kwin_wayland.service; sleep 12; /usr/local/sbin/egpu-republish-display >/dev/null 2>&1; }
 say "      painting: $(painting && echo yes || echo NO) (NV $(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null))"
 # re-kick the external link once (HDR/DP handshake after a fresh driver load)
-out=$(for c in /sys/class/drm/card0-*; do [ "$(cat $c/status)" = connected ] && basename $c | sed 's/^card0-//'; done | head -1)
+out=$(for c in /sys/class/drm/"$NVC"-*; do [ "$(cat $c/status)" = connected ] && basename $c | sed "s/^$NVC-//"; done | head -1)
 [ -n "$out" ] && runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 bash -c "timeout 6 kscreen-doctor output.$out.disable >/dev/null 2>&1; sleep 2; timeout 6 kscreen-doctor output.$out.enable >/dev/null 2>&1"
 runuser -u deck -- env $RUNENV systemctl --user unmask --runtime app-steam@autostart.service >/dev/null 2>&1
 say "[4/4] apps (via the user manager; wait for the old Steam to fully exit, then relaunch once, verify, retry once)"

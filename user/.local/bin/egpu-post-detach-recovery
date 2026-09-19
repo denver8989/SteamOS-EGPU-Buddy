@@ -14,6 +14,11 @@ speaker_card(){
 }
 SPEAKER_CARD=$(speaker_card || true)
 mkdir -p "$DIR"
+# The card/profile/sink names above are the Legion Go 2's. On other machines audio is left to PipeWire/WirePlumber, which
+# falls back to the internal device by itself when the eGPU's HDMI sink disappears; only Steam is brought back.
+if [ "$(/usr/local/sbin/egpu-detect --device 2>/dev/null || echo generic)" != legion-go-2 ]; then
+  case "$MODE" in snapshot) : >"$SNAP"; exit 0 ;; recover) echo AUDIO_RECOVERY_READY; exit 0 ;; esac
+fi
 case "$MODE" in
  snapshot)
   printf 'PROFILE=%q\nSINK=%q\nSOURCE=%q\nSPEAKER_ON=%q\n' \

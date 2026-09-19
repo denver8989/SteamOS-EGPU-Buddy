@@ -1,9 +1,31 @@
 #!/bin/bash
-# EGPU Buddy desktop app launcher: starts the local backend if needed and opens the window (browser fallback).
+# EGPU Buddy desktop app launcher. Starts the local backend if needed, then the native window + tray icon.
+#   egpu-buddy            open the window (if the app already runs: ask it to show itself, no second tray icon)
+#   egpu-buddy --tray     start hidden in the system tray (Plasma autostart)
+#   egpu-buddy --detach   Safe Detach right away (the "Safely Eject eGPU" launcher)
+# Window: Qt6/QML (always there on KDE Plasma = SteamOS, CachyOS ...) -> GTK4+WebKitGTK -> browser tab as the last resort.
 set -u; D=$(cd "$(dirname "$(readlink -f "$0")")" && pwd); PORT=8772; URL="http://127.0.0.1:$PORT/"
+if [ "${1:-}" = --detach ]; then
+  if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then exec sudo -n /usr/local/sbin/egpu-gamemode-detach; fi
+  exec "$HOME/.local/bin/egpu-safe-detach-ui"
+fi
 if ! ss -ltn 2>/dev/null | grep -q "127.0.0.1:$PORT "; then
   setsid python3 "$D/egpu-buddy-server.py" >/tmp/egpu-buddy-server.log 2>&1 </dev/null &
   for _ in $(seq 1 25); do ss -ltn 2>/dev/null | grep -q "127.0.0.1:$PORT " && break; sleep 0.2; done
 fi
+QML=$(command -v qml6 || command -v qml-qt6 || { [ -x /usr/lib/qt6/bin/qml ] && echo /usr/lib/qt6/bin/qml; } || true)
+if [ -n "$QML" ] && [ -d /usr/lib/qt6/qml/QtQuick/Controls ] && [ -d /usr/lib/qt6/qml/Qt/labs/platform ]; then
+  exec 9>"${XDG_RUNTIME_DIR:-/tmp}/egpu-buddy-app.lock"
+  if ! flock -n 9; then   # already running (window or tray): ask it to come to the front
+    [ "${1:-}" = --tray ] || curl -s -m 3 -X POST -H 'content-type: application/json' -d '{"action":"show"}' "${URL}api/action" >/dev/null 2>&1
+    exit 0
+  fi
+  # Own style + palette, and Qt's generic platform theme: its tray icon is plain D-Bus (StatusNotifierItem). KDE's theme
+  # plugin builds the tray from QWidgets and aborts ("Cannot create a QWidget without QApplication"): the qml runner on
+  # SteamOS never creates a QApplication, whatever --apptype says (tested on a real device, all four spellings).
+  export QT_QUICK_CONTROLS_STYLE=Fusion QT_QPA_PLATFORMTHEME=generic
+  exec "$QML" "$D/egpu-buddy.qml" -- ${1:+"$1"}
+fi
+[ "${1:-}" = --tray ] && exit 0   # no tray without Qt; nothing to autostart
 if python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("WebKit","6.0")' 2>/dev/null; then exec python3 "$D/egpu-buddy-window.py" "$URL"; fi
 exec xdg-open "$URL"

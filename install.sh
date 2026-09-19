@@ -185,11 +185,14 @@ fi
 # ---- desktop app ----------------------------------------------------------------------------------
 if want desktopapp; then
   say "== installing the EGPU Buddy desktop app"
-  D="$USER_HOME/.local/share/egpu-buddy"; umkdir "$D" "$USER_HOME/.local/bin" "$USER_HOME/.local/share/applications"
-  cp "$ROOT"/desktop-app/egpu-buddy "$ROOT"/desktop-app/egpu-buddy-server.py "$ROOT"/desktop-app/egpu-buddy-window.py "$ROOT"/desktop-app/index.html "$ROOT"/desktop-app/egpu-buddy.png "$D/"
+  D="$USER_HOME/.local/share/egpu-buddy"; A="$USER_HOME/.local/share/applications"; umkdir "$D" "$USER_HOME/.local/bin" "$A" "$USER_HOME/.config/autostart"
+  cp "$ROOT"/desktop-app/egpu-buddy "$ROOT"/desktop-app/egpu-buddy-server.py "$ROOT"/desktop-app/egpu-buddy-window.py "$ROOT"/desktop-app/egpu-buddy.qml "$ROOT"/desktop-app/index.html "$ROOT"/desktop-app/egpu-buddy.png "$D/"
   chmod +x "$D/egpu-buddy" "$D"/*.py; ln -sf "$D/egpu-buddy" "$USER_HOME/.local/bin/egpu-buddy"
-  sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/egpu-buddy.desktop" > "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
-  uown "$D" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
+  # menu: the app and "Safely Eject eGPU"; Plasma autostart: the tray icon; desktop folder (when there is one): both launchers
+  for f in egpu-buddy egpu-safe-detach; do sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/$f.desktop" > "$A/$f.desktop"; uown "$A/$f.desktop"
+    if [ -d "$USER_HOME/Desktop" ]; then cp "$A/$f.desktop" "$USER_HOME/Desktop/$f.desktop"; chmod +x "$USER_HOME/Desktop/$f.desktop"; uown "$USER_HOME/Desktop/$f.desktop"; fi; done
+  sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/egpu-buddy-tray.desktop" > "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop"
+  uown "$D" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop"
 fi
 
 # ---- Decky plugin --------------------------------------------------------------------------------

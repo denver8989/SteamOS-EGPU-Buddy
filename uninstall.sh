@@ -21,7 +21,7 @@ userctl disable --now egpu-display-failover.service egpu-wake-guard.service 2>/d
 cd "$ROOT"; find user -type f | while read -r f; do restore_or_remove "$(map_dest "$f")"; done
 sudo bash -c "$(declare -f restore_or_remove); systemctl disable egpu-mount.service egpu-boot-enumerate.service egpu-conditional-session.service egpu-buddy-selfheal.service egpu-buddy-resume.service 2>/dev/null; $(cd "$ROOT" && find system -type f | while read -r f; do printf 'restore_or_remove %q\n' "$(map_dest "$f")"; done); udevadm control --reload; systemctl daemon-reload"
 [ "${EGPU_KEEP_PLUGIN:-0}" = 1 ] || sudo rm -rf "$USER_HOME/homebrew/plugins/EGPU-Buddy"
-[ "${EGPU_KEEP_PLUGIN:-0}" = 1 ] || rm -rf "$USER_HOME/.local/share/steamos-egpu-buddy"; rm -rf "$USER_HOME/.local/share/egpu-buddy" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
+[ "${EGPU_KEEP_PLUGIN:-0}" = 1 ] || rm -rf "$USER_HOME/.local/share/steamos-egpu-buddy"; rm -f "$USER_HOME/.local/share/applications/egpu-safe-detach.desktop" "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop" "$USER_HOME/Desktop/egpu-buddy.desktop" "$USER_HOME/Desktop/egpu-safe-detach.desktop"; rm -rf "$USER_HOME/.local/share/egpu-buddy" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
 # SteamOS: the driver extension and build root on /home, the OS-update keep-list, the GRUB drop-in (+ regenerate GRUB)
 if [ -d /home/.egpu-buddy ] || [ -L /etc/extensions/egpu-nvidia ] || [ -L /etc/extensions/egpu-nvidia.raw ]; then
   echo "removing the NVIDIA driver extension (SteamOS)"
