@@ -1,3 +1,30 @@
+0.7.29 — the built-in screen is never turned off unless an eGPU display is actually lit.
+
+**Update before booting with the eGPU attached.** A user booted with the eGPU plugged in and the monitor in standby and
+ended up with **both screens dark**, on a machine that was otherwise working.
+
+What happened: with the monitor asleep, no eGPU connector reported "connected". After waiting 90 seconds the switch-over
+went ahead anyway, on the theory that the monitor was merely asleep and would light up later. The compositor relogged
+onto the eGPU, the built-in panel was handed over and darkened — and the monitor never woke. No screen, no way back in.
+
+Three fixes, smallest first:
+
+- **`egpu-panel off` now refuses** unless a display on a card other than the built-in GPU is actually lit. That is the
+  rule in one place, so every caller gets it; the deliberate teardown paths that darken the panel while they still own
+  the picture pass `EGPU_PANEL_FORCE=1`. Verified on a machine with no eGPU: "refusing to turn the built-in panel off:
+  no eGPU display is lit to replace it".
+- **The 90-second wait no longer stages a session with nothing to show it on.** If no eGPU output answers, the session
+  stays on the built-in screen and says so. That is safe *and* self-correcting: switching the monitor on fires a DRM
+  hotplug that moves the session across by itself.
+- **If the monitor disappears mid-switch**, the handover now puts the built-in panel back and re-enables it, instead of
+  turning it off and leaving nothing.
+
+**Booting with the eGPU attached and the monitor asleep also works now.** The driver always came up at boot, but a
+monitor in standby does not assert hot-plug, so its connector read "disconnected" and the session went to the built-in
+screen. Boot now forces a connector probe (the driver asks the monitor over DisplayPort AUX / DDC): a sleeping but
+powered monitor answers and the eGPU gets the session. A monitor that is genuinely switched off still answers nothing,
+the machine boots on the built-in screen as it should, and switching the monitor on moves the session over.
+
 0.7.28 — the "not an eGPU" rule is vendor-neutral, and uninstall really does remove everything.
 
 **The safety rule no longer hard-codes NVIDIA.** 0.7.27 refused to act on anything that was not an NVIDIA GPU, which

@@ -100,6 +100,23 @@ log "eGPU at $gpu — load driver (FLR done, no ReBAR)"
 for _ in $(seq 1 15); do compgen -G "/sys/bus/pci/devices/$gpu/drm/card*" >/dev/null && break; sleep 1; done
 
 if compgen -G "/sys/bus/pci/devices/$gpu/drm/card*" >/dev/null 2>&1; then
+  # A monitor left in standby does not assert hot-plug, so its connector reads
+  # "disconnected" and the dispatcher routes the session to the built-in screen —
+  # which is not what someone who booted with the eGPU plugged in expects. Force a
+  # probe ("detect" makes the driver ask the monitor over DisplayPort AUX / DDC): a
+  # sleeping-but-powered monitor answers and the eGPU gets the session. A monitor
+  # that is genuinely off still answers nothing, we boot on the built-in screen, and
+  # switching it on fires a DRM hotplug that moves the session over by itself.
+  _c=$(basename "$(ls -d "/sys/bus/pci/devices/$gpu"/drm/card[0-9]* 2>/dev/null | head -1)" 2>/dev/null)
+  if [ -n "$_c" ]; then
+    for _ in 1 2 3; do
+      for _s in /sys/class/drm/"$_c"-*/status; do echo detect > "$_s" 2>/dev/null || true; done
+      for _s in /sys/class/drm/"$_c"-*/status; do
+        [ "$(cat "$_s" 2>/dev/null)" = connected ] && { log "eGPU output $(basename "$(dirname "$_s")") answered the probe"; break 2; }
+      done
+      sleep 2
+    done
+  fi
   log "OK — eGPU $gpu up WITH DRM card (lean); dispatcher can route the session"
 else
   log "eGPU $gpu enumerated but driver/DRM card not ready — dispatcher falls back to iGPU"

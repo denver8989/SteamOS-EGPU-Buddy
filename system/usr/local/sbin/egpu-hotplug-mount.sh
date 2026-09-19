@@ -412,8 +412,15 @@ egpu_external_only(){
     sleep 2
   done
   if [ -z "$ext" ]; then
-    log "EXTERNAL-ONLY: no eGPU output found via kscreen"
-    /usr/local/sbin/egpu-panel off >/dev/null 2>&1 && log "EXTERNAL-ONLY: eDP-1 CRTC off (panel unowned)"
+    # The monitor went away between the connector check and this relogin. NEVER darken the
+    # panel here: that is the difference between "the external display took over" and "the
+    # user has no screen at all". Put the built-in panel back and say so.
+    log "EXTERNAL-ONLY: no eGPU output found via kscreen — restoring the built-in panel instead of darkening it"
+    /usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
+    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor \
+      output.eDP-1.enable output.eDP-1.priority.1 >/dev/null 2>&1 || true
+    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor --dpms on >/dev/null 2>&1 || true
+    mkdir -p /run/nvegpu; printf '{"state":"FAILED","message":"%s"}\n' "The eGPU monitor stopped responding during the switch. You are back on the built-in screen." > /run/nvegpu/gm-status.json 2>/dev/null
     return 0
   fi
   runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor \
@@ -443,9 +450,15 @@ if [ "$egpu_has_output" != 1 ]; then
     for _s in /sys/class/drm/"$egpu_card"-*/status; do [ "$(cat "$_s" 2>/dev/null)" = connected ] && egpu_has_output=1; done
     [ "$egpu_has_output" = 1 ] && { log "eGPU output appeared after $((_w*2))s"; break; }; sleep 2
   done
-  [ "$egpu_has_output" = 1 ] || { log "no eGPU output detected after 90s — staging NVIDIA-only anyway (monitor may be asleep)"; egpu_has_output=1; }
+  # NEVER stage an NVIDIA-only session with no display to show it on. Doing that cost a
+  # user both screens: the compositor relogs onto the eGPU, the panel is handed over and
+  # darkened, and the monitor never wakes -> two dark screens and no way back in.
+  # Staying put is safe AND self-correcting: the moment the monitor wakes, the eGPU
+  # connector fires a DRM hotplug and 99-egpu-output-hotplug.rules runs this script again.
+  [ "$egpu_has_output" = 1 ] || log "no eGPU output detected after 90s — staying on the built-in screen; it switches over by itself when the monitor wakes"
 fi
 if [ "$egpu_has_output" != 1 ]; then
+  mkdir -p /run/nvegpu; printf '{"state":"IDLE","message":"%s"}\n' "The eGPU is ready, but its monitor is not responding. Staying on the built-in screen — switch the monitor on and it will take over by itself." > /run/nvegpu/gm-status.json 2>/dev/null
   log "eGPU has no connected output — leaving session as-is"; exit 0
 fi
 # Crosstalk = KWin has the AMD GPU open at all. The old check only looked for the AMD *render* node
