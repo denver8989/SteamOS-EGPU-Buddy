@@ -1,4 +1,8 @@
 [Unit]
+# A failure must not become a loop: the tray used to abort every three seconds in Game Mode,
+# writing a core dump each time. Three attempts a minute, then leave it alone.
+StartLimitIntervalSec=120
+StartLimitBurst=3
 # EGPU Buddy in the system tray. A systemd user service, not only an autostart entry: every Wayland client dies when the
 # compositor restarts, and this project restarts it on purpose (attach re-login, Safe Detach handoff). The autostart entry
 # only runs at login, so the tray icon was gone after the first detach. Restart=always brings it straight back.
@@ -10,7 +14,11 @@ After=graphical-session.target
 Type=simple
 ExecStart=%h/.local/bin/egpu-buddy --tray
 Restart=always
-RestartSec=3
+RestartSec=10
+# exit 3 = "there is no tray to live in here" (Game Mode, or no desktop display). That is a correct
+# outcome, not a failure, and restarting it ten seconds later forever helps nobody.
+RestartPreventExitStatus=3
+SuccessExitStatus=3
 
 [Install]
 WantedBy=graphical-session.target

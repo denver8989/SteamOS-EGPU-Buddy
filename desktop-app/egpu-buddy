@@ -9,6 +9,19 @@ if [ "${1:-}" = --detach ]; then
   if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then exec sudo -n /usr/local/sbin/egpu-gamemode-detach; fi
   exec "$HOME/.local/bin/egpu-safe-detach-ui"
 fi
+# A tray icon needs a DESKTOP session to live in. Started in Game Mode there is no display it can
+# use, Qt cannot load a platform plugin and aborts — and with Restart=always that is a crash every
+# three seconds, each one writing a core dump, for as long as Game Mode is running (seen on a real
+# device: 15 restarts and climbing). Nothing to do here, so say so and exit cleanly.
+if [ "${1:-}" = --tray ]; then
+  if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then
+    echo "Game Mode has no system tray; nothing to do" >&2; exit 3
+  fi
+  case "${WAYLAND_DISPLAY:-}${DISPLAY:-}" in
+    "") echo "no desktop display to put a tray icon in; nothing to do" >&2; exit 3 ;;
+  esac
+fi
+
 if ! ss -ltn 2>/dev/null | grep -q "127.0.0.1:$PORT "; then
   setsid python3 "$D/egpu-buddy-server.py" >/tmp/egpu-buddy-server.log 2>&1 </dev/null &
   for _ in $(seq 1 25); do ss -ltn 2>/dev/null | grep -q "127.0.0.1:$PORT " && break; sleep 0.2; done

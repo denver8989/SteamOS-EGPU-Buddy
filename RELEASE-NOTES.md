@@ -1,3 +1,15 @@
+0.7.45 — the tray icon no longer crashes in a loop in Game Mode.
+
+A system tray needs a desktop session to live in. Started in Game Mode there is no display it can use: Qt cannot load a
+platform plugin, aborts, and with `Restart=always` that is a crash every three seconds — each one writing a core dump —
+for as long as Game Mode is running. A real device had fifteen restarts and climbing, with core dumps piling up in the
+journal.
+
+It now checks first and exits cleanly when there is nowhere to put an icon, and that exit is treated as the correct
+outcome rather than a failure to retry. Restarts are also capped, so any other failure can no longer become a loop.
+
+Nothing about the eGPU path changes.
+
 0.7.44 — 16 GiB at boot, and the eGPU session no longer tears itself down a minute after boot.
 
 Two faults, both introduced by the boot-time BAR1 work in 0.7.38.
