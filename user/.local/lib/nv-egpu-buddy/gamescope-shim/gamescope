@@ -26,6 +26,20 @@ for arg in "$@"; do
   esac
 done
 
+# Native Steam canvas on the eGPU display: the inner (Steam UI / game) size must follow the staged OUTPUT size. gamescope
+# does that by itself when no -w/-h is given, which is what the CachyOS session script does. Valve's SteamOS script always
+# passes "-w 1280 -h 800", and Steam then settles on 1920x1080 on a 5120x1440 monitor (seen on a real device). So in this
+# mode the session's inner size is dropped; nothing here depends on the distro, only on what was passed.
+if [ "${NV_EGPU_GAMESCOPE_NATIVE_STEAM_CANVAS:-0}" = 1 ] && [ -n "${NV_EGPU_GAMESCOPE_OUTPUT_WIDTH:-}" ] && [ -z "${NV_EGPU_GAMESCOPE_NESTED_WIDTH:-}" ]; then
+  _keep=(); _skip=0
+  for arg in "$@"; do
+    if [ "$_skip" = 1 ]; then _skip=0; continue; fi
+    case "$arg" in -w|-h|--nested-width|--nested-height) _skip=1; continue ;; esac
+    _keep+=("$arg")
+  done
+  set -- "${_keep[@]}"
+fi
+
 prefix=()
 [ "$add_disable_layers" -eq 0 ] || prefix+=(--disable-layers)
 [ "$add_force_composition" -eq 0 ] || prefix+=(--force-composition)
