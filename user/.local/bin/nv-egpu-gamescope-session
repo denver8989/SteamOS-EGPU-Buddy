@@ -246,7 +246,14 @@ wait_for_egpu_native_ready() {
     fi
 
     if [ "$announced" -eq 0 ]; then
-      log "waiting up to ${EGPU_WAIT_SECONDS}s for NVIDIA-native Game Mode routing"
+      # Say which of the two waits this is. The old message always claimed the full eGPU
+      # wait, even when no eGPU was on the bus and it was about to give up after
+      # EGPU_PROBE_SECONDS — which reads in the logs like a 25s stall that never happened.
+      if [ "$requested" -eq 1 ]; then
+        log "waiting up to ${EGPU_WAIT_SECONDS}s for NVIDIA-native Game Mode routing"
+      else
+        log "checking for an eGPU (up to ${EGPU_PROBE_SECONDS}s); handheld routing if none appears"
+      fi
       announced=1
     fi
     if [ "$requested" -eq 1 ] && ! egpu_pci_present; then
