@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.21"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.22"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -357,6 +357,7 @@ def _setup_worker(action, with_driver=False, version=None):
         if action == "install":
             _notify("Install finished. Reboot with the eGPU unplugged, then plug it in." if rc == 0 else
                     "The NVIDIA driver was not built. Keep the eGPU unplugged and open EGPU Buddy." if rc == RC_NO_DRIVER else
+                    "Not installed: the eGPU is in use. Safe Detach, unplug it, then install again." if rc == 21 else
                     f"Install failed (rc {rc}). Open EGPU Buddy for details.")
     except Exception as ex:  # noqa: BLE001
         _setup["rc"] = 1
@@ -402,7 +403,7 @@ def _start_setup(action, with_driver=False, version=None):
         return {"ok": False, "message": "Setup is already running."}
     _setup.update(busy=True, rc=None, step="starting", progress=0, started=time.time())
     try:
-        os.remove(SETUP_LOG)
+        os.replace(SETUP_LOG, SETUP_LOG + ".prev")   # the previous run stays readable: a retry must not erase the first failure
     except OSError:
         pass
     threading.Thread(target=_setup_worker, args=(action, with_driver, version), daemon=True).start()
@@ -431,23 +432,40 @@ def _update_plugin_files(version):
 
 
 def _update_worker(version):
+    """An update is two separate jobs, PLUGIN FIRST: (1) swap the plugin files (seconds) and let Decky restart; (2) the NEW
+    plugin then installs its own bundled system files with its own code and progress view (_continue_update). Old plugin
+    code never drives a newer installer."""
     try:
-        if _read(VERSION_FILE) == version and os.path.exists(PRIV):
-            _slog(f"system files already {version}: updating the plugin only", 90); _setup["rc"] = 0
-            _notify(f"EGPU Buddy plugin updated to {version}.")
-        else:
-            _update["state"] = f"installing {version}"
-            _setup_worker("install", False, version)
-        # RC_NO_DRIVER: the system files ARE installed; the newer plugin (with its repair path) must still go in
-        if _setup["rc"] not in (0, RC_NO_DRIVER): raise RuntimeError(f"system integration install failed rc={_setup['rc']}")
         if _vt(version) > _vt(PAYLOAD_VERSION):
-            _update["state"] = f"updating plugin to {version}"; _update_plugin_files(version)
+            d = _settings(); d["continue_update"] = version; _save_settings(d)
+            _update["state"] = f"updating the plugin to {version}"; _slog(f"updating the plugin to {version}; the system files follow after the restart", 50)
+            _update_plugin_files(version)
+            _update["state"] = f"plugin {version} installed; restarting"; return
+        _update["state"] = f"installing the system files {version}"
+        _setup_worker("install", False, version)
+        if _setup["rc"] not in (0, RC_NO_DRIVER): raise RuntimeError(f"system files install failed rc={_setup['rc']}")
         _update["state"] = f"updated to {version}" + ("; the NVIDIA driver was not built" if _setup["rc"] == RC_NO_DRIVER else ""); _update["available"] = ""
         d = _settings(); d["last_update"] = version; _save_settings(d)
     except Exception as ex:  # noqa: BLE001
+        d = _settings(); d.pop("continue_update", None); _save_settings(d)
         _update["state"] = f"update failed: {ex}"; _update["last_error"] = str(ex); decky.logger.error(f"update failed: {ex}")
     finally:
         _setup["busy"] = False
+
+
+def _continue_update():
+    """Second half of an update, run by the freshly installed plugin after the Decky restart."""
+    d = _settings()
+    if d.pop("continue_update", None) != PAYLOAD_VERSION: return
+    _save_settings(d)
+    if _read(VERSION_FILE) == PAYLOAD_VERSION and os.path.exists(PRIV):
+        _notify(f"EGPU Buddy updated to {PAYLOAD_VERSION}."); return
+    if _setup["busy"] or _game_running():
+        _notify(f"EGPU Buddy plugin {PAYLOAD_VERSION} installed. Open it and press Update system integration."); return
+    _setup.update(busy=True, rc=None, step="update", progress=0, started=time.time())
+    try: os.replace(SETUP_LOG, SETUP_LOG + ".prev")
+    except OSError: pass
+    _update_worker(PAYLOAD_VERSION)
 
 
 def _check_update(install=False, manual=False):
@@ -468,7 +486,7 @@ def _check_update(install=False, manual=False):
     # the 5-minute settle time after a Decky start is for the BACKGROUND install only; a button press acts at once
     if newer and install and not _operation_in_progress() and (manual or time.time() - _started > 300):
         _setup.update(busy=True, rc=None, step="update", progress=0, started=time.time())
-        try: os.remove(SETUP_LOG)
+        try: os.replace(SETUP_LOG, SETUP_LOG + ".prev")
         except OSError: pass
         threading.Thread(target=_update_worker, args=(target,), daemon=True).start()
 
@@ -601,6 +619,8 @@ class Plugin:
 
     async def _main(self):
         decky.logger.info("EGPU Buddy backend loaded")
+        await asyncio.sleep(8)
+        threading.Thread(target=_continue_update, daemon=True).start()   # second half of a plugin-first update, if one is pending
         await asyncio.sleep(300)
         while True:  # automatic updates: hourly check; install only if enabled, already installed, and no game running
             try:

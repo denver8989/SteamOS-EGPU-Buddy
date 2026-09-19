@@ -122,6 +122,18 @@ if want session; then
   chmod +x "$USER_HOME"/.local/bin/nv-egpu-* "$USER_HOME"/.local/bin/egpu-* "$USER_HOME/.local/lib/nv-egpu-buddy/gamescope-shim/gamescope" 2>/dev/null || true
 fi
 
+# ---- SteamOS: a merged driver extension makes ALL of /usr read-only ------------------------------
+# On SteamOS /usr/local is part of the system partition (no separate mount), and a merged system extension turns /usr
+# into a read-only overlay: a second install then fails with "Read-only file system" (seen on a real device, 0.7.21).
+# So: unmerge for the duration of the install, and merge again on EVERY way out. Not while the driver is in use.
+SYSEXT_TOOL="$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
+if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/mounts 2>/dev/null; then
+  if [ -d /sys/module/nvidia ]; then echo "The NVIDIA driver is loaded (eGPU in use). Safe Detach, unplug the eGPU, then run the install again. Nothing was changed."; exit 21; fi
+  say "== SteamOS: unmerging the driver extension while the system files are written"
+  sudo systemd-sysext unmerge >/dev/null 2>&1 || { echo "could not unmerge the driver extension (files in use?). Reboot with the eGPU unplugged and run the install again. Nothing was changed."; exit 21; }
+  trap 'sudo bash "$SYSEXT_TOOL" --activate >/dev/null 2>&1 || true' EXIT
+fi
+
 # ---- system files (sudo) -------------------------------------------------------------------------
 say "== installing system files (sudo)"
 SYS_TMP=$(mktemp -d); n=0

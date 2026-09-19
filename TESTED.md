@@ -7,8 +7,9 @@ repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing her
 ## SteamOS: verified in a container built from Valve's image, not on a device (0.7.17)
 
 Test environment: the root filesystem of Valve's `steamdeck-oobe-repair-20260707.10-3.8.14` image, run with
-`systemd-nspawn --read-only`, a writable `/etc` overlay, a separate small `/var`, `/home` and `/usr/local` on their own
-(as SteamOS mounts them), Valve's real `pacman.conf`, repositories and keyrings, no compiler on the host.
+`systemd-nspawn`, a writable `/etc` overlay, a separate small `/var` and `/home` on their own (as SteamOS mounts
+them; until 0.7.21 the container also mounted `/usr/local` separately, which SteamOS 3.8 does **not** do: that mistake
+hid the 0.7.21 reinstall failure described below), Valve's real `pacman.conf`, repositories and keyrings, no compiler on the host.
 
 | Verified there | Result |
 |---|---|
@@ -31,6 +32,13 @@ placed on `/home`; the container's `/home` is now a case-folding ext4 too, and a
 it the way Valve's kernel does (the development kernel is newer and no longer refuses). Re-verified there: full
 install exit 0, image merged (layers: `/run/systemd/sysext/...` and `/usr` only), modules and libraries resolve,
 boot re-activation, from-scratch driver build 2 min 56 s on 16 threads.
+
+**Real device, 0.7.21:** the first install completed and the driver extension merged. A second install then failed
+with `Read-only file system` on `/usr/local/sbin`: on SteamOS `/usr/local` is part of the system partition, and a merged
+extension makes all of `/usr` a read-only overlay. Since 0.7.22 the installer and the uninstaller unmerge the extension
+first (refusing while the NVIDIA driver is loaded) and merge it again on every way out. The container now has one
+writable system partition including `/usr/local`; there, 0.7.21 reproduces the failure and 0.7.22 passes: fresh
+install, install again while merged, uninstall while merged.
 
 **Not yet verified on a real SteamOS device:** the merged extension and everything after it. Unknown until someone runs it there: boot ordering on real hardware,
 GRUB regeneration on the device, a real OS update, loading the modules with an eGPU attached, and everything the

@@ -1,3 +1,21 @@
+0.7.22 — SteamOS: installing again over a working install no longer fails; updates are plugin first, system files second.
+
+- **SteamOS, found on a real Legion Go with 0.7.21:** the first install went through and the driver extension merged,
+  but any later install (update, repair) failed with `cannot remove '/usr/local/sbin/...': Read-only file system`. On
+  SteamOS `/usr/local` belongs to the system partition, and a merged system extension turns all of `/usr` into a
+  read-only overlay. The installer and the uninstaller now unmerge the extension first and merge it again on every
+  way out; they refuse (changing nothing) while the NVIDIA driver is loaded: Safe Detach and unplug first.
+  The test container had mounted `/usr/local` separately, which SteamOS does not do; it now matches the device,
+  reproduces the 0.7.21 failure and passes with 0.7.22.
+- **An update is two separate jobs, plugin first:** the plugin replaces itself (seconds) and Decky restarts; the new
+  plugin then installs the system files it carries, with its own code and its own progress view, and reports the
+  result in a notification. Old plugin code no longer drives a newer installer. If the second half cannot start
+  (a game is running), the first page offers **Update system integration**.
+  Updating *from* 0.7.21 or older still runs in the old order once, because that plugin's code is what runs it.
+- The log of the previous install run is kept (`/tmp/egpu-buddy-setup.log.prev`): a retry no longer erases the first
+  failure.
+- Nothing in the attach, detach or recovery paths changed; CachyOS / Legion Go 2 behaviour is untouched.
+
 0.7.21 — SteamOS: fix for the install failure found on a real device; an honest progress bar; a visible finish line.
 
 - **SteamOS, found on a real Legion Go:** the driver compiled, then the install stopped at `overlay: case-insensitive

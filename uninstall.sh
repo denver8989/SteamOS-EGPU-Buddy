@@ -12,6 +12,11 @@ restore_or_remove(){ # $1 dest ; run in the right privilege context
   local d=$1 b; b=$(ls -t "$d".bak-egpu-buddy-* 2>/dev/null | head -1)
   if [ -n "$b" ]; then mv -f "$b" "$d"; echo "restored $d"; else rm -f "$d"; echo "removed  $d"; fi
 }
+# SteamOS: a merged driver extension makes /usr (with /usr/local) read-only; it goes away below anyway, so unmerge first
+if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/mounts 2>/dev/null; then
+  [ -d /sys/module/nvidia ] && { echo "The NVIDIA driver is loaded (eGPU in use). Safe Detach, unplug the eGPU, then uninstall again. Nothing was changed."; exit 21; }
+  sudo systemd-sysext unmerge >/dev/null 2>&1 || { echo "could not unmerge the driver extension. Reboot with the eGPU unplugged and uninstall again. Nothing was changed."; exit 21; }
+fi
 userctl disable --now egpu-display-failover.service egpu-wake-guard.service 2>/dev/null
 cd "$ROOT"; find user -type f | while read -r f; do restore_or_remove "$(map_dest "$f")"; done
 sudo bash -c "$(declare -f restore_or_remove); systemctl disable egpu-mount.service egpu-boot-enumerate.service egpu-conditional-session.service egpu-buddy-selfheal.service egpu-buddy-resume.service 2>/dev/null; $(cd "$ROOT" && find system -type f | while read -r f; do printf 'restore_or_remove %q\n' "$(map_dest "$f")"; done); udevadm control --reload; systemctl daemon-reload"
