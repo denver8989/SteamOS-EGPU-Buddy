@@ -36,7 +36,12 @@ if [ -n "$ro" ] && [ -x "$SX" ] && [ -d /home/.egpu-buddy ]; then
   else
     log "driver extension has no modules for $(uname -r): rebuilding in the background"
     systemd-run --quiet --collect --unit=egpu-buddy-driver-build --property=TimeoutStartSec=5400 /bin/bash -c \
-      "for i in \$(seq 1 40); do curl -fsI --max-time 8 https://steamdeck-packages.steamos.cloud/ >/dev/null 2>&1 && break; sleep 30; done; bash '$SX' --boot >>/tmp/egpu-buddy-selfheal.log 2>&1" \
+      "for i in \$(seq 1 40); do curl -fsI --max-time 8 https://steamdeck-packages.steamos.cloud/ >/dev/null 2>&1 && break; sleep 30; done; bash '$SX' --boot >>/tmp/egpu-buddy-selfheal.log 2>&1; \
+       # the eGPU may have been plugged in WHILE the driver was building: the attach hook refused it \
+       # then, and the user should not have to unplug and replug to finish what is now possible. \
+       if modinfo -n nvidia >/dev/null 2>&1 && lspci -Dn 2>/dev/null | grep -qE '0300: 10de:'; then \
+         echo 'driver build finished with an eGPU connected: attaching' >>/tmp/egpu-buddy-selfheal.log; \
+         /usr/local/sbin/egpu-hotplug-mount.sh >>/tmp/egpu-buddy-selfheal.log 2>&1; fi" \
       || log "could not start the background rebuild"
   fi
 fi

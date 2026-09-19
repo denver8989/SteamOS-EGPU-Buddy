@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.39"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.40"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -585,7 +585,11 @@ class Plugin:
             "on_egpu": bool(bdf) and game_mode and output not in ("", "*", "eDP-1"),
             "output": output,
             "gm_status": _json(GM_STATUS), "desktop_status": _json(DESKTOP_STATUS),
-            "resets": (lambda h: {"count": len(h), "last": h[-1] if h else ""})([l for l in _read(FLOOD_HISTORY).splitlines() if l.strip()]),
+            # Strip NULs and control characters: a hardware reset can leave this file NUL-padded
+            # (data written but never flushed), and the raw bytes rendered as a row of boxes in the
+            # interface — "last: {}{}{}{}..." instead of a date.
+            "resets": (lambda h: {"count": len(h), "last": h[-1] if h else ""})(
+                [c for c in ("".join(ch for ch in _read(FLOOD_HISTORY) if ch == "\n" or " " <= ch <= "~")).splitlines() if c.strip()]),
             "link": {"speed": _read(f"/sys/bus/pci/devices/{bdf}/current_link_speed") if bdf else "",
                      "width": _read(f"/sys/bus/pci/devices/{bdf}/current_link_width") if bdf else ""},
             "displays": _displays(bdf) if bdf else [],

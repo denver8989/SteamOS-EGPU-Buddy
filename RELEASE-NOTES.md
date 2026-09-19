@@ -1,3 +1,18 @@
+0.7.40 — attach finishes by itself after a driver build, and the reset notice is readable again.
+
+**Plugging the eGPU in while the driver was still building did nothing.** The attach hook refuses to bring an eGPU up
+against a driver that is mid-build — correctly — but nothing happened afterwards either, so the only way forward was to
+unplug and plug in again, or press Attach. The build now finishes the job: if an eGPU is connected when it completes,
+it attaches.
+
+**The reset notice showed a row of boxes instead of a date** ("This device was reset by its hardware 2 times (last:
+□□□□□□□□)"). The file recording those resets had been NUL-padded — data written but never flushed, which is exactly what
+a hardware reset leaves behind — and the raw bytes went straight to the interface. Control characters are now stripped
+before the text is used, and a damaged file is repaired in place.
+
+Tested on a Legion Go 1 with the eGPU moved to the **second USB4 port**: it enumerates behind the other root port and
+reaches a full 16 GiB BAR1 there, the same as the first.
+
 0.7.39 — the second USB4 port works on any machine, not just the one it was written on.
 
 Clearing PCIe Downstream Port Containment is what lets a USB4 port build a PCIe tunnel after the link has been
