@@ -87,6 +87,8 @@ for _ in $(seq 1 20); do
   sleep 3
 done
 log "nvidia modules left: $(lsmod | grep '^nvidia' | awk '{print $1"="$3}' | tr '\n' ' ')"
+# same as the planned detach: Decky's backend holds /dev/nvidia* and is killed with the other holders
+systemctl is-active plugin_loader.service >/dev/null 2>&1 || { systemctl start plugin_loader.service >/dev/null 2>&1 && log "Decky plugin loader restarted"; }
 [ "$GM" = 1 ] && /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1   # userspace back for the next attach
 # 4. DPC containment on the USB4 root ports would block the next link-up -> clear (hotplug-mount's lever)
 eval "$(sed -n '/^clear_dpc(){/,/^}/p' /usr/local/sbin/egpu-hotplug-mount.sh)"; clear_dpc 2>/dev/null; log "DPC cleared"
