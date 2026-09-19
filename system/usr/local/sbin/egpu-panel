@@ -4,16 +4,34 @@
 # compositor that takes card1 (detach mode); we only make sure the backlight flag is not blocking it.
 set -u; want=${1:-off}
 PC=""; for c in /sys/class/drm/card*-eDP-*; do [ -e "$c" ] && { PC=${c##*/}; PC=${PC%%-*}; break; }; done; PC=${PC:-card1}   # card that owns the panel
-if fuser /dev/dri/$PC >/dev/null 2>&1; then [ "$want" = off ] && exit 0; fi   # a compositor owns the panel
+# A compositor holding the panel's card does NOT mean it is driving the panel: in eGPU mode gamescope/KWin open that card
+# while the picture is on the external display, and the panel then sat lit and black because this script used to give up
+# here. The CRTC part needs DRM master and is skipped when the card is owned; the BACKLIGHT is a plain sysfs write and is
+# always applied, so "off" is dark either way.
+OWNED=0; fuser /dev/dri/$PC >/dev/null 2>&1 && OWNED=1
 case "$want" in
   off)
-    id=$(modetest -M amdgpu -c 2>/dev/null | awk '/eDP-1/{print $1; exit}')
-    for crtc in $(modetest -M amdgpu -p 2>/dev/null | awk '/^CRTCs:/{f=1;next}/^Planes:/{f=0}f&&/^[0-9]/&&$2!=0{print $1}'); do
-      python3 /usr/local/sbin/egpu-crtc-off.py /dev/dri/$PC "$crtc" >/dev/null 2>&1
-    done
-    [ -n "$id" ] && modetest -M amdgpu -w "$id":DPMS:3 >/dev/null 2>&1
-    for b in /sys/class/backlight/*; do echo 4 > "$b/bl_power" 2>/dev/null; done ;;   # 4 = FB_BLANK_POWERDOWN (1 only dims on amdgpu)
+    if [ "$OWNED" = 0 ]; then
+      id=$(modetest -M amdgpu -c 2>/dev/null | awk '/eDP-1/{print $1; exit}')
+      for crtc in $(modetest -M amdgpu -p 2>/dev/null | awk '/^CRTCs:/{f=1;next}/^Planes:/{f=0}f&&/^[0-9]/&&$2!=0{print $1}'); do
+        python3 /usr/local/sbin/egpu-crtc-off.py /dev/dri/$PC "$crtc" >/dev/null 2>&1
+      done
+      [ -n "$id" ] && modetest -M amdgpu -w "$id":DPMS:3 >/dev/null 2>&1
+    fi
+    # "off" must mean DARK, not merely "no picture": if anything leaves the CRTC on (a stale mode from the previous
+    # session, the console) the panel sits lit and black. So the backlight is powered down AND driven to zero, with the
+    # old level remembered for "on". bl_power alone was not enough on a real device.
+    mkdir -p /run/nvegpu
+    for b in /sys/class/backlight/*; do [ -e "$b/brightness" ] || continue
+      [ -s "/run/nvegpu/panel-brightness.${b##*/}" ] || cat "$b/brightness" > "/run/nvegpu/panel-brightness.${b##*/}" 2>/dev/null
+      echo 4 > "$b/bl_power" 2>/dev/null; echo 0 > "$b/brightness" 2>/dev/null
+    done ;;
   on)
-    for b in /sys/class/backlight/*; do echo 0 > "$b/bl_power" 2>/dev/null; done ;;
+    [ "$OWNED" = 1 ] || true
+    for b in /sys/class/backlight/*; do
+      echo 0 > "$b/bl_power" 2>/dev/null
+      v=$(cat "/run/nvegpu/panel-brightness.${b##*/}" 2>/dev/null)
+      [ -n "$v" ] && [ "$v" -gt 0 ] 2>/dev/null && { echo "$v" > "$b/brightness" 2>/dev/null; rm -f "/run/nvegpu/panel-brightness.${b##*/}"; }
+    done ;;
 esac
-echo "eDP-1 dpms=$(cat /sys/class/drm/$PC-eDP-1/dpms 2>/dev/null) enabled=$(cat /sys/class/drm/$PC-eDP-1/enabled 2>/dev/null)"
+echo "eDP-1 dpms=$(cat /sys/class/drm/$PC-eDP-1/dpms 2>/dev/null) enabled=$(cat /sys/class/drm/$PC-eDP-1/enabled 2>/dev/null) backlight=$(cat /sys/class/backlight/*/brightness 2>/dev/null | head -1) (card owned: $OWNED)"
