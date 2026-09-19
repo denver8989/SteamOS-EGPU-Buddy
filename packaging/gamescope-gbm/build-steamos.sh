@@ -14,7 +14,7 @@ P(){ pacman --root "$BR" --dbpath "$BR/var/lib/pacman" --cachedir "$CACHE" --gpg
 echo "== gamescope build dependencies into the build root"
 P -Sy --needed git meson ninja cmake pkgconf glslang glm benchmark vulkan-headers vulkan-icd-loader wayland wayland-protocols \
   libdrm libx11 libxcb libxcomposite libxdamage libxext libxfixes libxkbcommon libxmu libxrender libxres libxtst libxxf86vm libxcursor \
-  libinput libcap libdecor lcms2 luajit seatd sdl2 xcb-util-wm xcb-util-errors xorg-xwayland hwdata libei catch2 >/dev/null
+  libinput libcap libdecor lcms2 luajit seatd sdl2 xcb-util-wm xcb-util-errors xorg-xwayland hwdata libei catch2 libdisplay-info >/dev/null
 G="$UH/.local/gamescope-gbm"; S="$BASE/gamescope-src"; mkdir -p "$G" "$S" "$BR/opt/gs"; cp -a "$HERE"/. "$BR/opt/gs/"; chown -R "$U" "$G" "$S"
 id -u builder >/dev/null 2>&1 || true
 cat > "$BR/opt/gs/run.sh" <<EOS
