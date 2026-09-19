@@ -76,16 +76,21 @@ clear_dpc(){   # clear latched DPC status (write-1) + disable trigger, on both U
 # unplug escaped it). Persistent lockout + previous-boot flood detection stop that.
 # Override for an intentional test: sudo egpu-rearm  (clears lockout + /run flag).
 LOCKOUT=/var/lib/nvegpu/flood-lockout
+# A paused auto-attach must be VISIBLE (it used to be silent: "I plugged in but nothing happened") and the plugin's / app's
+# Attach must be the way out. Every detected reset is also kept in flood-history: evidence, on whatever hardware this runs,
+# that THIS machine resets when the eGPU link drops, so the UI can keep a standing "always Safe Detach" note.
+lockout_status(){ mkdir -p /run/nvegpu 2>/dev/null
+  printf '{"state":"FAILED","message":"%s"}\n' "The system was reset by the hardware while the eGPU was connected (unplugged without Safe Detach?). Automatic attach is paused for safety. Press Attach to try again. On this device always use Safe Detach before unplugging." > /run/nvegpu/gm-status.json 2>/dev/null; }
 if [ ! -e /run/egpu-rearmed ]; then
   if [ -e "$LOCKOUT" ]; then
-    log "FLOOD LOCKOUT active — eGPU auto-load disabled to prevent bootloop. Run: sudo egpu-rearm"
-    exit 0
+    log "FLOOD LOCKOUT active — eGPU auto-load disabled to prevent bootloop. Run: sudo egpu-rearm (or press Attach)"
+    lockout_status; exit 0
   fi
   if dmesg 2>/dev/null | grep -qi 'data fabric sync flood'; then
     mkdir -p /var/lib/nvegpu 2>/dev/null
-    date '+%F %T' > "$LOCKOUT" 2>/dev/null
-    log "PREVIOUS BOOT FLOODED (data fabric sync flood) — set lockout, skipping eGPU auto-load to break the loop. Run: sudo egpu-rearm to retry."
-    exit 0
+    date '+%F %T' > "$LOCKOUT" 2>/dev/null; date '+%F %T' >> /var/lib/nvegpu/flood-history 2>/dev/null
+    log "PREVIOUS BOOT FLOODED (data fabric sync flood) — set lockout, skipping eGPU auto-load to break the loop. Run: sudo egpu-rearm to retry (or press Attach)."
+    lockout_status; exit 0
   fi
 fi
 

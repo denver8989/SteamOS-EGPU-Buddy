@@ -82,6 +82,7 @@ PRIV = "/usr/local/sbin/nv-egpu-buddy-privileged"
 SWITCH = "/usr/local/sbin/egpu-gamemode-switch"
 DETACH = "/usr/local/sbin/egpu-gamemode-detach"
 REATTACH = "/usr/local/sbin/egpu-reattach"
+FLOOD_LOCKOUT = "/var/lib/nvegpu/flood-lockout"; FLOOD_HISTORY = "/var/lib/nvegpu/flood-history"
 GPU_RE = re.compile(r"^(\S+) 0300: 10de:")   # any NVIDIA VGA-class device
 
 
@@ -572,6 +573,7 @@ class Plugin:
             "on_egpu": bool(bdf) and game_mode and output not in ("", "*", "eDP-1"),
             "output": output,
             "gm_status": _json(GM_STATUS), "desktop_status": _json(DESKTOP_STATUS),
+            "resets": (lambda h: {"count": len(h), "last": h[-1] if h else ""})([l for l in _read(FLOOD_HISTORY).splitlines() if l.strip()]),
             "link": {"speed": _read(f"/sys/bus/pci/devices/{bdf}/current_link_speed") if bdf else "",
                      "width": _read(f"/sys/bus/pci/devices/{bdf}/current_link_width") if bdf else ""},
             "displays": _displays(bdf) if bdf else [],
@@ -587,6 +589,12 @@ class Plugin:
             return {"ok": False, "message": "Not in Game Mode. Use the Attach eGPU desktop icon."}
         if _game_running() and not force:
             return {"ok": False, "message": "Close the running game first, then Attach."}
+        if os.path.exists(FLOOD_LOCKOUT):   # auto-attach was paused after a hardware reset: Attach is the explicit way out
+            _sh(["/usr/local/sbin/egpu-rearm"], 10); decky.logger.info("flood lockout cleared by Attach")
+        if _gpu_bdf() and not os.path.exists("/sys/module/nvidia_drm"):
+            # on the bus but never brought up (lockout, or an attach that stopped early): the full attach, not just a session switch
+            _spawn_root_job("attach", ["/usr/local/sbin/egpu-hotplug-mount.sh"])
+            return {"ok": True, "message": "Attaching: driver load, then Game Mode restarts on the eGPU display (about 30 seconds). Reopen this menu afterwards."}
         if _gpu_bdf():
             out = _gamescope_env("OUTPUT_CONNECTOR").split(",")[0]
             if out not in ("", "*", "eDP-1"):

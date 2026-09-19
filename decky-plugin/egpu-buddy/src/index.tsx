@@ -8,7 +8,7 @@ type Status = {
   attach_pending: boolean; on_egpu: boolean; output: string;
   gm_status: { state?: string; message?: string }; desktop_status: { state?: string; message?: string };
   link: { speed: string; width: string }; displays: { name: string; enabled: boolean }[]; audio_sink: string;
-  telemetry: Record<string, string>; ts: number;
+  telemetry: Record<string, string>; ts: number; resets?: { count: number; last: string };
 };
 type Result = { ok: boolean; message: string; rc?: number };
 
@@ -142,6 +142,7 @@ function Content() {
             </>
           )}
           {su && !su.busy && su.rc !== null && su.rc !== 0 && <PanelSectionRow><div style={{ fontSize: "12px", color: "#ff6b6b" }}>{su.rc === 21 ? "Nothing was changed: the eGPU driver is in use. Safe Detach, unplug the eGPU, then try again." : su.rc === 20 ? "Everything is installed except the NVIDIA driver, which could not be built. Keep the eGPU unplugged, check the internet connection and press Repair. Details: Show setup & updates." : `Install failed (rc ${su.rc}). Log: /tmp/egpu-buddy-setup.log`}</div></PanelSectionRow>}
+          {!!s?.resets?.count && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>This device was reset by its hardware {s.resets.count === 1 ? "once" : `${s.resets.count} times`} while the eGPU was connected (last: {s.resets.last}). Always use Safe Detach before unplugging.</div></PanelSectionRow>}
           {s && !s.game_mode && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>In Desktop mode use the EGPU Buddy desktop app.</div></PanelSectionRow>}
           {s?.attach_pending && <PanelSectionRow><div style={{ fontSize: "12px" }}>eGPU plugged in. Close the game, then press Attach.</div></PanelSectionRow>}
           <PanelSectionRow>
