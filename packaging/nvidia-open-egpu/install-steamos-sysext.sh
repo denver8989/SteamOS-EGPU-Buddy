@@ -120,7 +120,10 @@ fi
 say "assembling the system extension in $SX"
 rm -rf "$SX" "$SX.new"; mkdir -p "$SX.new/usr/lib/extension-release.d"
 # every package the driver's userspace pulled into the build root that the HOST does not have
-declare -A seen=(); queue=(nvidia-utils lib32-nvidia-utils); pkgs=()
+# nvidia-open-egpu-dkms is OUR driver package: besides the modules it installs /usr/lib/modprobe.d/nvidia-open.conf
+# (NVreg_OpenRmEnableUnsupportedGpus=1) and the eGPU hotplug udev rule. Those never reached the system before, so SteamOS
+# ran the driver without the options every other distribution gets. Its /usr/src DKMS tree is excluded below (~1 GB).
+declare -A seen=(); queue=(nvidia-utils lib32-nvidia-utils nvidia-open-egpu-dkms); pkgs=()
 while [ ${#queue[@]} -gt 0 ]; do p=${queue[0]}; queue=("${queue[@]:1}"); [ -z "${seen[$p]:-}" ] || continue; seen[$p]=1
   P -Qq "$p" >/dev/null 2>&1 || continue                       # not in the build root (e.g. lib32 left out)
   pacman -Qq "$p" >/dev/null 2>&1 && continue                  # the host already has it
@@ -132,7 +135,7 @@ done
 say "packages in the extension: ${pkgs[*]}"
 [ ${#pkgs[@]} -gt 0 ] || { echo "nothing to put into the extension (is the driver installed in the build root?)"; exit 7; }
 # (pacman prints file lists WITH the --root prefix; normalise, keep /usr files only, then address them in the build root)
-for p in "${pkgs[@]}"; do P -Qlq "$p" | sed "s#^$BR##" | { grep -E '^/usr/' || true; } | { grep -vE '/$' || true; } | sed "s#^#$BR#"; done | while read -r f; do
+for p in "${pkgs[@]}"; do P -Qlq "$p" | sed "s#^$BR##" | { grep -E '^/usr/' || true; } | { grep -vE '/$|^/usr/src/' || true; } | sed "s#^#$BR#"; done | while read -r f; do
   [ -e "$f" ] || [ -L "$f" ] || continue; d="$SX.new${f#$BR}"; mkdir -p "$(dirname "$d")"; cp -a --reflink=auto "$f" "$d"; done
 ls "$SX.new"/usr/lib/libnvidia-ml.so.$PV >/dev/null 2>&1 || { echo "the NVIDIA userspace did not reach the extension"; exit 7; }
 # modules for every kernel already built (an older kernel's modules stay usable for a rollback boot)
