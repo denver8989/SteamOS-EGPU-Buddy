@@ -1,3 +1,22 @@
+0.7.32 — booting with the eGPU attached now actually routes Game Mode to it.
+
+Found on a real Legion Go 1 with an RTX 5060 Ti: the machine booted with the eGPU plugged in and the monitor switched
+on, the eGPU mounted correctly, its display was connected — and Game Mode still came up on the built-in screen. The
+session wrapper waited 25 seconds and gave up.
+
+The reason was **BAR1 = 256 MiB**. Game Mode's readiness gate requires the resized BAR, and BAR1 can only be resized
+while the GPU has no driver bound. The boot path deliberately skipped the resize and loaded the driver immediately, so
+by the time anything else ran, the window had closed — and no amount of waiting could change it. A hot-plugged eGPU was
+fine, because there the GPU is driverless when the resize happens. Only the boot-with-eGPU case was broken, which is
+exactly the case nobody had tested.
+
+The boot path now resizes BAR1 while the GPU is still driverless, before loading the driver.
+
+The old rule that produced this ("no ReBAR at boot") came from one platform where a large BAR stops the driver
+initialising. That is now handled by **detection instead of denial**: if the driver does not create a DRM card with the
+resized BAR, the BAR is backed down to its original size and the driver is loaded again, so such a machine ends up
+exactly where it was before rather than with no eGPU at all.
+
 0.7.31 — drive the signal, because on many monitors the signal is what ends standby.
 
 Two corrections, both from a live failure: a machine booted with the eGPU attached and the monitor in standby, and

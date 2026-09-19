@@ -92,12 +92,49 @@ if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ]; then
   else log "FLR unavailable — continuing"; fi
 fi
 
-log "eGPU at $gpu — load driver (FLR done, no ReBAR)"
+# BAR1 can ONLY be resized while the GPU is driverless, which at boot means here. Skipping
+# it used to leave BAR1 at 256MB for the whole boot — and Game Mode's readiness gate requires
+# the resized BAR, so booting WITH the eGPU attached could never route the session to it: the
+# wrapper waited 25s and fell back to the handheld screen. Found on a Legion Go 1 + RTX 5060 Ti.
+# The old "no ReBAR at boot" rule came from one platform where a large BAR wedges the driver's
+# init; that is handled below by DETECTION (if the driver does not come up, the BAR is backed
+# down and reloaded) instead of by denying every machine the resize.
+bar1_mib(){ python3 - "$1" <<'EOF' 2>/dev/null || echo 0
+import sys
+try:
+    l=open("/sys/bus/pci/devices/%s/resource"%sys.argv[1]).read().splitlines()[1].split()
+    s,e=int(l[0],16),int(l[1],16); print((e-s+1)//(1024*1024))
+except Exception: print(0)
+EOF
+}
+if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
+  for _c in 14 13 12; do
+    "$PRIV" resize "$_c" >/dev/null 2>&1 && { log "BAR1 resized while driverless (size code $_c) -> $(bar1_mib "$gpu")MiB"; break; }
+  done
+fi
+
+log "eGPU at $gpu — load driver (FLR done, BAR1 $(bar1_mib "$gpu")MiB)"
 "$PRIV" load-nvidia >/dev/null 2>&1 || true
 [ -L "/sys/bus/pci/devices/$gpu/driver" ] || "$PRIV" bind-nvidia >/dev/null 2>&1 || true
 "$PRIV" load-modeset >/dev/null 2>&1 || true
 "$PRIV" load-drm >/dev/null 2>&1 || true
 for _ in $(seq 1 15); do compgen -G "/sys/bus/pci/devices/$gpu/drm/card*" >/dev/null && break; sleep 1; done
+
+# Wedge protection for the resize above: on some platforms a large BAR stops the driver
+# initialising at all. If no DRM card appeared, back the BAR down and load again, so those
+# machines end up exactly where they were before rather than with no eGPU.
+if ! compgen -G "/sys/bus/pci/devices/$gpu/drm/card*" >/dev/null 2>&1 &&
+   [ "$(bar1_mib "$gpu")" -gt 256 ]; then
+  log "driver did not create a DRM card with the resized BAR — backing BAR1 down and retrying"
+  "$PRIV" unbind-nvidia >/dev/null 2>&1 || true
+  "$PRIV" resize 8 >/dev/null 2>&1 || "$PRIV" resize 12 >/dev/null 2>&1 || true
+  "$PRIV" load-nvidia >/dev/null 2>&1 || true
+  [ -L "/sys/bus/pci/devices/$gpu/driver" ] || "$PRIV" bind-nvidia >/dev/null 2>&1 || true
+  "$PRIV" load-modeset >/dev/null 2>&1 || true
+  "$PRIV" load-drm >/dev/null 2>&1 || true
+  for _ in $(seq 1 15); do compgen -G "/sys/bus/pci/devices/$gpu/drm/card*" >/dev/null && break; sleep 1; done
+  log "after backing down: BAR1 $(bar1_mib "$gpu")MiB, DRM card $(compgen -G "/sys/bus/pci/devices/$gpu/drm/card*" >/dev/null 2>&1 && echo yes || echo no)"
+fi
 
 if compgen -G "/sys/bus/pci/devices/$gpu/drm/card*" >/dev/null 2>&1; then
   # A monitor left in standby does not assert hot-plug, so its connector reads

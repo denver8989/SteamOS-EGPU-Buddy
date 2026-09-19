@@ -297,7 +297,9 @@ case "$action" in
     ;;
   resize)
     [ "$#" -eq 1 ] || die "resize requires one size code"
-    case "$1" in 12|13|14) ;; *) die "resize code $1 is not allowed" 2 ;; esac
+    # 14=16GB 13=8GB 12=4GB, and 8=256MB to back the BAR down again: a platform whose driver
+    # will not initialise with a large BAR has to be able to get back to where it started.
+    case "$1" in 8|12|13|14) ;; *) die "resize code $1 is not allowed" 2 ;; esac
     require_gpu_alive "BAR1 resize"
     [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing resize" 2
     [ -e "$GDEV/resource1_resize" ] || die "BAR1 resize control is absent" 2
