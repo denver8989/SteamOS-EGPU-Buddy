@@ -14,6 +14,8 @@ pgrep -f '/usr/local/sbin/egpu-safe-detach' >/dev/null && { log "skip: safe-deta
 lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { log "skip: GPU still on the bus"; exit 0; }
 exec 9>/run/egpu-surprise-recover.lock; flock -n 9 || { log "skip: already running"; exit 0; }
 log "SURPRISE removal detected (GPU gone from bus)"
+# the UI must not keep saying "Game Mode is on DP-9" after the cable is gone (it did, seen on a real device)
+mkdir -p /run/nvegpu; printf '{"state":"DETACHED","message":"The eGPU was unplugged. The session is back on the handheld screen."}\n' > /run/nvegpu/gm-status.json 2>/dev/null
 T0=$(date +%s); SELF_START=$(awk '{print $22}' /proc/self/stat); mkdir -p /run/nvegpu; date +%s > /run/nvegpu/surprise-pending   # hotplug-mount: stale modules -> unbind+FLR+rebind on next attach
 # gamescope dies with the card within a second, so it cannot be asked; the session wrapper / desktop login script record the type
 GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1; runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
