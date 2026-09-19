@@ -384,18 +384,20 @@ stage_gamescope_env() {
 # poison Desktop sessions, or re-enable NVIDIA Gamescope HDR corruption.
 EOF
   chown -R deck:deck "$conf_dir" 2>/dev/null || true
-  systemctl --user set-environment \
-    OUTPUT_CONNECTOR= \
-    KWIN_DRM_DEVICES= \
-    VK_DRIVER_FILES= \
-    VK_ICD_FILENAMES= \
-    __EGL_VENDOR_LIBRARY_FILENAMES= \
-    __GLX_VENDOR_LIBRARY_NAME= \
-    PROTON_ENABLE_NVAPI= \
-    DXVK_ENABLE_NVAPI= \
-    PROTON_HIDE_NVIDIA_GPU= \
-    DXVK_HDR= \
-    STEAM_DISPLAY_REFRESH_LIMITS= >/dev/null 2>&1 || true
+  # UNSET, never "set to empty": an exported but empty VK_DRIVER_FILES is a driver list with no entries, and the Vulkan
+  # loader then reports "Found no drivers" — every Vulkan game fails to start. Verified on the development machine.
+  systemctl --user unset-environment \
+    OUTPUT_CONNECTOR \
+    KWIN_DRM_DEVICES \
+    VK_DRIVER_FILES \
+    VK_ICD_FILENAMES \
+    __EGL_VENDOR_LIBRARY_FILENAMES \
+    __GLX_VENDOR_LIBRARY_NAME \
+    PROTON_ENABLE_NVAPI \
+    DXVK_ENABLE_NVAPI \
+    PROTON_HIDE_NVIDIA_GPU \
+    DXVK_HDR \
+    STEAM_DISPLAY_REFRESH_LIMITS >/dev/null 2>&1 || true
   systemctl --user unset-environment \
     OUTPUT_CONNECTOR \
     KWIN_DRM_DEVICES \
@@ -410,18 +412,20 @@ EOF
     STEAM_DISPLAY_REFRESH_LIMITS \
     STEAM_GAMESCOPE_FORCE_HDR_DEFAULT \
     STEAM_GAMESCOPE_FORCE_OUTPUT_TO_HDR10PQ_DEFAULT >/dev/null 2>&1 || true
-  systemctl --user set-environment \
-    OUTPUT_CONNECTOR= \
-    KWIN_DRM_DEVICES= \
-    VK_DRIVER_FILES= \
-    VK_ICD_FILENAMES= \
-    __EGL_VENDOR_LIBRARY_FILENAMES= \
-    __GLX_VENDOR_LIBRARY_NAME= \
-    PROTON_ENABLE_NVAPI= \
-    DXVK_ENABLE_NVAPI= \
-    PROTON_HIDE_NVIDIA_GPU= \
-    DXVK_HDR= \
-    STEAM_DISPLAY_REFRESH_LIMITS= >/dev/null 2>&1 || true
+  # UNSET, never "set to empty": an exported but empty VK_DRIVER_FILES is a driver list with no entries, and the Vulkan
+  # loader then reports "Found no drivers" — every Vulkan game fails to start. Verified on the development machine.
+  systemctl --user unset-environment \
+    OUTPUT_CONNECTOR \
+    KWIN_DRM_DEVICES \
+    VK_DRIVER_FILES \
+    VK_ICD_FILENAMES \
+    __EGL_VENDOR_LIBRARY_FILENAMES \
+    __GLX_VENDOR_LIBRARY_NAME \
+    PROTON_ENABLE_NVAPI \
+    DXVK_ENABLE_NVAPI \
+    PROTON_HIDE_NVIDIA_GPU \
+    DXVK_HDR \
+    STEAM_DISPLAY_REFRESH_LIMITS >/dev/null 2>&1 || true
   sanitize_steam_gamescope_display_settings
 }
 
