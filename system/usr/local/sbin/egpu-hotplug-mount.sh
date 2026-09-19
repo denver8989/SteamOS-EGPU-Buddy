@@ -84,6 +84,7 @@ lockout_status(){ mkdir -p /run/nvegpu 2>/dev/null
 if [ ! -e /run/egpu-rearmed ]; then
   if [ -e "$LOCKOUT" ]; then
     log "FLOOD LOCKOUT active — eGPU auto-load disabled to prevent bootloop. Run: sudo egpu-rearm (or press Attach)"
+    [ -s /var/lib/nvegpu/flood-history ] || cat "$LOCKOUT" >> /var/lib/nvegpu/flood-history 2>/dev/null   # lockouts set before the history existed
     lockout_status; exit 0
   fi
   if dmesg 2>/dev/null | grep -qi 'data fabric sync flood'; then
