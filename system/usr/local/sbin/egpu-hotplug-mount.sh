@@ -53,9 +53,22 @@ mask_surprise_down(){   # $1 = GPU BDF
   setpci -s "$rp" "$(printf 0x%x $((aer+0x0c)))".l=00000000 2>/dev/null   # UESvrt: all non-fatal (hardwired bits stay)
   log "root port $rp has no DPC: uncorrectable errors masked as far as the hardware allows (UEMsk=$(setpci -s "$rp" "$(printf 0x%x $((aer+0x08)))".l 2>/dev/null) UESvrt=$(setpci -s "$rp" "$(printf 0x%x $((aer+0x0c)))".l 2>/dev/null))"
 }
-clear_dpc(){   # clear latched DPC status (write-1) + disable trigger, on both USB4 root ports
+# USB4/Thunderbolt tunnel root ports, found by what they ARE, not by device id. This used to be
+# gated to 1022:150a (Strix Halo), so on every other machine — including the Legion Go 1, which is
+# Phoenix — the DPC clear silently did nothing. On Strix Halo the SECOND USB4 port needed exactly
+# this to form a PCIe tunnel at all, so a device-id gate meant "works on one port of one machine".
+_tunnel_root_ports(){
+  local p
+  # HOST root ports only (bus 00). Matching any tunnel bridge also caught the enclosure's own
+  # Thunderbolt switch, which is not ours to poke.
+  for p in $(lspci -Dn 2>/dev/null | awk '$1 ~ /^[0-9a-f]{4}:00:/ && $2 ~ /^0604:/ {print $1}'); do
+    lspci -s "$p" 2>/dev/null | grep -qiE 'usb4|thunderbolt' || continue
+    printf '%s\n' "$p"
+  done
+}
+clear_dpc(){   # clear latched DPC status (write-1) + disable trigger on every USB4/TB tunnel root port
   local p off v id nxt c
-  for p in $(lspci -D -d 1022:150a -n 2>/dev/null | awk '{print $1}'); do
+  for p in $(_tunnel_root_ports); do
     off=0x100
     for _ in $(seq 1 48); do
       v=$(setpci -s "$p" "$off".l 2>/dev/null) || break
@@ -64,6 +77,7 @@ clear_dpc(){   # clear latched DPC status (write-1) + disable trigger, on both U
         setpci -s "$p" "$(printf 0x%x $((off+0x08)))".w=0001 2>/dev/null          # clear latched status
         c=$(setpci -s "$p" "$(printf 0x%x $((off+0x06)))".w 2>/dev/null)
         setpci -s "$p" "$(printf 0x%x $((off+0x06)))".w=$(printf %04x $(( 0x$c & ~0x3 ))) 2>/dev/null  # disable trigger
+        log "DPC cleared on tunnel root port $p"
         break
       fi
       [ "$nxt" -eq 0 ] && break; off=$(printf 0x%x "$nxt")

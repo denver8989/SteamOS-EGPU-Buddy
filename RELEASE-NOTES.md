@@ -1,3 +1,17 @@
+0.7.39 — the second USB4 port works on any machine, not just the one it was written on.
+
+Clearing PCIe Downstream Port Containment is what lets a USB4 port build a PCIe tunnel after the link has been
+contained — on the development handheld, the **second** USB4 port would not form a tunnel at all without it. That fix
+was gated to a single device ID (`1022:150a`, Strix Halo), so on every other machine it silently did nothing. A Legion
+Go 1 is AMD Phoenix: the gate matched nothing there, and the clear never ran on either of its two USB4 ports.
+
+It is now found by what the port *is*: a host root port that is a USB4/Thunderbolt tunnel bridge, with a DPC capability
+discovered by walking its capability list. No device IDs.
+
+Restricted to **host** root ports on purpose. Matching any tunnel bridge also caught the eGPU enclosure's own
+Thunderbolt switch, which is not ours to write to. Verified on a real machine: it now finds exactly the two USB4 root
+ports and nothing else.
+
 0.7.38 — booting with the eGPU attached now gets the full 16 GiB BAR1, not 256 MiB.
 
 Hot-plugging an eGPU has always produced a 16 GiB BAR1. Booting with it attached produced 256 MiB, and the resize was

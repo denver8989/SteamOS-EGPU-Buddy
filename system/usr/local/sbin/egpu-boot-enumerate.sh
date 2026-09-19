@@ -43,7 +43,9 @@ dock_present(){
 }
 clear_dpc_status(){   # clear any latched DPC containment status on the USB4 root ports
   local p off v id nxt
-  for p in $(lspci -D -d 1022:150a -n 2>/dev/null | awk '{print $1}'); do
+  # by capability, not device id: see the note in egpu-hotplug-mount.sh
+  for p in $(lspci -Dn 2>/dev/null | awk '$1 ~ /^[0-9a-f]{4}:00:/ && $2 ~ /^0604:/ {print $1}'); do
+    lspci -s "$p" 2>/dev/null | grep -qiE 'usb4|thunderbolt' || continue
     off=0x100
     for _ in $(seq 1 48); do
       v=$(setpci -s "$p" "$off".l 2>/dev/null) || break
