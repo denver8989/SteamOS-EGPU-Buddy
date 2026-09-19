@@ -53,7 +53,10 @@ log "=== TEST-MODE autostart start (session=$XDG_SESSION_DESKTOP) ==="
 
 # eGPU must be physically present + healthy, else this is a normal handheld
 # desktop and we touch nothing.
-[ -e "$GDEV" ] || { log "eGPU absent — no-op"; exit 0; }
+# NOTE the empty-variable trap: with no NVIDIA GPU, GPU is "" and $GDEV collapses to /sys/bus/pci/devices/, a directory
+# that always exists — so this guard used to PASS on a machine with no eGPU at all. On a handheld with ordinary USB-C
+# display glasses (which appear as a DisplayPort output on the built-in GPU) this script must do absolutely nothing.
+[ -n "$GPU" ] && [ -e "$GDEV/drm" ] || { log "eGPU absent — no-op"; exit 0; }
 w=$(cat "$GDEV/current_link_width" 2>/dev/null)
 [ "$w" = "63" ] && { log "GPU link width=63 (zombie) — refusing to poke"; exit 0; }
 cfg0=$(xxd -l4 "$GDEV/config" 2>/dev/null | awk '{print $2$3}')
