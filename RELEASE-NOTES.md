@@ -1,3 +1,17 @@
+0.7.43 — the quiet boot stays fixed this time, because it repairs itself.
+
+The verbose boot has now been "fixed" three times and come back twice. The reason is not the fix — it is that **every
+install regenerates the boot configuration and undid it**. Each time, the generated file was correct when checked and
+wrong again after the next update.
+
+SteamOS's `steamenv_boot` drops `loglevel=3 quiet splash plymouth.ignore-serial-consoles` from the part of the kernel
+line that `grub-mkconfig` writes them into. They have to also appear in the part it leaves alone. That is now
+**verified and repaired after every regeneration**, the same way the boot-menu timeout already is: if the generated
+configuration would boot verbosely, the parameters are put back into the surviving part of the line before anything
+else happens. No install can quietly undo it again.
+
+Both self-repairs are checked against the real file format, not assumed.
+
 0.7.42 — unplugging after a boot-with-eGPU could reset the machine. Update.
 
 **This is the one that has been resetting machines.** Root ports without Downstream Port Containment answer a cable pull

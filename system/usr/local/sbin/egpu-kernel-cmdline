@@ -82,6 +82,15 @@ elif [ -f /etc/default/grub ] && command -v steamos-readonly >/dev/null 2>&1; th
         sed -i '1i set timeout_style=hidden' "$cfg"
         echo "the regenerated config had no timeout: pinned it to boot straight through"
       fi
+      # ...and never leave a config that boots into a wall of console text. SteamOS's steamenv_boot
+      # drops the boot-verbosity parameters where grub-mkconfig puts them (in GRUB_CMDLINE_LINUX_DEFAULT),
+      # so they must also appear in the part of the line it leaves alone. Checking instead of trusting:
+      # this had been "fixed" twice and each following install quietly put the verbose boot back.
+      if ! grep -q 'steamenv_boot.*quiet.*nvidia-drm.modeset' "$cfg" 2>/dev/null &&
+           grep -q 'steamenv_boot' "$cfg" 2>/dev/null; then
+        sed -i -E "s|(steamenv_boot[[:space:]]+linux[[:space:]]+[^[:space:]]+)|\\1 $QUIET|" "$cfg"
+        echo "the regenerated config would have booted verbosely: restored $QUIET"
+      fi
     else
       echo "could not regenerate the GRUB config; kernel parameters are written but not active yet"
     fi
