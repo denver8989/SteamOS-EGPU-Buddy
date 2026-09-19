@@ -111,17 +111,6 @@ if [ "$MODE" = check ]; then
   echo "$n file(s) differ or are missing"; exit 0
 fi
 
-# ---- user files ----------------------------------------------------------------------------------
-say "== installing user files"
-for f in "${FILES[@]}"; do case "$f" in user/*) ;; *) continue;; esac
-  d=$(map_dest "$f"); umkdir "$(dirname "$d")"
-  if [ -e "$d" ] && differs "$f" "$d"; then cp -a "$d" "$d.bak-egpu-buddy-$TS"; fi
-  templ < "$ROOT/$f" > "$d"; chmod --reference="$ROOT/$f" "$d" 2>/dev/null || true; uown "$d"
-done
-if want session; then
-  chmod +x "$USER_HOME"/.local/bin/nv-egpu-* "$USER_HOME"/.local/bin/egpu-* "$USER_HOME/.local/lib/nv-egpu-buddy/gamescope-shim/gamescope" 2>/dev/null || true
-fi
-
 # ---- SteamOS: a merged driver extension makes ALL of /usr read-only ------------------------------
 # On SteamOS /usr/local is part of the system partition (no separate mount), and a merged system extension turns /usr
 # into a read-only overlay: a second install then fails with "Read-only file system" (seen on a real device, 0.7.21).
@@ -132,6 +121,17 @@ if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/
   say "== SteamOS: unmerging the driver extension while the system files are written"
   sudo systemd-sysext unmerge >/dev/null 2>&1 || { echo "could not unmerge the driver extension (files in use?). Reboot with the eGPU unplugged and run the install again. Nothing was changed."; exit 21; }
   trap 'sudo bash "$SYSEXT_TOOL" --activate >/dev/null 2>&1 || true' EXIT
+fi
+
+# ---- user files ----------------------------------------------------------------------------------
+say "== installing user files"
+for f in "${FILES[@]}"; do case "$f" in user/*) ;; *) continue;; esac
+  d=$(map_dest "$f"); umkdir "$(dirname "$d")"
+  if [ -e "$d" ] && differs "$f" "$d"; then cp -a "$d" "$d.bak-egpu-buddy-$TS"; fi
+  templ < "$ROOT/$f" > "$d"; chmod --reference="$ROOT/$f" "$d" 2>/dev/null || true; uown "$d"
+done
+if want session; then
+  chmod +x "$USER_HOME"/.local/bin/nv-egpu-* "$USER_HOME"/.local/bin/egpu-* "$USER_HOME/.local/lib/nv-egpu-buddy/gamescope-shim/gamescope" 2>/dev/null || true
 fi
 
 # ---- system files (sudo) -------------------------------------------------------------------------
