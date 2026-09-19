@@ -1,3 +1,64 @@
+0.7.23 — everything SteamOS: a real device found what a container could not.
+
+Tested end to end on a Legion Go (SteamOS 3.8, kernel 6.16 valve) with an RTX 5060 Ti in an AORUS TB5 box on a
+5120x1440@144 ultrawide: install, driver, attach, a game in Game Mode, Safe Detach, replug, surprise unplug, and the
+same again on the desktop. Every fix below came from that session. **Nothing changes on CachyOS / Legion Go 2 unless
+it is named as a fix there.**
+
+**The eGPU could never attach on a clean machine.** The display half of the driver was only loaded when
+`/etc/nv-egpu-buddy/surprise-removal-safe` said `yes` — a file created by hand on the development machine and shipped
+by nothing. Everywhere else the attach loaded the compute driver, said "display stack ready", and Game Mode fell back
+to the handheld screen after a 25 second wait. The proof is now read from the installed modules themselves (strings
+only this project's patches add), so it is true wherever the patched driver really is installed.
+
+**The desktop ran on both GPUs instead of the eGPU alone.** `~/.config/plasma-workspace/env/00-egpu-free-nvidia-modeset.sh`
+— the hook that pins the compositor to the eGPU and keeps the built-in GPU out of the session — also existed only on the
+development machine. That hook *is* the anti-crosstalk mechanism; without it the desktop came back extended across both
+GPUs after an attach. It is now part of the install.
+
+**Game Mode composited on the built-in GPU.** Where the distribution's gamescope carries file capabilities (SteamOS),
+the Vulkan loader ignores the environment this project uses for NVIDIA routing. The session now names the eGPU on the
+command line instead, where capabilities cannot strip it.
+
+**The picture was corrupted on SteamOS** because the GBM-scanout gamescope is built on CachyOS and cannot run there, so
+the session silently fell back to the distribution's. A SteamOS build is now shipped, and the installer picks whichever
+shipped build actually runs on the machine, by trying them, not by distribution name. If none runs it builds one on the
+device. Both builds link the system EDID library so HDR metadata is read the same way everywhere.
+
+**The Steam UI was 1080p on a 5120x1440 display.** SteamOS's session script hardcodes an inner resolution; it is now
+dropped when this project stages a native canvas, so the UI follows the monitor's real mode.
+
+**Login manager, sessions and Safe Detach.** All session pinning wrote CachyOS's login-manager file, which SteamOS
+ignores, so a desktop Safe Detach came back in Game Mode and could not finish. One helper now detects the login manager
+and the real session file names on both. The pin is released once the session it was for has returned, so "Return to
+Gaming Mode" is not overridden. The password-less sudo rules were being outranked by SteamOS's own `wheel` rule because
+of the file name; they now sort last and apply, which is what the desktop app's Safe Detach needs.
+
+**Decky vanished after a detach.** Its backend holds `/dev/nvidia*`, so the driver unload killed it and nothing brought
+it back: Game Mode returned with no plugins at all. Both the planned detach and the unplug recovery restart it now.
+
+**A cable pull reset the machine.** On a USB4 root port without Downstream Port Containment the surprise removal raised
+a fatal error and the platform answered with a data-fabric sync flood, i.e. an instant reboot. The attach now masks the
+uncorrectable errors that port accepts and makes them non-fatal, by capability, so ports that have containment (Legion
+Go 2) are untouched. With that in place the same yank recovered in eight seconds with the session back on the handheld.
+If a reset does happen, the automatic attach pauses, says so, and the plugin offers Repair; every such reset is
+remembered and the plugin keeps a standing "always Safe Detach" note for that machine.
+
+**The handheld panel stayed lit and black in eGPU mode.** Turning it off gave up whenever anything held its graphics
+card, which is always true in eGPU mode. The backlight is now powered down and zeroed regardless, and restored on the
+way back.
+
+**Desktop app and launchers.** The app is a native Qt/QML window with a system-tray icon instead of a browser tab
+(SteamOS has no WebKitGTK), the tray runs as a user service so it survives the compositor restarts this project
+performs, and "EGPU Buddy" and "Safely Eject eGPU" are installed to the menu and the desktop. Re-attach reports what
+happened instead of failing silently.
+
+**Also:** the plugin's update backup no longer lives inside Decky's plugin folder, where Decky loaded it as a second
+copy of the plugin and kept running the old version after every update; the driver extension ships this project's own
+driver package files (modprobe options, hotplug rule) without dragging a compiler along; the unplug recovery waits for
+a working display before restarting Steam, so no "cannot open display" dialog; card numbers, the dock and the audio
+route are looked up instead of assumed, so a machine that enumerates its GPUs the other way round works.
+
 0.7.22 — SteamOS: installing again over a working install no longer fails; updates are plugin first, system files second.
 
 - **SteamOS, found on a real Legion Go with 0.7.21:** the first install went through and the driver extension merged,

@@ -24,6 +24,36 @@ hid the 0.7.21 reinstall failure described below), Valve's real `pacman.conf`, r
 | OS-update keep-list, GRUB drop-in (as Valve's `grub-mkconfig` sources it) | written; resulting command line contains the parameters |
 | Uninstall | nothing left: extension, build environment, keep-list, drop-in, units, scripts |
 
+## SteamOS: tested on a real device (0.7.23)
+
+Legion Go (the first one), SteamOS 3.8, kernel 6.16.12-valve24.5, RTX 5060 Ti in a Gigabyte AORUS TB5 box, Acer X49 V
+ultrawide at 5120x1440@144 over DisplayPort. Everything below was done on that machine on 2026-09-19 and watched in its
+own logs.
+
+| Verified on the device | Result |
+|---|---|
+| Install from the release payload, repeatedly, including over a working install | exit 0, ~30 s; the driver extension is unmerged and re-merged around the write |
+| Patched 610.57.04 built on the device and merged as a system extension | driver active, modules and libraries resolve, survives a re-run |
+| Attach in Game Mode (plug in, no button) | ~30 s from plug to Game Mode on the monitor; BAR1 16 GB, link pinned Gen3 x4 |
+| Game Mode picture | clean, no scanout corruption, with the GBM-scanout gamescope built for SteamOS |
+| Steam UI at the display's native mode | 5120x1440@144, UI scale applied |
+| A game in Game Mode | played, "works fine, operates well" |
+| Safe Detach in Game Mode | SAFE_COMPLETE, 51 s (was 98 s before the wait fix) |
+| Replug after a Safe Detach | auto-attached, Game Mode back on the monitor |
+| Surprise unplug in Game Mode | recovered in 8 s, one session relaunch, no reset, driver unloaded |
+| Desktop mode on the eGPU | NVIDIA-only: the compositor holds only the eGPU's nodes, the built-in GPU is held by nobody |
+| Safe Detach from the desktop | SAFE_COMPLETE, compositor back on the built-in GPU, panel and backlight restored |
+| Surprise unplug on the desktop | recovered in 8 s, no reset, Steam and the tray app came back |
+| Kernel parameters, self-heal service, keep-list, GRUB drop-in | written and effective |
+| Uninstall | nothing left behind |
+
+**Not the same machine as the development one:** its USB4 root ports have no Downstream Port Containment, its GPUs
+enumerate the other way round (the eGPU is `card1`), its login manager is `sddm`, and its Game Mode session file has a
+different name. Each of those broke something that had only ever run on the development machine; see the 0.7.23 notes.
+
+**Known limitation there:** HDR must be enabled on the monitor itself as well as in Steam. With the display's own HDR
+mode off, enabling HDR in Steam gives a washed out, grey picture — that is the display, not the software.
+
 **Real device, 2026-09-19 (Legion Go, SteamOS 3.8, kernel 6.16.12-valve24.5):** with 0.7.20 the build environment,
 the headers for the exact kernel and the driver compile all succeeded; assembling the extension then failed with
 `overlay: case-insensitive capable filesystem ... not supported`, because SteamOS formats `/home` as case-folding ext4
