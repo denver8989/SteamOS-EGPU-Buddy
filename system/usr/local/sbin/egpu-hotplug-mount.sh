@@ -354,6 +354,9 @@ egpu_external_only(){
     [ -n "$k" ] && tr '\0' '\n' </proc/"$k"/environ 2>/dev/null | grep -q "KWIN_DRM_DEVICES=/dev/dri/$nvcard\$" && break
     sleep 2
   done
+  # The session pin has done its job (it only had to survive THIS relogin). Release it immediately: it sorts last and would
+  # otherwise outrank the system's own choice, so "Return to Gaming Mode" just re-loaded the desktop (seen on a real device).
+  /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || true
   sleep 4
   for t in 1 2 3 4 5 6 7 8; do
     ext=$(runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor -o 2>/dev/null \

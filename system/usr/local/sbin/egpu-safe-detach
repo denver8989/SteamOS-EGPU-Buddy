@@ -119,6 +119,7 @@ else
       ls -l /proc/"$k"/fd 2>/dev/null | grep -q "/dev/dri/$EGPU_CARD\$" || { released=1; break; }
     done
   fi
+  /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || true   # pin was only for this relogin; it must not outrank the system's session choice
   [ "$released" = 1 ] || { say "      could not free $EGPU_CARD — ABORTING (safe; eGPU still attached)."; rm -f "$DM"; exit 3; }
   say "      KWin released the eGPU ($EGPU_CARD free)"
   fi
