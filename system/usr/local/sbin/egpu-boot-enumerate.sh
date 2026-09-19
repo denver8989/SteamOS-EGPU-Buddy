@@ -117,6 +117,31 @@ if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gp
     fi
     log "BAR1 resize to size code $_c refused: ${_out:-no reason given}"
   done
+  if [ "$_rc" != 0 ]; then
+    # ENOSPC means the bridge windows were sized at boot for the BARs the device already had, and
+    # a 16GiB window will not fit in them. A device that arrives AFTER boot gets the reserve from
+    # pci=hpmemprefsize instead, which is why hot-plugging has always produced a 16GiB BAR and
+    # booting with the eGPU attached produced 256MiB. So make boot look like a hot-plug: take the
+    # tunnel down and let the kernel enumerate it again, then resize. Nothing is displaying yet at
+    # this point in boot, so there is no session to disturb.
+    log "BAR1 could not be resized in place — re-enumerating the eGPU tunnel to get hot-plug sized windows"
+    if "$PRIV" reenumerate-tunnel >/dev/null 2>&1; then
+      for _ in $(seq 1 30); do [ -e "/sys/bus/pci/devices/$gpu" ] && break; sleep 1; done
+      for _ in $(seq 1 15); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
+      if [ -e "/sys/bus/pci/devices/$gpu" ] && [ ! -L "/sys/bus/pci/devices/$gpu/driver" ]; then
+        for _c in 14 13 12; do
+          if _out=$("$PRIV" resize "$_c" 2>&1); then
+            log "BAR1 resized after re-enumeration (size code $_c) -> $(bar1_mib "$gpu")MiB"; _rc=0; break
+          fi
+          log "BAR1 resize to size code $_c still refused: ${_out:-no reason given}"
+        done
+      else
+        log "the eGPU did not come back cleanly after re-enumeration"
+      fi
+    else
+      log "tunnel re-enumeration refused (see the helper's reason); leaving the BAR as it is"
+    fi
+  fi
   [ "$_rc" = 0 ] || log "BAR1 stays at $(bar1_mib "$gpu")MiB — the eGPU is used anyway, at lower bandwidth over Thunderbolt"
 fi
 

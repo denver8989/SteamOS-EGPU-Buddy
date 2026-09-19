@@ -1,3 +1,24 @@
+0.7.38 — booting with the eGPU attached now gets the full 16 GiB BAR1, not 256 MiB.
+
+Hot-plugging an eGPU has always produced a 16 GiB BAR1. Booting with it attached produced 256 MiB, and the resize was
+refused with `write error: No space left on device`. The difference is not the card and not the driver: it is *when* the
+device appears. A device that arrives after boot is placed in bridge windows sized with the reserve from
+`pci=hpmemprefsize`; a device that is already there at boot keeps the windows firmware assigned for the BARs it had —
+and a 16 GiB window, which must also be 16 GiB-aligned, does not fit in them.
+
+So boot now makes itself look like a hot-plug: when the resize is refused, the eGPU's Thunderbolt subtree is taken down
+and enumerated again, the kernel sizes the bridge windows afresh, and the resize is retried. Nothing is displaying at
+that point in boot, so there is no session to disturb. Removing only the GPU is not enough — its parent bridge keeps its
+window — so the bridge below the root port is what goes and comes back.
+
+**It will not do this to hardware that is not yours.** The re-enumeration is refused unless every PCI function behind
+that bridge is either part of the tunnel or the eGPU itself. A dock, a drive or a display controller sharing the path
+stops it, by design: taking a bridge down takes everything under it with it. Checked against a real machine's topology,
+where the tree also contains bus directories and PCIe port services that are not devices at all.
+
+If the resize still cannot be done, the eGPU is used anyway at the smaller BAR — that has not changed since 0.7.34, and
+the log now says what actually happened at each step instead of failing silently.
+
 0.7.37 — quiet boot restored, and the handheld panel goes dark when the session starts on the eGPU.
 
 **Every boot had become a wall of console text.** This project appends its kernel parameters after the distribution's,

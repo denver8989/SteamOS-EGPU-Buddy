@@ -272,6 +272,37 @@ case "$action" in
     [ "$#" -eq 0 ] || die "status takes no arguments"
     gpu_state
     ;;
+  reenumerate-tunnel)
+    # Re-enumerate the eGPU's whole Thunderbolt subtree so the kernel sizes the bridge windows
+    # again, the way it does for a device that arrives AFTER boot. This is the difference between
+    # a 16GiB BAR1 and 256MiB: at boot the device is already there and the bridges keep the small
+    # windows firmware assigned, so a resize is refused with ENOSPC; a hot-plugged device gets the
+    # reserve from pci=hpmemprefsize instead. Removing only the GPU is not enough — its parent
+    # bridge keeps its window — so the bridge below the root port goes, and comes back with it.
+    [ "$#" -eq 0 ] || die "reenumerate-tunnel takes no arguments"
+    [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing re-enumeration" 2
+    _rt_real=$(readlink -f "$GDEV" 2>/dev/null) || die "GPU is not present" 2
+    # path looks like /sys/devices/pci0000:00/0000:00:04.1/0000:63:00.0/0000:64:00.0/0000:65:00.0
+    _rt_bridge=$(printf '%s\n' "$_rt_real" | awk -F/ '{for(i=1;i<=NF;i++) if($i ~ /^pci[0-9a-f]{4}:[0-9a-f]{2}$/) {print $(i+2); exit}}')
+    [ -n "$_rt_bridge" ] && [ -d "/sys/bus/pci/devices/$_rt_bridge" ] ||
+      die "could not identify the eGPU's upstream bridge" 2
+    # NOTHING but the eGPU may live under it: never yank a dock, a drive or someone's display controller
+    # scan the REAL device tree: /sys/bus/pci/devices/<bdf> is a symlink and find does not follow it
+    _rt_root=$(readlink -f "/sys/bus/pci/devices/$_rt_bridge")
+    # real PCI functions only: the tree also holds bus directories (0000:64) and port services
+    # (0000:64:00.0:pcie210), which have no class and would otherwise read as "not ours"
+    for _rt_dev in $(find "$_rt_root" -maxdepth 4 -name '0000:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f].[0-7]' -printf '%f\n' 2>/dev/null | sort -u); do
+      _rt_c=$(cat "/sys/bus/pci/devices/$_rt_dev/class" 2>/dev/null)
+      [ -n "$_rt_c" ] || continue
+      case "$_rt_c" in 0x0604*|0x0600*) continue ;; esac          # bridges are part of the tunnel
+      [ "$(cat "/sys/bus/pci/devices/$_rt_dev/vendor" 2>/dev/null)" = "0x10de" ] ||
+        die "$_rt_dev (class $_rt_c) is behind $_rt_bridge and is not part of the eGPU; refusing re-enumeration" 2
+    done
+    printf 'removing %s to re-enumerate the eGPU tunnel\n' "$_rt_bridge"
+    echo 1 > "/sys/bus/pci/devices/$_rt_bridge/remove"
+    sleep 2
+    echo 1 > /sys/bus/pci/rescan
+    ;;
   rescan)
     [ "$#" -eq 0 ] || die "rescan takes no arguments"
     require_supported_driver_stack
