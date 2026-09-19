@@ -36,7 +36,12 @@ detect_nvidia_gpu_bdf() {
 }
 
 EGPU_PCI=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
-[ -n "$EGPU_PCI" ] || EGPU_PCI=0000:62:00.0
+# The fallback address is the development handheld's slot. Take it only when it
+# really holds an NVIDIA GPU — elsewhere that slot may be an unrelated device
+# and must not be mistaken for an eGPU.
+[ -n "$EGPU_PCI" ] ||
+  [ "$(cat /sys/bus/pci/devices/0000:62:00.0/vendor 2>/dev/null)" != "0x10de" ] ||
+  EGPU_PCI=0000:62:00.0
 KSCREEN=${KSCREEN_DOCTOR:-kscreen-doctor}
 
 strip_ansi() {

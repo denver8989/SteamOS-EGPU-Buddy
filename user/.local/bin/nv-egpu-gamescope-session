@@ -170,7 +170,11 @@ egpu_requested_by_env_file() {
 
 egpu_pci_present() {
   refresh_egpu_target
-  [ -e "/sys/bus/pci/devices/$EGPU_PCI" ]
+  [ -n "$EGPU_PCI" ] || return 1
+  # Vendor-checked: the fallback address is only correct on the development
+  # handheld. On any other machine that slot may hold an unrelated device
+  # (a USB-C display controller, a storage bridge) and must not read as an eGPU.
+  [ "$(cat "/sys/bus/pci/devices/$EGPU_PCI/vendor" 2>/dev/null)" = "0x10de" ]
 }
 
 egpu_native_ready() {

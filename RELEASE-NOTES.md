@@ -1,3 +1,28 @@
+0.7.25 — with no eGPU connected, this software now does nothing at all.
+
+**Update if you use any other external display: a USB-C monitor, a dock, or XR display glasses.**
+
+Several components fell back to the development handheld's PCI address (`0000:62:00.0`) when no NVIDIA GPU was
+detected, instead of concluding that there is no eGPU. On another machine that slot can hold something else entirely,
+and one component collapsed an empty address into a path that always exists — so an ordinary external display could be
+treated as an attached eGPU. The visible result was the software rearranging a display layout it has no business
+touching: the built-in panel forced back on as the primary screen while you were using glasses or a USB-C monitor, and
+Game Mode waiting on an eGPU that was never there.
+
+Fixed in the four components that run by themselves:
+
+- **The display failover watcher** now stays completely idle unless an NVIDIA GPU is on the bus or it was the one that
+  darkened the built-in panel. It was the component that pushed the panel back to primary, at 5-second intervals,
+  against whatever you had set up.
+- **The desktop display autostart** no-ops when there is no eGPU, rather than acting on a path that always exists.
+- **Game Mode** checks the vendor of the device it finds before believing it is an eGPU, so an unrelated device in that
+  slot no longer costs a 25-second wait at session start.
+- **The display profile helper** takes the fallback address only when that slot really holds an NVIDIA GPU.
+
+No hardware value is assumed anywhere in these paths any more: the eGPU is found by vendor and class, or it is absent.
+
+Found by a user running external display glasses on a Legion Go 2 with no eGPU attached.
+
 0.7.24 — critical: a detach could leave the machine unable to start any Vulkan game.
 
 **Update immediately if you have ever used Safe Detach or unplugged the eGPU.**

@@ -19,7 +19,6 @@ BACKLIGHT_LIB=${EGPU_BACKLIGHT_LIB:-$RUNTIME_DIR/../lib/egpu-backlight.sh}
 }
 . "$BACKLIGHT_LIB"
 PCI_DEVICES=${EGPU_PCI_DEVICES:-/sys/bus/pci/devices}
-DEFAULT_GPU=0000:62:00.0
 GPU_OVERRIDE=${EGPU_GPU_BDF:-${EGPU_PCI_BDF:-}}
 GPU=${GPU_OVERRIDE:-}
 EGPU=
@@ -42,16 +41,27 @@ refresh_gpu_target() {
   if [ -n "$GPU_OVERRIDE" ]; then
     GPU=$GPU_OVERRIDE
   else
+    # No hard-coded fallback BDF: on a machine with no NVIDIA eGPU this must
+    # resolve to nothing, so the watcher stays inert instead of acting on a
+    # device address borrowed from the development handheld.
     detected=$(detect_nvidia_gpu_bdf || true)
-    [ -z "$detected" ] || GPU=$detected
-    [ -n "$GPU" ] || GPU=$DEFAULT_GPU
+    GPU=$detected
   fi
-  EGPU=$PCI_DEVICES/$GPU
+  EGPU=${GPU:+$PCI_DEVICES/$GPU}
+}
+
+# Only this watcher's own eGPU session may move displays around. Without an
+# NVIDIA GPU on the bus and without a panel we darkened ourselves, another
+# display (USB-C monitor, XR glasses) owns the layout — do not touch it.
+egpu_engaged() {
+  refresh_gpu_target
+  [ -n "$EGPU" ] && return 0
+  [ -e "$(egpu_bl_state_file)" ]
 }
 
 egpu_alive() {
   refresh_gpu_target
-  [ -e "$EGPU" ] || return 1
+  [ -n "$EGPU" ] && [ -e "$EGPU" ] || return 1
   local w; w=$(cat "$EGPU/current_link_width" 2>/dev/null)
   case "$w" in 4|8|16) return 0 ;; *) return 1 ;; esac
 }
@@ -104,6 +114,10 @@ main() {
     # Do not compete with the deliberate Safe Detach panel/KWin handoff.
     if [ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/nv-egpu-buddy/detach-handoff-active" ]; then
       sleep 2
+      continue
+    fi
+    if ! egpu_engaged; then
+      sleep 5
       continue
     fi
     if ! kwin_ready; then
