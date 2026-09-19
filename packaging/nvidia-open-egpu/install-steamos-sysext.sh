@@ -123,11 +123,14 @@ rm -rf "$SX" "$SX.new"; mkdir -p "$SX.new/usr/lib/extension-release.d"
 # nvidia-open-egpu-dkms is OUR driver package: besides the modules it installs /usr/lib/modprobe.d/nvidia-open.conf
 # (NVreg_OpenRmEnableUnsupportedGpus=1) and the eGPU hotplug udev rule. Those never reached the system before, so SteamOS
 # ran the driver without the options every other distribution gets. Its /usr/src DKMS tree is excluded below (~1 GB).
-declare -A seen=(); queue=(nvidia-utils lib32-nvidia-utils nvidia-open-egpu-dkms); pkgs=()
+# ... and only ITS OWN files: walking its dependencies would drag dkms, gcc, make and friends into the image.
+declare -A seen=(); declare -A leaf=([nvidia-open-egpu-dkms]=1 [nvidia-open-egpu]=1)
+queue=(nvidia-utils lib32-nvidia-utils nvidia-open-egpu-dkms); pkgs=()
 while [ ${#queue[@]} -gt 0 ]; do p=${queue[0]}; queue=("${queue[@]:1}"); [ -z "${seen[$p]:-}" ] || continue; seen[$p]=1
   P -Qq "$p" >/dev/null 2>&1 || continue                       # not in the build root (e.g. lib32 left out)
   pacman -Qq "$p" >/dev/null 2>&1 && continue                  # the host already has it
   pkgs+=("$p")
+  [ -n "${leaf[$p]:-}" ] && continue   # take this package's files, not its build-time dependency tree
   for d in $(P -Qi "$p" 2>/dev/null | sed -n 's/^Depends On *: *//p' | tr ' ' '\n' | sed 's/[<>=].*//' | grep -v '^None$' || true); do
     r=$(P -Qq "$d" 2>/dev/null || P -Qqo "/usr/lib/$d" 2>/dev/null || true); [ -n "$r" ] && queue+=($r) || true
   done
