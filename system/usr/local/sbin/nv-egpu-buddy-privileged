@@ -436,18 +436,15 @@ case "$action" in
     ;;
   set-session-plasma)
     [ "$#" -eq 0 ] || die "set-session-plasma takes no arguments"
-    install -d -m 0755 /etc/plasmalogin.conf.d
-    printf '[Autologin]\nSession=plasma.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
+    /usr/local/sbin/egpu-dm-session pin plasma
     ;;
   set-session-gamescope)
     [ "$#" -eq 0 ] || die "set-session-gamescope takes no arguments"
-    install -d -m 0755 /etc/plasmalogin.conf.d
-    printf '[Autologin]\nSession=gamescope-session.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
+    /usr/local/sbin/egpu-dm-session pin gamescope
     ;;
   set-session-bigpicture)
     [ "$#" -eq 0 ] || die "set-session-bigpicture takes no arguments"
-    install -d -m 0755 /etc/plasmalogin.conf.d
-    printf '[Autologin]\nSession=egpu-bigpicture.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
+    /usr/local/sbin/egpu-dm-session pin bigpicture
     ;;
   panel-off|panel-on)
     # handheld panel while an eGPU display is active (egpu-panel does the DRM/backlight work; root only)

@@ -379,11 +379,7 @@ egpu_external_only(){
   # compositor's last frame. egpu-panel is a no-op when a compositor owns card1.
   /usr/local/sbin/egpu-panel off >/dev/null 2>&1 && log "EXTERNAL-ONLY: eDP-1 CRTC off (panel unowned after NVIDIA-only relogin)"
 }
-set_autologin_plasma(){
-  printf '[Autologin]\nRelogin=true\nSession=plasma.desktop\nUser=deck\n' > /etc/plasmalogin.conf 2>/dev/null || true
-  install -d -m 0755 /etc/plasmalogin.conf.d
-  printf '[Autologin]\nSession=plasma.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf 2>/dev/null || true
-}
+set_autologin_plasma(){ /usr/local/sbin/egpu-dm-session pin plasma >/dev/null 2>&1 || true; }
 # 2026-09-10: a monitor that is asleep / still training its link is NOT a reason to skip the
 # NVIDIA-only session. Wait up to 90s for any eGPU connector to report connected; if none does,
 # stage anyway (the monitor is connected even if asleep; the resume/DPMS path lights it later).

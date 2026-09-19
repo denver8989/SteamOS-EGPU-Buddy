@@ -100,8 +100,7 @@ else
     "__GLX_VENDOR_LIBRARY_NAME=mesa" >/dev/null 2>&1
   # 2026-09-14: the restart ends the logind session and plasmalogin re-logs in with the *boot* policy (Game Mode);
   # pin the relogin to the desktop so the eject UI finds KWin. egpu-conditional-session re-arms Game Mode at boot.
-  sed -i "s/^Session=.*/Session=plasma.desktop/" /etc/plasmalogin.conf 2>/dev/null
-  install -d -m 0755 /etc/plasmalogin.conf.d; printf '[Autologin]\nSession=plasma.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
+  /usr/local/sbin/egpu-dm-session pin plasma >/dev/null 2>&1 || true
   runuser -u deck -- env $RUNENV systemctl --user restart plasma-kwin_wayland.service >/dev/null 2>&1
     sleep 3; /usr/local/sbin/egpu-republish-display 2>/dev/null || true
   released=0

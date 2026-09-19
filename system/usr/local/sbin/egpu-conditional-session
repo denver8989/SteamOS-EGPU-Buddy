@@ -1,13 +1,16 @@
 #!/bin/bash
-# nv-egpu-buddy boot policy (2026-09-12): ALWAYS boot into Game Mode (gamescope-session), whether the
-# eGPU is attached or not. "Switch to Desktop" persists Session=plasma.desktop on CachyOS, so without
-# this a reboot from the desktop stays on the desktop. Opt-out: touch /etc/nv-egpu-buddy/boot-desktop
+# nv-egpu-buddy boot policy: ALWAYS boot into Game Mode, whether the eGPU is attached or not. "Switch to Desktop" persists
+# the desktop session on CachyOS, so without this a reboot from the desktop stays on the desktop.
+# Opt-out: touch /etc/nv-egpu-buddy/boot-desktop
+# On SteamOS the desktop/Game Mode switch is the system's own (steamosctl); there it is left alone unless the user opted in,
+# and pinning goes through egpu-dm-session, which knows each login manager's directory and session file names.
 set -u
-CONF=/etc/plasmalogin.conf
-sess=gamescope-session.desktop
-[ -e /etc/nv-egpu-buddy/boot-desktop ] && sess=plasma.desktop
-[ -f "$CONF" ] || exit 0
-if grep -q "^Session=$sess\$" "$CONF" && grep -qs "^Session=$sess\$" /etc/plasmalogin.conf.d/zz-steamos-autologin.conf; then logger -t egpu-cond-session "boot session already $sess"; exit 0; fi
-sed -i "s/^Session=.*/Session=$sess/" "$CONF"
-install -d -m 0755 /etc/plasmalogin.conf.d; printf '[Autologin]\nSession=%s\n' "$sess" > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
-logger -t egpu-cond-session "boot session -> $sess"
+want=gamescope
+[ -e /etc/nv-egpu-buddy/boot-desktop ] && want=plasma
+if command -v steamosctl >/dev/null 2>&1 && [ ! -e /etc/nv-egpu-buddy/boot-desktop ]; then
+  logger -t egpu-cond-session "SteamOS: boot session left to the system (steamosctl); no pin"
+  /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1
+  exit 0
+fi
+out=$(/usr/local/sbin/egpu-dm-session pin "$want" 2>&1) || { logger -t egpu-cond-session "could not pin $want: $out"; exit 0; }
+logger -t egpu-cond-session "boot session -> $out"
