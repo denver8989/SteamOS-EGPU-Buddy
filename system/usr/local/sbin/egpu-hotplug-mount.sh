@@ -239,11 +239,13 @@ pin_link_speed "$gpu"
 # must un-hide it before the session is restaged, or the login env script leaves KWin on both GPUs (seen 2026-09-18)
 /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1 || true
 log "GPU $gpu healthy (cfg=$cfg) — load driver + display stack"
-"$PRIV" load-nvidia >/dev/null 2>&1 || true
-[ -L "$GDEV/driver" ] || "$PRIV" bind-nvidia >/dev/null 2>&1 || true
+# a refusal or a failed load must be visible in the log (it used to be discarded, which hid a refused display stack)
+_pv(){ local o; o=$("$PRIV" "$@" 2>&1) || log "helper $*: ${o:-failed}"; }
+_pv load-nvidia
+[ -L "$GDEV/driver" ] || _pv bind-nvidia
 _aud="${gpu%.*}.1"; [ -e "/sys/bus/pci/devices/$_aud" ] && [ ! -L "/sys/bus/pci/devices/$_aud/driver" ] && echo "$_aud" > /sys/bus/pci/drivers/snd_hda_intel/bind 2>/dev/null   # re-bind audio fn after an unbind+FLR
-"$PRIV" load-modeset >/dev/null 2>&1 || true
-"$PRIV" load-drm >/dev/null 2>&1 || true
+_pv load-modeset
+_pv load-drm
 for _ in $(seq 1 15); do compgen -G "$GDEV/drm/card*" >/dev/null && break; sleep 1; done
 egpu_card=$(ls -d "$GDEV"/drm/card* 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null)
 log "mounted $gpu + display stack ready (DRM card: $egpu_card)"

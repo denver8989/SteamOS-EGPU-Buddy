@@ -70,13 +70,22 @@ require_clean_subtree() {
   done
 }
 
-require_removal_proof() {
-  grep -qx 'yes' "$REMOVAL_PROOF" 2>/dev/null ||
-    die "surprise-removal proof is absent; refusing display-driver load" 2
-}
-
+# "Surprise removal is survivable" = the installed modules ARE this project's patched build. It is read from the modules
+# themselves (strings only the patches add; the stock 610.57.04 package has neither), not from a flag file: until 0.7.22 the
+# proof was /etc/nv-egpu-buddy/surprise-removal-safe, a file that only ever existed on the development machine, so on every
+# other machine the display modules were refused and the eGPU never got a display (found on a real SteamOS device).
+# A flag file would also stay "yes" after a distro update put the stock driver back. "no" in the file still forces a refusal.
+# ponytail: nvidia-drm (patches 165/166) adds no string of its own; it is built in the same package as the two checked here.
+_mod_has() { local f c; f=$(modinfo -n "$1" 2>/dev/null) || return 1
+  case "$f" in *.zst) c="zstd -dcq" ;; *.xz) c="xz -dcq" ;; *.gz) c="gzip -dcq" ;; *) c=cat ;; esac
+  # count, do not -q: an early exit would SIGPIPE the decompressor, and under pipefail that reads as "not found"
+  [ "$($c "$f" 2>/dev/null | grep -acF -- "$2" || true)" -gt 0 ]; }
 removal_proven() {
-  grep -qx 'yes' "$REMOVAL_PROOF" 2>/dev/null
+  grep -qx 'no' "$REMOVAL_PROOF" 2>/dev/null && return 1
+  _mod_has nvidia 'External GPU disconnected.' && _mod_has nvidia_modeset 'Cleaning up stale device from previous surprise removal'
+}
+require_removal_proof() {
+  removal_proven || die "the installed NVIDIA modules are not the patched hot-unplug build; refusing the display-driver load" 2
 }
 
 require_supported_driver_stack() {
