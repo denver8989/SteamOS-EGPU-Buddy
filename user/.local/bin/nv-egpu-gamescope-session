@@ -440,7 +440,13 @@ stock_session="$STOCK_GAMESCOPE_SESSION"
 
 # which session type is running: read by egpu-surprise-recover (gamescope itself dies with the card, so it cannot be asked)
 printf gamemode > "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-session-type" 2>/dev/null || true
-wait_for_egpu_native_ready || refresh_egpu_state
+# A Safe Detach restarts this session ON PURPOSE for the handheld screen, with the NVIDIA userspace already hidden: the eGPU
+# can never become "ready" then, and the result is ignored below anyway. Waiting cost ~30 s of dark screen per detach.
+if [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-detach-mode" ] || [ -e /run/nvegpu/gm-detach-pending ]; then
+  log "Safe Detach in progress: handheld routing without waiting for the eGPU"; refresh_egpu_state
+else
+  wait_for_egpu_native_ready || refresh_egpu_state
+fi
 
 # NV-EGPU-Buddy safe detach (Game Mode): while the marker exists the relaunched session must NOT take the eGPU
 # even though it is still on the bus (the detach helper removes it once this session is up on the panel).
