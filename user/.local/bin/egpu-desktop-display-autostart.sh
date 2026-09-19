@@ -66,7 +66,13 @@ case "$cfg0" in ffffffff|"") log "GPU config dead/unreadable ($cfg0) — refusin
 # over HDMI-A-1 (the TV, which can report 'connected' while powered off). Replaces the
 # old hardcoded TV=HDMI-A-1 that wrongly made an OFF TV primary over the ultrawide.
 # Falls back to HDMI only when no DP is connected. Mirrors egpu-display-profile.sh.
-NVCARD=$(basename "$(ls -d "$GDEV"/drm/card* 2>/dev/null | head -1)" 2>/dev/null)
+# a stale DRM card (driver reload / remove-rescan leftover) has no connectors: take one that has
+NVCARD=""
+for _cd in "$GDEV"/drm/card[0-9]*; do
+  [ -e "$_cd" ] || continue
+  [ -n "$NVCARD" ] || NVCARD=${_cd##*/}
+  compgen -G "/sys/class/drm/${_cd##*/}-*" >/dev/null 2>&1 && { NVCARD=${_cd##*/}; break; }
+done
 # Enable EVERY usable eGPU external (BOTH DP and HDMI), DP first = primary. "Usable" =
 # status connected AND the connector exposes EDID modes (sysfs `modes` non-empty). That EDID
 # gate is the "TV is on its HDMI input" check the user asked for: a TV that's powered but NOT

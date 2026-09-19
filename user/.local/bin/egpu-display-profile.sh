@@ -290,12 +290,18 @@ sysfs_output_node() {
 
 find_card_node() {
   local pci=$1 card
-  for card in /sys/bus/pci/devices/"$pci"/drm/card*; do
+  local fallback=
+  # a stale DRM card (driver reload / remove-rescan leftover) has no connectors: take one that has
+  for card in /sys/bus/pci/devices/"$pci"/drm/card[0-9]*; do
     [ -e "$card" ] || continue
-    printf '/dev/dri/%s\n' "${card##*/}"
-    return 0
+    [ -n "$fallback" ] || fallback=${card##*/}
+    if compgen -G "/sys/class/drm/${card##*/}-*" >/dev/null 2>&1; then
+      printf '/dev/dri/%s\n' "${card##*/}"
+      return 0
+    fi
   done
-  return 1
+  [ -n "$fallback" ] || return 1
+  printf '/dev/dri/%s\n' "$fallback"
 }
 
 unique_existing_files() {

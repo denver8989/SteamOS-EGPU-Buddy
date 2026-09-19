@@ -1,3 +1,20 @@
+0.7.33 — a stale DRM card no longer black-screens Game Mode.
+
+Found live on a Legion Go 1 that booted to a black screen with the eGPU attached. Game Mode was not merely failing to
+use the eGPU — the session was **crash-looping**, restarting every four seconds, which is why nothing was ever drawn.
+
+A GPU can expose more than one DRM card. A driver reload, or a remove-and-rescan cycle, leaves a stale card behind that
+has **no connectors on it at all**. On the failing machine `card1` and `card2` both belonged to `0000:65:00.0`, and only
+`card2` carried the monitor. Everything in this project picked the *first* card under the GPU, so gamescope was aimed at
+the dead one, exited immediately, took the whole session down with it, and systemd started the cycle again.
+
+The rule is now: **take the card that has connectors**, in all five places that resolve one (the Game Mode session, the
+display profile helper, the desktop autostart, the attach hook and the mount helper). A card with no outputs is never
+chosen while one with outputs exists.
+
+The visible symptom of this bug was every session service failing with "Failed to load environment files" — the stock
+session writes that file only once gamescope reports its displays, and gamescope never got that far.
+
 0.7.32 — booting with the eGPU attached now actually routes Game Mode to it.
 
 Found on a real Legion Go 1 with an RTX 5060 Ti: the machine booted with the eGPU plugged in and the monitor switched

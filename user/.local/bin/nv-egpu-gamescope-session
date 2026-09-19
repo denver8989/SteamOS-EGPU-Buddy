@@ -58,13 +58,23 @@ log() {
 }
 
 card_for_pci() {
-  local pci=$1 card
+  local pci=$1 card fallback=
+  # A GPU can carry MORE THAN ONE DRM card: a stale card survives a driver reload or a
+  # remove/rescan cycle, and it has NO connectors. Taking the first one aimed gamescope at
+  # the dead card, which exited instantly and crash-looped the whole session into a black
+  # screen (Legion Go 1, card1 and card2 both on 0000:65:00.0, only card2 had outputs).
+  # So: pick the card that has connectors.
   for card in /sys/bus/pci/devices/"$pci"/drm/card*; do
     [ -e "$card" ] || continue
-    printf '/dev/dri/%s\n' "${card##*/}"
-    return 0
+    case "${card##*/}" in card[0-9]*) ;; *) continue ;; esac
+    [ -n "$fallback" ] || fallback=${card##*/}
+    if compgen -G "/sys/class/drm/${card##*/}-*" >/dev/null 2>&1; then
+      printf '/dev/dri/%s\n' "${card##*/}"
+      return 0
+    fi
   done
-  return 1
+  [ -n "$fallback" ] || return 1
+  printf '/dev/dri/%s\n' "$fallback"
 }
 
 connected_egpu_outputs() {
