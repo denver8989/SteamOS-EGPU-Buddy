@@ -1,3 +1,27 @@
+0.7.46 — the real cause of the verbose boot AND the boot menu: one missing block.
+
+Regenerating the GRUB configuration on SteamOS drops the **steamenv header block** that SteamOS's own bootloader depends
+on. Comparing a regenerated configuration against the untouched one on the other slot showed exactly what was missing:
+
+    ## start header steamenv sub block
+    insmod steamenv
+    steamenv_quiet="loglevel=3 splash quiet plymouth.ignore-serial-consoles fbcon=vc:4-6"
+    steamenv_noisy="loglevel=5 sysrq_always_enabled splash=verbose fbcon=nodefer"
+    steamenv_verbosity=""
+    timeout=0
+    timeout_style=menu
+    steamenv_init
+
+SteamOS's bootloader **strips the verbosity parameters out of the kernel line** and puts back either `$steamenv_quiet`
+or `$steamenv_noisy`, chosen by `$steamenv_verbosity`. Without the header those variables do not exist: it strips them
+and adds nothing, so every boot is a wall of console text — no matter where the parameters are written into the
+configuration. That is why putting them before, after, and in both halves of the kernel line all failed.
+
+**The same block sets `timeout=0`.** Its absence is also what left a handheld sitting at a boot menu, needing a keyboard.
+One missing block, both faults, three failed attempts at the wrong explanation.
+
+The header is now restored after any regeneration that comes out without it, checked before the change is kept.
+
 0.7.45 — the tray icon no longer crashes in a loop in Game Mode.
 
 A system tray needs a desktop session to live in. Started in Game Mode there is no display it can use: Qt cannot load a

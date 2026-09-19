@@ -82,14 +82,31 @@ elif [ -f /etc/default/grub ] && command -v steamos-readonly >/dev/null 2>&1; th
         sed -i '1i set timeout_style=hidden' "$cfg"
         echo "the regenerated config had no timeout: pinned it to boot straight through"
       fi
-      # ...and never leave a config that boots into a wall of console text. SteamOS's steamenv_boot
-      # drops the boot-verbosity parameters where grub-mkconfig puts them (in GRUB_CMDLINE_LINUX_DEFAULT),
-      # so they must also appear in the part of the line it leaves alone. Checking instead of trusting:
-      # this had been "fixed" twice and each following install quietly put the verbose boot back.
-      if ! grep -q 'steamenv_boot.*quiet.*nvidia-drm.modeset' "$cfg" 2>/dev/null &&
-           grep -q 'steamenv_boot' "$cfg" 2>/dev/null; then
-        sed -i -E "s|(steamenv_boot[[:space:]]+linux[[:space:]]+[^[:space:]]+)|\\1 $QUIET|" "$cfg"
-        echo "the regenerated config would have booted verbosely: restored $QUIET"
+      # ...and restore the steamenv header block if grub-mkconfig did not produce one. SteamOS's
+      # bootloader strips the verbosity parameters out of the kernel line and puts back either
+      # $steamenv_quiet or $steamenv_noisy, chosen by $steamenv_verbosity — all defined in that
+      # header. A regenerated config without it therefore strips them and adds nothing, and every
+      # boot becomes a wall of console text. The SAME block sets timeout=0, so its absence is also
+      # what left a handheld sitting at a boot menu with no keyboard. One missing block, both faults.
+      if ! grep -q 'steamenv_init' "$cfg" 2>/dev/null && grep -q '^menuentry ' "$cfg" 2>/dev/null; then
+        awk 'BEGIN{done=0}
+             /^menuentry / && !done {
+               print "## start header steamenv sub block (restored by SteamOS EGPU Buddy)"
+               print "insmod steamenv"
+               print "steamenv_loader_mode=auto"
+               print "steamenv_kernel_mode=keep"
+               print "steamenv_quiet=\"loglevel=3 splash quiet plymouth.ignore-serial-consoles fbcon=vc:4-6\""
+               print "steamenv_noisy=\"loglevel=5 sysrq_always_enabled splash=verbose fbcon=nodefer\""
+               print "steamenv_verbosity=\"\""
+               print "timeout=0"
+               print "timeout_style=menu"
+               print "steamenv_init"
+               print "## end steamenv header sub block"
+               print ""
+               done=1
+             }
+             {print}' "$cfg" > "$cfg.egpu-new" && mv "$cfg.egpu-new" "$cfg"
+        echo "the regenerated config had no steamenv header: restored it (quiet boot + no menu)"
       fi
     else
       echo "could not regenerate the GRUB config; kernel parameters are written but not active yet"
