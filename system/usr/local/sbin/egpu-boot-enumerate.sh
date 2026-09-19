@@ -117,7 +117,7 @@ if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gp
     fi
     log "BAR1 resize to size code $_c refused: ${_out:-no reason given}"
   done
-  [ "$_rc" = 0 ] || log "BAR1 stays at $(bar1_mib "$gpu")MiB — Game Mode will use the built-in screen (its readiness gate needs the resized BAR)"
+  [ "$_rc" = 0 ] || log "BAR1 stays at $(bar1_mib "$gpu")MiB — the eGPU is used anyway, at lower bandwidth over Thunderbolt"
 fi
 
 log "eGPU at $gpu — load driver (FLR done, BAR1 $(bar1_mib "$gpu")MiB)"

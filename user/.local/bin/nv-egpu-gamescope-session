@@ -662,6 +662,17 @@ fi
 
 # diagnostics: NV_EGPU_DIAG=1 in /run/nvegpu/diag turns on Proton + Vulkan loader logging for every game of this session
 if [ -e /run/nvegpu/diag ]; then export PROTON_LOG=1 VK_LOADER_DEBUG=error,warn WINEDEBUG=-all,+vulkan; fi   # NV_EGPU_DIAG_PROTON_LOG
+# Boot straight onto the eGPU left the handheld panel LIT: turning it off only ever happened on
+# the hot-plug switch path (egpu-gamemode-switch), never when the session started on the eGPU in
+# the first place. Same rule in both: if the picture is on an eGPU output, the panel goes dark.
+# egpu-panel refuses to darken it when no eGPU is mounted, so this cannot leave a screenless machine.
+(
+  sleep 8
+  case "${OUTPUT_CONNECTOR:-}" in ""|"*"|eDP-1|eDP-1,*|"*",*) exit 0 ;; esac
+  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged panel-off >/dev/null 2>&1 &&
+    log "handheld panel off (Game Mode is on ${OUTPUT_CONNECTOR%%,*})"
+) &
+
 # panel watchdog: after a relogin gamescope can start with an inactive libseat seat (no modeset, handheld stays dark).
 # If the panel is still disabled 12s in and no eGPU is on the bus (on the eGPU the panel is meant to be off), bounce the VT once.
 (

@@ -1,3 +1,20 @@
+0.7.37 — quiet boot restored, and the handheld panel goes dark when the session starts on the eGPU.
+
+**Every boot had become a wall of console text.** This project appends its kernel parameters after the distribution's,
+and SteamOS's `steamenv_boot` rewrites the tail of that line — with anything appended behind them, it dropped
+`loglevel=3 quiet splash plymouth.ignore-serial-consoles` entirely. The stock configuration keeps those four last, so
+ours now go **before** them instead of after. Verified by comparing against the untouched configuration on the other
+SteamOS slot, which is where the correct layout came from.
+
+**The handheld panel stayed lit when the machine booted straight onto the eGPU.** Turning it off only ever happened on
+the hot-plug switch path, never when the session started on the eGPU in the first place — so a boot with the eGPU
+attached left the panel glowing behind a picture on the monitor. The session now applies the same rule: if the picture
+is on an eGPU output, the panel goes dark. It cannot strand you, because the panel is only ever darkened when an eGPU is
+actually mounted.
+
+Also: the boot-time BAR1 message no longer claims Game Mode will fall back to the built-in screen. It says what is
+actually true — the eGPU is used anyway, at lower bandwidth over Thunderbolt.
+
 0.7.36 — the flood lockout is gone.
 
 When the platform reset itself while the eGPU was connected (an AMD "data fabric sync flood"), this software set a
