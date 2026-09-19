@@ -171,14 +171,21 @@ if want gamescope; then
   if [ "$AS_ROOT" = 0 ] && command -v meson >/dev/null && command -v ninja >/dev/null && command -v cc >/dev/null && command -v cmake >/dev/null; then
     say "== building GBM-scanout gamescope from source (a few minutes)"
     HOME="$USER_HOME" "$ROOT/packaging/gamescope-gbm/build.sh" || echo "build failed; the session shim falls back to /usr/bin/gamescope"
-  elif [ -d "$PRE/usr/bin" ]; then
-    say "== no build toolchain; installing the prebuilt GBM-scanout gamescope (falls back to the distro gamescope if it cannot run here)"
-    # atomic swap: a running gamescope keeps the old binary busy (ETXTBSY), so never copy over it in place
-    G="$USER_HOME/.local/gamescope-gbm"; umkdir "$G"; rm -rf "$G/usr.new" "$G/usr.old"; cp -a "$PRE/usr" "$G/usr.new"
-    [ -d "$G/usr" ] && mv "$G/usr" "$G/usr.old"; mv "$G/usr.new" "$G/usr"; rm -rf "$G/usr.old"; uown "$G"
-    ldd "$USER_HOME/.local/gamescope-gbm/usr/bin/gamescope" | grep -q 'not found' && echo "warning: prebuilt gamescope has missing libraries on this distro; the shim will fall back" || true
   else
-    echo "no toolchain and no prebuilt gamescope; skipping (UI corruption stays on NVIDIA)"
+    # By DETECTION, not by distro name: take the first shipped build that actually RUNS here (every library resolves).
+    # gamescope-gbm = built on CachyOS (needs a recent libstdc++); gamescope-gbm-steamos = built in a SteamOS 3.8 build root.
+    # A system neither fits gets a build on the device after the driver step (SteamOS build root), else the distro gamescope.
+    PICK=""; for c in "$PRE" "$ROOT"/prebuilt/gamescope-gbm*; do [ -x "$c/usr/bin/gamescope" ] || continue
+      ldd "$c/usr/bin/gamescope" 2>/dev/null | grep -q 'not found' || { PICK=$c; break; }; done
+    if [ -n "$PICK" ]; then
+      say "== installing the prebuilt GBM-scanout gamescope that runs on this system ($(basename "$PICK"))"
+      # atomic swap: a running gamescope keeps the old binary busy (ETXTBSY), so never copy over it in place
+      G="$USER_HOME/.local/gamescope-gbm"; umkdir "$G"; rm -rf "$G/usr.new" "$G/usr.old"; cp -a "$PICK/usr" "$G/usr.new"
+      [ -d "$G/usr" ] && mv "$G/usr" "$G/usr.old"; mv "$G/usr.new" "$G/usr"; rm -rf "$G/usr.old"; uown "$G"
+    else
+      say "== no shipped gamescope build runs on this system; it is built on the device after the driver step"
+      NEED_GAMESCOPE_BUILD=1
+    fi
   fi
 fi
 
@@ -236,6 +243,14 @@ if want driver; then
   elif command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
 else
   say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
+fi
+
+# ---- gamescope built on the device (only when no shipped build runs here; needs the SteamOS build root from the driver step)
+if [ "${NEED_GAMESCOPE_BUILD:-0}" = 1 ]; then
+  if [ -x /home/.egpu-buddy/buildroot/usr/bin/makepkg ]; then
+    say "== building the GBM-scanout gamescope on this device (10-15 minutes, one time)"
+    sudo bash "$ROOT/packaging/gamescope-gbm/build-steamos.sh" "$USER_NAME" || echo "warning: gamescope build failed; Game Mode on the eGPU will use the distro gamescope (picture corruption on NVIDIA above ~2560 px wide)"
+  else echo "warning: no gamescope build for this system and no build environment; the distro gamescope is used (picture corruption on NVIDIA above ~2560 px wide)"; fi
 fi
 
 # ---- persistent payload + caches (what the self-heal service repairs from after an OS update) --------------
