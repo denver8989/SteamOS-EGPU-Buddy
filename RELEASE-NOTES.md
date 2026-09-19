@@ -1,3 +1,26 @@
+0.7.28 — the "not an eGPU" rule is vendor-neutral, and uninstall really does remove everything.
+
+**The safety rule no longer hard-codes NVIDIA.** 0.7.27 refused to act on anything that was not an NVIDIA GPU, which
+would have blocked AMD and Intel eGPUs from ever working. That was a sledgehammer. The rule is now the same one
+`egpu-detect` has always used, and it is about being an eGPU, not about being NVIDIA: **a display-class PCI device that
+does not drive the built-in panel.** Vendor-specific checks stay where they belong — in the driver actions that really
+are NVIDIA-only.
+
+What it refuses, checked on a live machine: the built-in GPU ("is the built-in GPU, not an eGPU") and a non-GPU device
+such as the NVMe controller ("is not a GPU (PCI class 0x010802)"). Neither refusal mentions a vendor. An empty address
+is still fine — that is an eGPU that has not enumerated yet. The same vendor-neutral test now decides which displays
+belong to the eGPU, so a USB-C monitor or XR glasses on the built-in GPU can never be claimed by the eGPU path.
+
+**Uninstall was leaving things behind.** It removed the installed files but not what this project writes at runtime, so
+a reinstall was never really a fresh install. Now also removed: `/etc/nv-egpu-buddy`, `/var/lib/nvegpu` (lockout and
+learned-device state), the installed GBM gamescope in `~/.local/gamescope-gbm`, `~/.local/lib/nv-egpu-buddy`, the
+gamescope output routing file in `~/.config/environment.d`, and the project's logs.
+
+**New: `uninstall.sh --verify`** lists anything still on the system and exits non-zero if there is any, so a clean
+uninstall can be proven before reinstalling from scratch. When the uninstall came from the Decky plugin it reports the
+plugin and its installed copy as deliberately kept — the plugin cannot delete itself mid-run, and it is what you
+reinstall from.
+
 0.7.27 — one rule, enforced at the root: hardware that is not an eGPU is never touched.
 
 Every privileged action now refuses outright if the device it was pointed at is present and is not an NVIDIA GPU. That

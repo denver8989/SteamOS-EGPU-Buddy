@@ -12,6 +12,38 @@ restore_or_remove(){ # $1 dest ; run in the right privilege context
   local d=$1 b; b=$(ls -t "$d".bak-egpu-buddy-* 2>/dev/null | head -1)
   if [ -n "$b" ]; then mv -f "$b" "$d"; echo "restored $d"; else rm -f "$d"; echo "removed  $d"; fi
 }
+runtime_leftovers(){
+  printf '%s\n' \
+    /etc/nv-egpu-buddy \
+    /var/lib/nvegpu \
+    "$USER_HOME/.local/gamescope-gbm" \
+    "$USER_HOME/.local/lib/nv-egpu-buddy" \
+    "$USER_HOME/.config/environment.d/10-egpu-gamescope-output.conf"
+}
+
+# --verify: list anything this project left behind. Used to prove a clean uninstall
+# before a from-scratch reinstall. Prints nothing and exits 0 when the machine is clean.
+if [ "${1:-}" = "--verify" ]; then
+  left=0
+  for f in $(cd "$ROOT" && find system user -type f); do
+    d=$(map_dest "$f"); [ -e "$d" ] && { echo "LEFT  $d"; left=1; }
+  done
+  for d in $(runtime_leftovers) /etc/sudoers.d/zz-steamos-egpu-buddy /etc/sudoers.d/steamos-egpu-buddy \
+           /etc/extensions/egpu-nvidia.raw /etc/extensions/egpu-nvidia /home/.egpu-buddy \
+           /etc/plasmalogin.conf.d/zz-egpu-buddy-session.conf /etc/sddm.conf.d/zz-egpu-buddy-session.conf; do
+    [ -e "$d" ] && { echo "LEFT  $d"; left=1; }
+  done
+  grep -q '^sysext /usr ' /proc/mounts 2>/dev/null && { echo "LEFT  driver extension still merged into /usr"; left=1; }
+  # The plugin and the installed copy it runs from are kept ON PURPOSE when the uninstall
+  # came from the plugin (it cannot delete itself mid-run, and you need it to reinstall).
+  for d in "$USER_HOME/homebrew/plugins/EGPU-Buddy" "$USER_HOME/.local/share/steamos-egpu-buddy"; do
+    [ -e "$d" ] || continue
+    if [ "${EGPU_KEEP_PLUGIN:-0}" = 1 ]; then echo "kept  $d (plugin uninstall keeps this so it can reinstall)"
+    else echo "LEFT  $d"; left=1; fi
+  done
+  [ "$left" = 0 ] && echo "clean: nothing from this project is left on the system"
+  exit $left
+fi
 # SteamOS: a merged driver extension makes /usr (with /usr/local) read-only; it goes away below anyway, so unmerge first
 if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/mounts 2>/dev/null; then
   [ -d /sys/module/nvidia ] && { echo "The NVIDIA driver is loaded (eGPU in use). Safe Detach, unplug the eGPU, then uninstall again. Nothing was changed."; exit 21; }
@@ -35,5 +67,10 @@ if [ -f /etc/default/grub.d/egpu-buddy.cfg ]; then sudo rm -f /etc/default/grub.
   cfg=$(ls /efi/EFI/steamos/grub.cfg /boot/efi/EFI/steamos/grub.cfg /boot/grub/grub.cfg 2>/dev/null | head -1)
   [ -n "$cfg" ] && sudo grub-mkconfig -o "$cfg" >/dev/null 2>&1 && echo "kernel parameters removed from the boot configuration ($cfg)"; fi
 sudo rm -f /etc/nv-egpu-buddy/version
+# Everything else this project creates at RUNTIME rather than at install time. Without
+# these a reinstall is not a fresh install: it inherits old state, an old gamescope and
+# an old routing file. Listed in one place so --verify can check the same set.
+runtime_leftovers | while read -r d; do sudo rm -rf "$d"; done
+sudo rm -f /var/log/egpu-*.log /run/nvegpu/* 2>/dev/null
 userctl daemon-reload
 echo "done. The stock gamescope-session / plasmalogin configuration is back in effect after a reboot."

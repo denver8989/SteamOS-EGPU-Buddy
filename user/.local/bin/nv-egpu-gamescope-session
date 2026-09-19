@@ -18,7 +18,23 @@ detect_nvidia_gpu_bdf() {
 # really holds an NVIDIA GPU: every "is this connector the eGPU's?" test compares
 # against this address, so a wrong value would attribute someone else's external
 # display (a USB-C monitor, XR glasses) to an eGPU that is not there.
-nvidia_at_bdf() { [ "$(cat "/sys/bus/pci/devices/$1/vendor" 2>/dev/null)" = "0x10de" ]; }
+# Vendor-neutral eGPU test (the definition egpu-detect uses): a display-class PCI
+# device that does not drive the built-in panel. NOT an "is it NVIDIA" test — an
+# AMD or Intel eGPU must still pass. What it excludes is everything that is not a
+# GPU at all, and the built-in GPU, whose connectors carry USB-C monitors and XR
+# glasses and must never be handed to the eGPU path.
+_is_display_class() { case "$(cat "/sys/bus/pci/devices/${1:-none}/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) return 0 ;; esac; return 1; }
+_internal_gpu_bdf() { local c dev
+  for c in /sys/class/drm/card*-eDP-*; do
+    [ -e "$c" ] || continue
+    dev=$(readlink -f "${c%-eDP-*}/device" 2>/dev/null) && { basename "$dev"; return 0; }
+  done; return 1; }
+is_egpu_bdf() {
+  [ -n "${1:-}" ] || return 1
+  _is_display_class "$1" || return 1
+  [ "$1" != "$(_internal_gpu_bdf || true)" ]
+}
+nvidia_at_bdf() { [ "$(cat "/sys/bus/pci/devices/$1/vendor" 2>/dev/null)" = "0x10de" ]; }   # only for the NVIDIA-specific fallback address below
 FALLBACK_GPU=${EGPU_FALLBACK_BDF:-0000:62:00.0}
 EGPU_PCI=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
 if [ -z "$EGPU_PCI" ] && nvidia_at_bdf "$FALLBACK_GPU"; then EGPU_PCI=$FALLBACK_GPU; fi
@@ -53,11 +69,11 @@ card_for_pci() {
 
 connected_egpu_outputs() {
   local node base output device
-  # A display belongs to an eGPU only if the card driving it is an NVIDIA GPU.
+  # A display belongs to an eGPU only if the card driving it really is an eGPU.
   # Checked here, not just where the address is resolved: a wrong address must
   # never be able to hand an ordinary external display (USB-C monitor, XR
   # glasses, dock) to the eGPU path.
-  nvidia_at_bdf "$EGPU_PCI" || return 0
+  is_egpu_bdf "$EGPU_PCI" || return 0
   for node in /sys/class/drm/card*-*; do
     [ -e "$node/status" ] || continue
     [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue

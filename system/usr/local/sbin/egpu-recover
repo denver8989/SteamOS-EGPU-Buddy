@@ -19,15 +19,25 @@ say(){ printf '  %s\n' "$*"; }
 # THE RULE: never operate on hardware that is not an eGPU. Find the GPU by vendor
 # and class; the configured address is only a fallback for a card that has not
 # enumerated yet, and is refused outright if something else is sitting there.
-detect_nvidia_gpu_bdf(){ local d
-  for d in /sys/bus/pci/devices/*; do
-    [ "$(cat "$d/vendor" 2>/dev/null)" = "0x10de" ] || continue
-    case "$(cat "$d/class" 2>/dev/null)" in 0x0300*|0x0302*) basename "$d"; return 0 ;; esac
+# Vendor-neutral, the same definition egpu-detect uses: the eGPU is a display-class
+# PCI device that does not drive the built-in panel.
+_is_display_class(){ case "$(cat "$1/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) return 0 ;; esac; return 1; }
+_internal_gpu_bdf(){ local c d
+  for c in /sys/class/drm/card*-eDP-*; do [ -e "$c" ] || continue
+    d=$(readlink -f "${c%-eDP-*}/device" 2>/dev/null) && { basename "$d"; return 0; }
   done; return 1; }
-GPU=${EGPU_GPU_BDF:-$(detect_nvidia_gpu_bdf || true)}
+detect_egpu_bdf(){ local d igpu; igpu=$(_internal_gpu_bdf || true)
+  for d in /sys/bus/pci/devices/*; do
+    _is_display_class "$d" || continue
+    [ "$(basename "$d")" != "$igpu" ] || continue
+    basename "$d"; return 0
+  done; return 1; }
+GPU=${EGPU_GPU_BDF:-$(detect_egpu_bdf || true)}
 GPU=${GPU:-0000:62:00.0}
-_v=$(cat "/sys/bus/pci/devices/$GPU/vendor" 2>/dev/null || true)
-[ -z "$_v" ] || [ "$_v" = "0x10de" ] || { echo "$GPU is not an NVIDIA GPU (vendor $_v) — refusing to touch it"; exit 2; }
+if [ -e "/sys/bus/pci/devices/$GPU" ]; then
+  _is_display_class "/sys/bus/pci/devices/$GPU" || { echo "$GPU is not a GPU — refusing to touch it"; exit 2; }
+  [ "$GPU" != "$(_internal_gpu_bdf || true)" ] || { echo "$GPU is the built-in GPU — refusing to touch it"; exit 2; }
+fi
 # The bridge to reset is the GPU's own parent when the card is on the bus.
 if [ -e "/sys/bus/pci/devices/$GPU" ]; then
   BRIDGE=$(basename "$(dirname "$(readlink -f "/sys/bus/pci/devices/$GPU")")")
@@ -37,11 +47,12 @@ fi
 # A Secondary Bus Reset resets EVERYTHING behind the bridge. Only ever do that to a
 # bridge whose children are the eGPU (or nothing yet) — never one holding a dock,
 # a drive or someone's display controller.
-bridge_is_egpu_only(){ local c v
+bridge_is_egpu_only(){ local c
   for c in "/sys/bus/pci/devices/$BRIDGE"/0000:*; do
-    [ -e "$c/vendor" ] || continue
-    v=$(cat "$c/vendor" 2>/dev/null)
-    [ "$v" = "0x10de" ] || [ "$v" = "0x1002" ] || return 1   # 0x1002 = the PCIe switch/bridge chips in the enclosure
+    [ -e "$c/class" ] || continue
+    # the GPU itself, its own audio/other functions, and the enclosure's bridges are ours
+    case "$(cat "$c/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*|0x0403*|0x0604*) continue ;; esac
+    [ "$(basename "$c")" = "${GPU%.*}.${c##*.}" ] || return 1
   done; return 0; }
 
 say "[1/6] unloading nvidia stack (ignore-install aware)…"

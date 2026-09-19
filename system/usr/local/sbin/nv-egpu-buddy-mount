@@ -114,10 +114,14 @@ detect_empty_sibling_ports() {
 connected_egpu_connectors() {
   local node base output device
   refresh_gpu_target
-  # A display belongs to an eGPU only if the card driving it is an NVIDIA GPU.
-  # Enforced here as well as at resolution time, so a wrong address can never
-  # hand an ordinary external display (USB-C monitor, XR glasses) to the eGPU.
-  [ "$(cat "$GDEV/vendor" 2>/dev/null)" = "0x10de" ] || return 0
+  # A display belongs to an eGPU only if the card driving it really is an eGPU:
+  # display-class, and not the built-in GPU whose connectors carry USB-C monitors
+  # and XR glasses. Vendor-neutral on purpose — see nv-egpu-buddy-privileged.
+  case "$(cat "$GDEV/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) ;; *) return 0 ;; esac
+  for _igc in /sys/class/drm/card*-eDP-*; do
+    [ -e "$_igc" ] || continue
+    [ "$(basename "$(readlink -f "${_igc%-eDP-*}/device" 2>/dev/null)")" != "$GPU" ] || return 0
+  done
   for node in /sys/class/drm/card*-*; do
     [ -e "$node/status" ] || continue
     [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue

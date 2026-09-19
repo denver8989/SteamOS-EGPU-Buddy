@@ -35,7 +35,23 @@ detect_nvidia_gpu_bdf() {
   done | sort -V | head -n 1
 }
 
-nvidia_at_bdf() { [ "$(cat "/sys/bus/pci/devices/${1:-}/vendor" 2>/dev/null)" = "0x10de" ]; }
+# Vendor-neutral eGPU test (the definition egpu-detect uses): a display-class PCI
+# device that does not drive the built-in panel. NOT an "is it NVIDIA" test — an
+# AMD or Intel eGPU must still pass. What it excludes is everything that is not a
+# GPU at all, and the built-in GPU, whose connectors carry USB-C monitors and XR
+# glasses and must never be handed to the eGPU path.
+_is_display_class() { case "$(cat "/sys/bus/pci/devices/${1:-none}/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) return 0 ;; esac; return 1; }
+_internal_gpu_bdf() { local c dev
+  for c in /sys/class/drm/card*-eDP-*; do
+    [ -e "$c" ] || continue
+    dev=$(readlink -f "${c%-eDP-*}/device" 2>/dev/null) && { basename "$dev"; return 0; }
+  done; return 1; }
+is_egpu_bdf() {
+  [ -n "${1:-}" ] || return 1
+  _is_display_class "$1" || return 1
+  [ "$1" != "$(_internal_gpu_bdf || true)" ]
+}
+nvidia_at_bdf() { [ "$(cat "/sys/bus/pci/devices/${1:-}/vendor" 2>/dev/null)" = "0x10de" ]; }   # only for the NVIDIA-specific fallback address below
 EGPU_PCI=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
 # The fallback address is the development handheld's slot. Take it only when it
 # really holds an NVIDIA GPU — elsewhere that slot may be an unrelated device
@@ -110,10 +126,10 @@ is_hdmi_output() {
 
 connected_egpu_connectors() {
   local node base output device
-  # A display belongs to an eGPU only if the card driving it is an NVIDIA GPU.
+  # A display belongs to an eGPU only if the card driving it really is an eGPU.
   # Enforced here as well as at resolution time, so a wrong address can never
   # hand an ordinary external display (USB-C monitor, XR glasses) to the eGPU.
-  nvidia_at_bdf "$EGPU_PCI" || return 0
+  is_egpu_bdf "$EGPU_PCI" || return 0
   for node in /sys/class/drm/card*-*; do
     [ -e "$node/status" ] || continue
     [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue
