@@ -40,6 +40,17 @@ if [ "${NV_EGPU_GAMESCOPE_NATIVE_STEAM_CANVAS:-0}" = 1 ] && [ -n "${NV_EGPU_GAME
   set -- "${_keep[@]}"
 fi
 
+# HDR must be enabled when gamescope STARTS. Steam's toggle only flips the output to BT.2020 + ST2084 metadata at runtime
+# (verified on the connector: Colorspace=BT2020_RGB, HDR_OUTPUT_METADATA eotf=2), while the colour pipeline was built for
+# SDR -- so sRGB-encoded pixels get sent inside a PQ-signalled frame and the display stretches them: washed out, grey,
+# raised blacks. Passing --hdr-enabled up front is what the Steam Deck session does too. For reference, KWin drives this
+# same monitor in HDR with SDR content at 400 nits and gamut wideness 0, i.e. gamescope's own defaults.
+if [ "${NV_EGPU_GAMESCOPE_HDR:-0}" = 1 ] && [[ " $* " != *" --hdr-enabled "* ]]; then
+  prefix_hdr=(--hdr-enabled)
+else
+  prefix_hdr=()
+fi
+
 # HDR output: gamescope maps SDR content (the whole Steam UI) at its default 400 nits, which on a real HDR monitor looks
 # washed out and grey (seen on the Legion Go 1; the user could only fix it by switching HDR off). 203 nits is the reference
 # SDR white for HDR signals. Opt in with NV_EGPU_GAMESCOPE_HDR_SDR_NITS=<n>; unset keeps gamescope's own default, so no
@@ -103,4 +114,4 @@ case "${VK_DRIVER_FILES:-}${VK_ICD_FILENAMES:-}" in *nvidia*)
       [ -n "$_v" ] && [ -n "$_d" ] && prefix+=(--prefer-vk-device "${_v#0x}:${_d#0x}"); fi
   fi ;;
 esac
-exec "$gamescope_bin" "${prefix[@]}" "$@"
+exec "$gamescope_bin" "${prefix_hdr[@]}" "${prefix[@]}" "$@"
