@@ -40,6 +40,13 @@ first (refusing while the NVIDIA driver is loaded) and merge it again on every w
 writable system partition including `/usr/local`; there, 0.7.21 reproduces the failure and 0.7.22 passes: fresh
 install, install again while merged, uninstall while merged.
 
+**HDR is off on SteamOS (known limitation, not fixable from here).** On the test device the Steam UI and the desktop both
+render washed out and grey with HDR enabled. Measured: gamescope composites the frame correctly (the screenshot of its own
+output is right), both gamescope and KWin set the identical DRM signalling (`Colorspace=BT2020_RGB`), and the KDE desktop is
+wrong in exactly the same way -- so the error is in the platform's output encode, not in this project. The same monitor, GPU
+and driver 610.57.04 look correct under KWin 6.7.4 on kernel 7.1 (CachyOS); SteamOS 3.8 ships KWin 6.4.3 on kernel 6.16.
+HDR is therefore not advertised to Steam on SteamOS; `sudo touch /etc/nv-egpu-buddy/force-hdr` re-enables it.
+
 **Not yet verified on a real SteamOS device:** the merged extension and everything after it. Unknown until someone runs it there: boot ordering on real hardware,
 GRUB regeneration on the device, a real OS update, loading the modules with an eGPU attached, and everything the
 NVIDIA path does at attach time on a non-Legion-Go-2 machine.
