@@ -67,6 +67,8 @@ for c in /sys/class/drm/card[0-9]*; do
   [ "$(basename "$(readlink -f "$c/device/driver" 2>/dev/null)")" = amdgpu ] && { IGPU_CARD=$(basename "$c"); break; }
 done
 IGPU_CARD=${IGPU_CARD:-card1}
+# the eGPU's own card node (card0 on the Legion Go 2; not where the built-in GPU registered first)
+EGPU_CARD=$(read -r _b _ _c < <(/usr/local/sbin/egpu-detect 2>/dev/null) && echo "${_c:-}" || true); EGPU_CARD=${EGPU_CARD:-card0}
 
 if [ "$TEARDOWN_ONLY" = 1 ]; then
   say "[1/5] teardown-only: compositor already released by caller (egpu-safe-detach-ui)"
@@ -107,19 +109,19 @@ else
     sleep 2
     k=$(pgrep -x kwin_wayland | head -1)
     [ -n "$k" ] || continue
-    ls -l /proc/"$k"/fd 2>/dev/null | grep -q 'card0' || { released=1; break; }
+    ls -l /proc/"$k"/fd 2>/dev/null | grep -q "/dev/dri/$EGPU_CARD\$" || { released=1; break; }
   done
   if [ "$released" != 1 ]; then
-    say "      KWin still holds card0 (Mesa/KWin fd) — falling back to full logout…"
+    say "      KWin still holds $EGPU_CARD (Mesa/KWin fd) — falling back to full logout…"
     runuser -u deck -- env $RUNENV qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1 \
       || runuser -u deck -- env $RUNENV qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1
     for _ in $(seq 1 20); do
       sleep 2; k=$(pgrep -x kwin_wayland | head -1); [ -n "$k" ] || continue
-      ls -l /proc/"$k"/fd 2>/dev/null | grep -q 'card0' || { released=1; break; }
+      ls -l /proc/"$k"/fd 2>/dev/null | grep -q "/dev/dri/$EGPU_CARD\$" || { released=1; break; }
     done
   fi
-  [ "$released" = 1 ] || { say "      could not free card0 — ABORTING (safe; eGPU still attached)."; rm -f "$DM"; exit 3; }
-  say "      KWin released the eGPU (card0 free)"
+  [ "$released" = 1 ] || { say "      could not free $EGPU_CARD — ABORTING (safe; eGPU still attached)."; rm -f "$DM"; exit 3; }
+  say "      KWin released the eGPU ($EGPU_CARD free)"
   fi
 
 fi

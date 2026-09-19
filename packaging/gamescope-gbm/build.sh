@@ -29,7 +29,9 @@ else
   meson configure "$SRC/build" -Dprefix="$PREFIX" >/dev/null
 fi
 ninja -C "$SRC/build"
-ninja -C "$SRC/build" install >/dev/null
+# a bundled subproject (v4l-utils, used where the system has no libv4l development files, e.g. the SteamOS build root)
+# installs udev keymaps to an ABSOLUTE /usr path and fails without root: gamescope itself needs none of the subprojects' files
+ninja -C "$SRC/build" install >/dev/null 2>&1 || meson install -C "$SRC/build" --skip-subprojects >/dev/null
 "$PREFIX/bin/gamescope" --version 2>&1 | grep -o 'gamescope version [^ ]*'
 grep -q "$PREFIX/share/gamescope/scripts" "$PREFIX/bin/gamescope" || { echo "SCRIPT_DIR mismatch" >&2; exit 1; }
 echo "installed: $PREFIX/bin/gamescope (select via NV_EGPU_BUDDY_GAMESCOPE_BIN, enable with gamescope_drm_gbm_scanout=1)"
