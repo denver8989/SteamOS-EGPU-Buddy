@@ -79,6 +79,12 @@ fi
 [ -n "$gpu" ] || { log "eGPU did not enumerate within timeout — iGPU boot"; exit 0; }
 mkdir -p "$(dirname "$SEEN")" 2>/dev/null && : > "$SEEN" 2>/dev/null || true
 
+# Protect against a cable pull BEFORE anything else happens. A machine that boots with the eGPU
+# attached never ran the attach hook, so this was never applied — and unplugging reset the whole
+# machine (a data-fabric sync flood, which looks like an instant power-off and reboot). Do it as
+# soon as the eGPU is known to be there, so an unplug is survivable from that moment on.
+"$PRIV" mask-surprise-down 2>/dev/null | while read -r _l; do log "$_l"; done
+
 # FLR while driverless — NOT ReBAR. The manual egpu-attach.sh (the path that produced the known-good
 # June captures: sane 154W power reading, GPU boosting) always did this; the lean boot path skipped it.
 # The helper documents FLR as clearing "host-side first-init residue". A GPU inited without it carries

@@ -272,6 +272,31 @@ case "$action" in
     [ "$#" -eq 0 ] || die "status takes no arguments"
     gpu_state
     ;;
+  mask-surprise-down)
+    # Root ports WITHOUT Downstream Port Containment answer a cable pull with an uncorrectable error,
+    # and the platform answers THAT with a data-fabric sync flood: the machine resets instantly. Mask
+    # what the port allows and make the rest non-fatal. By capability, never by device id; ports that
+    # have DPC are left exactly as they are.
+    # This used to live only in the attach hook, so a machine that BOOTED with the eGPU attached was
+    # never protected — unplugging it reset the machine. Every path applies it now.
+    [ "$#" -eq 0 ] || die "mask-surprise-down takes no arguments"
+    _msd_rp=$(readlink -f "$GDEV" 2>/dev/null | grep -oE '[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]' | head -1)
+    [ -n "$_msd_rp" ] || die "eGPU is not present" 2
+    _msd_off=0x100; _msd_aer=""
+    for _ in $(seq 1 48); do
+      _msd_v=$(setpci -s "$_msd_rp" "$_msd_off".l 2>/dev/null) || break
+      _msd_id=$(( 0x$_msd_v & 0xffff )); _msd_nxt=$(( (0x$_msd_v >> 20) & 0xffc ))
+      [ "$_msd_id" -eq 29 ] && { printf 'root port %s has DPC: left alone\n' "$_msd_rp"; exit 0; }
+      [ "$_msd_id" -eq 1 ] && _msd_aer=$_msd_off
+      [ "$_msd_nxt" -eq 0 ] && break; _msd_off=$(printf 0x%x "$_msd_nxt")
+    done
+    [ -n "$_msd_aer" ] || { printf 'root port %s has neither DPC nor AER\n' "$_msd_rp"; exit 0; }
+    setpci -s "$_msd_rp" "$(printf 0x%x $((_msd_aer+0x08)))".l=ffffffff 2>/dev/null
+    setpci -s "$_msd_rp" "$(printf 0x%x $((_msd_aer+0x0c)))".l=00000000 2>/dev/null
+    printf 'root port %s: uncorrectable errors masked (UEMsk=%s UESvrt=%s)\n' "$_msd_rp" \
+      "$(setpci -s "$_msd_rp" "$(printf 0x%x $((_msd_aer+0x08)))".l 2>/dev/null)" \
+      "$(setpci -s "$_msd_rp" "$(printf 0x%x $((_msd_aer+0x0c)))".l 2>/dev/null)"
+    ;;
   reenumerate-tunnel)
     # Re-enumerate the eGPU's whole Thunderbolt subtree so the kernel sizes the bridge windows
     # again, the way it does for a device that arrives AFTER boot. This is the difference between

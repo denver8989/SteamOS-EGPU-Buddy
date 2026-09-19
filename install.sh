@@ -117,7 +117,26 @@ fi
 # So: unmerge for the duration of the install, and merge again on EVERY way out. Not while the driver is in use.
 SYSEXT_TOOL="$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
 if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/mounts 2>/dev/null; then
-  if [ -d /sys/module/nvidia ]; then echo "The NVIDIA driver is loaded (eGPU in use). Safe Detach, unplug the eGPU, then run the install again. Nothing was changed."; exit 21; fi
+  # "the driver is loaded" is not the same as "the eGPU is in use". A machine that booted with the
+  # eGPU attached has the modules loaded with nothing using them, and refusing there meant the only
+  # way to update was to unplug — which on an unprotected port resets the machine. So: if nothing is
+  # actually using the eGPU, unload the modules and carry on. If something is, refuse as before.
+  if [ -d /sys/module/nvidia ]; then
+    _egpu_busy=0
+    for _c in /sys/class/drm/card*-*/enabled; do
+      [ -e "$_c" ] || continue
+      case "${_c#/sys/class/drm/}" in *eDP-*) continue ;; esac
+      _cd=$(basename "$(dirname "$_c")"); _cd=${_cd%%-*}
+      [ "$(basename "$(readlink -f "/sys/class/drm/$_cd/device/driver" 2>/dev/null)")" = nvidia ] || continue
+      [ "$(cat "$_c" 2>/dev/null)" = enabled ] && _egpu_busy=1
+    done
+    fuser /dev/nvidia* >/dev/null 2>&1 && _egpu_busy=1
+    if [ "$_egpu_busy" = 0 ]; then
+      say "== the NVIDIA modules are loaded but nothing is using them: unloading so the system files can be written"
+      sudo modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia >/dev/null 2>&1 || true
+    fi
+  fi
+  if [ -d /sys/module/nvidia ]; then echo "The eGPU is in use. Safe Detach, then run the install again. Nothing was changed."; exit 21; fi
   say "== SteamOS: unmerging the driver extension while the system files are written"
   sudo systemd-sysext unmerge >/dev/null 2>&1 || { echo "could not unmerge the driver extension (files in use?). Reboot with the eGPU unplugged and run the install again. Nothing was changed."; exit 21; }
   trap 'sudo bash "$SYSEXT_TOOL" --activate >/dev/null 2>&1 || true' EXIT

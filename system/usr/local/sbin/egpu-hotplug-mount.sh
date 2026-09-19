@@ -37,21 +37,8 @@ authorized_dock(){
 # port LETS us mask and make them non-fatal, then read back what the hardware accepted (some bits are hardwired; on that
 # port Surprise Down cannot even be generated: LnkCap Surprise-). By capability, never by device id; ports that have DPC
 # (Legion Go 2) are left exactly as they are. The kernel runs with pci=noaer, so nothing consumes these reports anyway.
-mask_surprise_down(){   # $1 = GPU BDF
-  local rp aer v id nxt off
-  rp=$(readlink -f "/sys/bus/pci/devices/$1" 2>/dev/null | grep -oE '[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]' | head -1); [ -n "$rp" ] || return 0
-  off=0x100; aer=""
-  for _ in $(seq 1 48); do
-    v=$(setpci -s "$rp" "$off".l 2>/dev/null) || break
-    id=$(( 0x$v & 0xffff )); nxt=$(( (0x$v >> 20) & 0xffc ))
-    [ "$id" -eq 29 ] && { log "root port $rp has DPC: uncorrectable-error masks left alone"; return 0; }
-    [ "$id" -eq 1 ] && aer=$off
-    [ "$nxt" -eq 0 ] && break; off=$(printf 0x%x "$nxt")
-  done
-  [ -n "$aer" ] || { log "root port $rp: no DPC and no AER capability: nothing to contain a cable pull with"; return 0; }
-  setpci -s "$rp" "$(printf 0x%x $((aer+0x08)))".l=ffffffff 2>/dev/null   # UEMsk: mask all (hardwired bits stay)
-  setpci -s "$rp" "$(printf 0x%x $((aer+0x0c)))".l=00000000 2>/dev/null   # UESvrt: all non-fatal (hardwired bits stay)
-  log "root port $rp has no DPC: uncorrectable errors masked as far as the hardware allows (UEMsk=$(setpci -s "$rp" "$(printf 0x%x $((aer+0x08)))".l 2>/dev/null) UESvrt=$(setpci -s "$rp" "$(printf 0x%x $((aer+0x0c)))".l 2>/dev/null))"
+mask_surprise_down(){   # $1 = GPU BDF — the logic lives in the privileged helper so boot-enumerate can use it too
+  "$PRIV" mask-surprise-down >/dev/null 2>&1 && log "surprise-removal protection applied to the eGPU's root port"
 }
 # USB4/Thunderbolt tunnel root ports, found by what they ARE, not by device id. This used to be
 # gated to 1022:150a (Strix Halo), so on every other machine — including the Legion Go 1, which is

@@ -1,3 +1,23 @@
+0.7.42 — unplugging after a boot-with-eGPU could reset the machine. Update.
+
+**This is the one that has been resetting machines.** Root ports without Downstream Port Containment answer a cable pull
+with an uncorrectable error, and the platform answers that with a data-fabric sync flood — the machine powers off and
+reboots on the spot. This project masks those errors to make an unplug survivable, but the masking only ever ran inside
+the **attach hook**. A machine that BOOTED with the eGPU already attached never ran that hook, so it was never
+protected: the eGPU worked, and then unplugging it reset the whole system.
+
+That is exactly what a user hit — eGPU connected at boot, unplugged it, instant shutdown and reboot — and it explains
+the earlier resets recorded on the same machine.
+
+The masking is now a first-class action applied by **every** path that brings an eGPU up, including boot, as soon as the
+card is known to be there. Still by capability, never by device id, and ports that have DPC are still left untouched.
+
+**Updating no longer demands that you unplug.** The installer refused whenever the NVIDIA modules were loaded, calling
+it "eGPU in use" — but a machine that booted with the eGPU attached has them loaded with nothing using them. The only
+way forward was to unplug, which on an unprotected port reset the machine: the two bugs fed each other. It now checks
+whether the eGPU is actually in use — driving a display, or opened by a process — and if it is not, unloads the idle
+modules and carries on. If it really is in use, it refuses as before.
+
 0.7.41 — a partial BAR1 resize could leave you with no eGPU at all. Update if you run 0.7.38–0.7.40.
 
 **Regression, found on a real boot.** 0.7.38 resized BAR1 at boot and accepted whatever size the kernel allowed: on a
