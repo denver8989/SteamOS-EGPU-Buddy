@@ -1,0 +1,16 @@
+[Unit]
+# EGPU Buddy in the system tray. A systemd user service, not only an autostart entry: every Wayland client dies when the
+# compositor restarts, and this project restarts it on purpose (attach re-login, Safe Detach handoff). The autostart entry
+# only runs at login, so the tray icon was gone after the first detach. Restart=always brings it straight back.
+Description=EGPU Buddy tray icon
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/egpu-buddy --tray
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

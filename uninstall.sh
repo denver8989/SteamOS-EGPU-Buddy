@@ -17,7 +17,7 @@ if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/
   [ -d /sys/module/nvidia ] && { echo "The NVIDIA driver is loaded (eGPU in use). Safe Detach, unplug the eGPU, then uninstall again. Nothing was changed."; exit 21; }
   sudo systemd-sysext unmerge >/dev/null 2>&1 || { echo "could not unmerge the driver extension. Reboot with the eGPU unplugged and uninstall again. Nothing was changed."; exit 21; }
 fi
-userctl disable --now egpu-display-failover.service egpu-wake-guard.service 2>/dev/null
+userctl disable --now egpu-display-failover.service egpu-wake-guard.service egpu-buddy-tray.service 2>/dev/null
 cd "$ROOT"; find user -type f | while read -r f; do restore_or_remove "$(map_dest "$f")"; done
 sudo bash -c "$(declare -f restore_or_remove); systemctl disable egpu-mount.service egpu-boot-enumerate.service egpu-conditional-session.service egpu-buddy-selfheal.service egpu-buddy-resume.service 2>/dev/null; $(cd "$ROOT" && find system -type f | while read -r f; do printf 'restore_or_remove %q\n' "$(map_dest "$f")"; done); udevadm control --reload; systemctl daemon-reload"
 [ "${EGPU_KEEP_PLUGIN:-0}" = 1 ] || sudo rm -rf "$USER_HOME/homebrew/plugins/EGPU-Buddy"

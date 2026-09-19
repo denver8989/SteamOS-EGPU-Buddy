@@ -202,7 +202,9 @@ if want desktopapp; then
   # menu: the app and "Safely Eject eGPU"; Plasma autostart: the tray icon; desktop folder (when there is one): both launchers
   for f in egpu-buddy egpu-safe-detach; do sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/$f.desktop" > "$A/$f.desktop"; uown "$A/$f.desktop"
     if [ -d "$USER_HOME/Desktop" ]; then cp "$A/$f.desktop" "$USER_HOME/Desktop/$f.desktop"; chmod +x "$USER_HOME/Desktop/$f.desktop"; uown "$USER_HOME/Desktop/$f.desktop"; fi; done
-  sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/egpu-buddy-tray.desktop" > "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop"
+  # the tray runs as a user service (survives the compositor restarts this project performs); drop the old autostart entry
+  rm -f "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop"
+  userctl enable egpu-buddy-tray.service >/dev/null 2>&1 || true
   uown "$D" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop"
 fi
 
