@@ -1,3 +1,20 @@
+0.7.31 — drive the signal, because on many monitors the signal is what ends standby.
+
+Two corrections, both from a live failure: a machine booted with the eGPU attached and the monitor in standby, and
+nothing ever came up on either screen.
+
+**The eGPU was not pushing a signal out at all.** A monitor in standby does not answer detection, so its connector read
+"disconnected", so no compositor would put a mode on it, so no signal was driven — and the monitor had nothing to wake
+up for. Asking politely in a loop could never break that circle. Now, when the probe gets no answer, the connector is
+**forced on**: the kernel reports it connected, the compositor drives a mode, and that signal is what brings the monitor
+back. The monitor's own reply (its EDID appearing) is taken as proof it really woke; if nothing replies after 20 seconds
+of driven signal the force is released and the session stays on the built-in screen.
+
+**The built-in panel now follows whether the eGPU mounted, not whether a monitor was detected.** Detection is the wrong
+thing to hang it on, for the reason above. If the eGPU mounted, the panel goes dark and the picture is on the eGPU. The
+panel only comes back if the eGPU failed to mount. The one thing still refused is darkening the panel when no eGPU is
+mounted at all, which is what leaves a machine with no screen and no way back in.
+
 0.7.30 — a monitor in standby counts as connected, and gets driven.
 
 Correction to 0.7.29. That release would only turn the built-in panel off if an eGPU display was already **lit**, which

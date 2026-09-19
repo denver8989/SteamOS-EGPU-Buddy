@@ -10,42 +10,30 @@ PC=""; for c in /sys/class/drm/card*-eDP-*; do [ -e "$c" ] && { PC=${c##*/}; PC=
 # always applied, so "off" is dark either way.
 OWNED=0; fuser /dev/dri/$PC >/dev/null 2>&1 && OWNED=1
 
-# THE SAFETY RULE, enforced here so every caller gets it: the built-in panel may only go
-# dark when there is an eGPU display to replace it. Turning it off with nothing else there
-# leaves the machine with NO screen at all and no way back in (a user booted with the
-# monitor asleep and lost both screens).
-#
-# "There" means CONNECTED, not lit. A monitor in standby, or one whose panel is off, is
-# still connected — it answers on DisplayPort AUX / DDC and it wakes as soon as we drive a
-# signal at it. Requiring it to be lit already would refuse the very handover that wakes it.
-# So probe first ("detect" makes the driver ask the monitor), then accept any connected
-# output on a card that is not the built-in GPU.
+# THE RULE: the built-in panel follows whether the eGPU MOUNTED, not whether its monitor
+# was detected. A monitor in standby does not answer detection until something drives a
+# signal at it — and for many displays the signal IS the wake trigger — so "no display
+# detected" is not a reason to keep the panel on, and never a reason to turn it back on.
+# The panel only comes back if the eGPU failed to mount.
+# What is still refused: darkening the panel when there is no mounted eGPU at all, which
+# would leave the machine with no screen and no way back in.
 # Override for teardown paths that darken the panel while they still own the picture:
 # EGPU_PANEL_FORCE=1.
-egpu_display_connected() {
-  local c dev igpu
+egpu_mounted() {
+  local d igpu
   igpu=$(readlink -f "/sys/class/drm/$PC/device" 2>/dev/null); igpu=${igpu##*/}
-  # wake the question, not the monitor: a standby display does not assert hot-plug, so ask it
-  for c in /sys/class/drm/card[0-9]*-*/status; do
-    case "$c" in *eDP-*|*Writeback-*) continue ;; esac
-    echo detect > "$c" 2>/dev/null || true
-  done
-  for c in /sys/class/drm/card[0-9]*-*; do
-    [ -e "$c/status" ] || continue
-    case "${c##*/}" in *eDP-*|*Writeback-*) continue ;; esac
-    [ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
-    dev=$(readlink -f "$c/device/device" 2>/dev/null); dev=${dev##*/}
-    [ -n "$dev" ] && [ "$dev" != "$igpu" ] || continue          # must be on a card that is not the built-in GPU
-    case "$(cat "/sys/bus/pci/devices/$dev/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) ;; *) continue ;; esac
-    return 0
+  for d in /sys/bus/pci/devices/*; do
+    [ "${d##*/}" != "$igpu" ] || continue
+    case "$(cat "$d/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) ;; *) continue ;; esac
+    compgen -G "$d/drm/card*" >/dev/null 2>&1 && return 0     # display-class, not built-in, driver bound with a DRM card
   done
   return 1
 }
 
 case "$want" in
   off)
-    if [ "${EGPU_PANEL_FORCE:-0}" != 1 ] && ! egpu_display_connected; then
-      echo "refusing to turn the built-in panel off: no eGPU display is connected to replace it (set EGPU_PANEL_FORCE=1 to override)" >&2
+    if [ "${EGPU_PANEL_FORCE:-0}" != 1 ] && ! egpu_mounted; then
+      echo "refusing to turn the built-in panel off: no eGPU is mounted to take over (set EGPU_PANEL_FORCE=1 to override)" >&2
       exit 3
     fi
     if [ "$OWNED" = 0 ]; then

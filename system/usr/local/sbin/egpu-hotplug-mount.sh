@@ -450,12 +450,32 @@ if [ "$egpu_has_output" != 1 ]; then
     for _s in /sys/class/drm/"$egpu_card"-*/status; do [ "$(cat "$_s" 2>/dev/null)" = connected ] && egpu_has_output=1; done
     [ "$egpu_has_output" = 1 ] && { log "eGPU output appeared after $((_w*2))s"; break; }; sleep 2
   done
-  # NEVER stage an NVIDIA-only session with no display to show it on. Doing that cost a
-  # user both screens: the compositor relogs onto the eGPU, the panel is handed over and
-  # darkened, and the monitor never wakes -> two dark screens and no way back in.
-  # Staying put is safe AND self-correcting: the moment the monitor wakes, the eGPU
-  # connector fires a DRM hotplug and 99-egpu-output-hotplug.rules runs this script again.
-  [ "$egpu_has_output" = 1 ] || log "no eGPU output detected after 90s — staying on the built-in screen; it switches over by itself when the monitor wakes"
+  # Asking is not always enough: on many displays the SIGNAL is what brings the panel out
+  # of standby, and until something drives one they answer nothing. So stop asking and
+  # drive it — force the connector on, which makes the kernel report it connected and the
+  # compositor put a mode on it. That is the signal that wakes the monitor.
+  if [ "$egpu_has_output" != 1 ]; then
+    log "no answer to the probe — forcing the eGPU connectors ON so a signal is driven at the monitor"
+    for _s in /sys/class/drm/"$egpu_card"-*/status; do
+      case "$_s" in *eDP-*|*Writeback-*) continue ;; esac
+      echo on > "$_s" 2>/dev/null || true
+    done
+    # A forced connector reports connected whether or not anything is really there, so take
+    # the monitor's own answer as proof: EDID appears once it has woken and replied.
+    for _w in $(seq 1 10); do
+      for _c in /sys/class/drm/"$egpu_card"-*; do
+        [ -s "$_c/edid" ] 2>/dev/null && { egpu_has_output=1; log "monitor woke and replied on ${_c##*/} after the forced signal"; break 2; }
+      done
+      sleep 2
+    done
+    if [ "$egpu_has_output" != 1 ]; then
+      log "nothing replied after 20s of driven signal — releasing the force and staying on the built-in screen"
+      for _s in /sys/class/drm/"$egpu_card"-*/status; do
+        case "$_s" in *eDP-*|*Writeback-*) continue ;; esac
+        echo detect > "$_s" 2>/dev/null || true
+      done
+    fi
+  fi
 fi
 if [ "$egpu_has_output" != 1 ]; then
   mkdir -p /run/nvegpu; printf '{"state":"IDLE","message":"%s"}\n' "The eGPU is ready, but its monitor is not responding. Staying on the built-in screen — switch the monitor on and it will take over by itself." > /run/nvegpu/gm-status.json 2>/dev/null
