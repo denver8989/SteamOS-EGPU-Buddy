@@ -387,8 +387,13 @@ set_autologin_plasma(){
 # 2026-09-10: a monitor that is asleep / still training its link is NOT a reason to skip the
 # NVIDIA-only session. Wait up to 90s for any eGPU connector to report connected; if none does,
 # stage anyway (the monitor is connected even if asleep; the resume/DPMS path lights it later).
+# A monitor that dropped into deep standby (no signal yet, because we are waiting for IT) can stop asserting hot-plug, and
+# then nothing ever changes by itself. So do not just wait: force a probe of every eGPU connector each cycle ("detect"
+# makes the driver query the monitor over DisplayPort AUX / DDC), and say in the UI what is being waited for.
 if [ "$egpu_has_output" != 1 ]; then
+  mkdir -p /run/nvegpu; printf '{"state":"SWITCHING","message":"%s"}\n' "The eGPU is ready. Waiting for the monitor: switch it on or wake it (up to 90 seconds)." > /run/nvegpu/gm-status.json 2>/dev/null
   for _w in $(seq 1 45); do
+    for _s in /sys/class/drm/"$egpu_card"-*/status; do echo detect > "$_s" 2>/dev/null || true; done
     for _s in /sys/class/drm/"$egpu_card"-*/status; do [ "$(cat "$_s" 2>/dev/null)" = connected ] && egpu_has_output=1; done
     [ "$egpu_has_output" = 1 ] && { log "eGPU output appeared after $((_w*2))s"; break; }; sleep 2
   done
