@@ -82,6 +82,7 @@ PRIV = "/usr/local/sbin/nv-egpu-buddy-privileged"
 SWITCH = "/usr/local/sbin/egpu-gamemode-switch"
 DETACH = "/usr/local/sbin/egpu-gamemode-detach"
 REATTACH = "/usr/local/sbin/egpu-reattach"
+PLUGIN_BACKUP = f"{USER_HOME}/homebrew/egpu-buddy-plugin-backup"
 FLOOD_LOCKOUT = "/var/lib/nvegpu/flood-lockout"; FLOOD_HISTORY = "/var/lib/nvegpu/flood-history"
 GPU_RE = re.compile(r"^(\S+) 0300: 10de:")   # any NVIDIA VGA-class device
 
@@ -414,6 +415,15 @@ def _start_setup(action, with_driver=False, version=None):
     return {"ok": True, "message": f"{action} started"}
 
 
+def _drop_stray_plugin_copies():
+    """Remove copies of this plugin that older versions left inside homebrew/plugins (Decky would load them as plugins)."""
+    import glob
+    n = 0
+    for d in glob.glob(PLUGIN_LIVE + ".bak*"):
+        shutil.rmtree(d, ignore_errors=True); n += 1
+    return n
+
+
 def _update_plugin_files(version):
     """Replace this plugin with the release's plugin zip (backup kept), then restart Decky detached from ourselves."""
     name = f"EGPU-Buddy-Decky-{version}.zip"; dst = f"/tmp/{name}"
@@ -423,7 +433,9 @@ def _update_plugin_files(version):
     if not want or want != hashlib.sha256(open(dst, "rb").read()).hexdigest(): raise RuntimeError("checksum mismatch on the plugin zip")
     import zipfile
     tmp = f"/tmp/egpu-buddy-plugin-{version}"; shutil.rmtree(tmp, ignore_errors=True); zipfile.ZipFile(dst).extractall(tmp)
-    src = os.path.join(tmp, "EGPU-Buddy"); bak = PLUGIN_LIVE + ".bak-egpu-buddy"
+    # The backup must NOT live inside homebrew/plugins: Decky loads every folder there as a plugin, found two "EGPU Buddy",
+    # and kept running the BACKUP (the old version) after every update. Seen on a real device: "plugin stayed 0.7.20".
+    src = os.path.join(tmp, "EGPU-Buddy"); bak = PLUGIN_BACKUP; _drop_stray_plugin_copies()
     shutil.rmtree(bak, ignore_errors=True); shutil.copytree(PLUGIN_LIVE, bak)
     for entry in os.listdir(PLUGIN_LIVE):
         pth = os.path.join(PLUGIN_LIVE, entry); shutil.rmtree(pth, ignore_errors=True) if os.path.isdir(pth) else os.remove(pth)
@@ -630,6 +642,8 @@ class Plugin:
 
     async def _main(self):
         decky.logger.info("EGPU Buddy backend loaded")
+        if os.path.realpath(PLUGIN_DIR) == os.path.realpath(PLUGIN_LIVE) and _drop_stray_plugin_copies():
+            decky.logger.info("removed stray plugin copies from homebrew/plugins")
         await asyncio.sleep(8)
         threading.Thread(target=_continue_update, daemon=True).start()   # second half of a plugin-first update, if one is pending
         await asyncio.sleep(300)

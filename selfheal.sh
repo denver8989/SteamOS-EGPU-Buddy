@@ -7,6 +7,11 @@ HERE=$(cd "$(dirname "$0")" && pwd); VER=$(cat "$HERE/VERSION" 2>/dev/null || ec
 USER_NAME=$(stat -c %U "$HERE"); log(){ logger -t egpu-buddy-selfheal "$*"; echo "$*"; }
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 ro=$(command -v steamos-readonly || true)
+# Older plugin versions kept their update backup INSIDE homebrew/plugins; Decky loads every folder there as a plugin and ran
+# the backup (= the old version) instead of the updated one. Remove such copies at every boot and reload Decky if any existed.
+UH=$(getent passwd "$USER_NAME" | cut -d: -f6); stray=0
+for d in "$UH"/homebrew/plugins/EGPU-Buddy.bak*; do [ -d "$d" ] && { rm -rf "$d"; stray=1; log "removed stray plugin copy $d"; }; done
+[ "$stray" = 1 ] && systemctl try-restart plugin_loader.service >/dev/null 2>&1
 need=0
 [ -x /usr/local/sbin/nv-egpu-buddy-privileged ] && [ -x /usr/local/sbin/egpu-hotplug-mount.sh ] || need=1
 [ "$(cat /etc/nv-egpu-buddy/version 2>/dev/null)" = "$VER" ] || need=1

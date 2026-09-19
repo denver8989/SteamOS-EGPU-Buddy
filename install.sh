@@ -123,6 +123,9 @@ if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/
   trap 'sudo bash "$SYSEXT_TOOL" --activate >/dev/null 2>&1 || true' EXIT
 fi
 
+# stray copies of the Decky plugin inside homebrew/plugins (update backups of older versions): Decky would run THEM
+for d in "$USER_HOME"/homebrew/plugins/EGPU-Buddy.bak*; do [ -d "$d" ] && { sudo rm -rf "$d"; echo "removed stray plugin copy $d"; }; done
+
 # ---- user files ----------------------------------------------------------------------------------
 say "== installing user files"
 for f in "${FILES[@]}"; do case "$f" in user/*) ;; *) continue;; esac
