@@ -30,6 +30,27 @@ authorized_dock(){
   done
   return 1
 }
+# Root ports WITHOUT Downstream Port Containment (e.g. AMD Phoenix 1022:14ef, Legion Go 1): a cable pull raises Surprise Down
+# (fatal by default) and the platform answers with a data-fabric sync flood = instant reset ("Previous system reset reason:
+# an uncorrected error caused a data fabric sync flood event", seen on a real device). Tell the port that a surprise link loss
+# on this hot-plug port is not an error: mask Surprise Down + Data Link Protocol in AER and make them non-fatal.
+# By capability, never by device id; ports that have DPC (Legion Go 2) are left exactly as they are.
+mask_surprise_down(){   # $1 = GPU BDF
+  local rp aer v id nxt off
+  rp=$(readlink -f "/sys/bus/pci/devices/$1" 2>/dev/null | grep -oE '[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]' | head -1); [ -n "$rp" ] || return 0
+  off=0x100; aer=""
+  for _ in $(seq 1 48); do
+    v=$(setpci -s "$rp" "$off".l 2>/dev/null) || break
+    id=$(( 0x$v & 0xffff )); nxt=$(( (0x$v >> 20) & 0xffc ))
+    [ "$id" -eq 29 ] && { log "root port $rp has DPC: surprise-down masks left alone"; return 0; }
+    [ "$id" -eq 1 ] && aer=$off
+    [ "$nxt" -eq 0 ] && break; off=$(printf 0x%x "$nxt")
+  done
+  [ -n "$aer" ] || return 0
+  setpci -s "$rp" "$(printf 0x%x $((aer+0x08)))".l=00000030:00000030 2>/dev/null   # UEMsk: DLP (bit 4) + SDES (bit 5) masked
+  setpci -s "$rp" "$(printf 0x%x $((aer+0x0c)))".l=00000000:00000030 2>/dev/null   # UESvrt: both non-fatal
+  log "root port $rp has no DPC: Surprise Down + DLP masked and non-fatal (UEMsk=$(setpci -s "$rp" "$(printf 0x%x $((aer+0x08)))".l 2>/dev/null) UESvrt=$(setpci -s "$rp" "$(printf 0x%x $((aer+0x0c)))".l 2>/dev/null))"
+}
 clear_dpc(){   # clear latched DPC status (write-1) + disable trigger, on both USB4 root ports
   local p off v id nxt c
   for p in $(lspci -D -d 1022:150a -n 2>/dev/null | awk '{print $1}'); do
@@ -238,6 +259,7 @@ pin_link_speed "$gpu"
 # a Desktop safe-detach hides the NVIDIA userspace (ICD/EGL json, NVML) so nothing re-opens the card; a later hot-plug
 # must un-hide it before the session is restaged, or the login env script leaves KWin on both GPUs (seen 2026-09-18)
 /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1 || true
+mask_surprise_down "$gpu"
 log "GPU $gpu healthy (cfg=$cfg) — load driver + display stack"
 # a refusal or a failed load must be visible in the log (it used to be discarded, which hid a refused display stack)
 _pv(){ local o; o=$("$PRIV" "$@" 2>&1) || log "helper $*: ${o:-failed}"; }
