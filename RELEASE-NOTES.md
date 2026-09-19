@@ -1,3 +1,29 @@
+0.7.26 — an external display is never mistaken for an eGPU, and a dock is never mistaken for an enclosure.
+
+Follow-up to 0.7.25, from auditing every place that decides "there is an eGPU here" rather than waiting for the next
+report. Two more classes of mistake were found, both able to affect people who own no eGPU at all.
+
+**A display was attributed to an eGPU by address alone.** Every "is this monitor the eGPU's?" test compares the card
+driving the connector against one PCI address. If that address was wrong — and until 0.7.25 it could fall back to the
+development handheld's slot — an ordinary external display was handed to the eGPU path. Demonstrated on a machine with
+no eGPU: forcing the wrong address made the Game Mode session claim the DisplayPort output of the built-in GPU. The
+ownership test now also requires that the card really is an NVIDIA GPU, checked where ownership is decided and not only
+where the address is resolved, so a wrong address can no longer produce a wrong answer. The same check was added to the
+attach helper.
+
+**A Thunderbolt dock was treated as an eGPU enclosure.** Any USB4/Thunderbolt device arriving fires the same event as
+an eGPU box. With no GPU behind it, this software would clear the port's error containment, **de-authorize and
+re-authorize the device** — which drops a dock and any display attached to it — and rescan the bus, on every plug. At
+boot it would poke the bus and wait 30 seconds for a GPU that was never coming. Now:
+
+- A device that has been through the full bring-up three times without ever producing a GPU is left completely alone
+  from then on. Three, not one, because a real enclosure's PCIe tunnel is slow and racy and can genuinely miss a plug.
+- Any successful attach clears that judgement, and **pressing Attach always tries anyway** regardless of it.
+- The boot path does not poke the bus or wait at all on a machine where no eGPU has ever attached. A dock-only machine
+  boots straight through.
+
+Nothing here changes behaviour on a machine with a working eGPU.
+
 0.7.25 — with no eGPU connected, this software now does nothing at all.
 
 **Update if you use any other external display: a USB-C monitor, a dock, or XR display glasses.**

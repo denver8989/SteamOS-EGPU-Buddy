@@ -35,13 +35,12 @@ detect_nvidia_gpu_bdf() {
   done | sort -V | head -n 1
 }
 
+nvidia_at_bdf() { [ "$(cat "/sys/bus/pci/devices/${1:-}/vendor" 2>/dev/null)" = "0x10de" ]; }
 EGPU_PCI=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
 # The fallback address is the development handheld's slot. Take it only when it
 # really holds an NVIDIA GPU — elsewhere that slot may be an unrelated device
 # and must not be mistaken for an eGPU.
-[ -n "$EGPU_PCI" ] ||
-  [ "$(cat /sys/bus/pci/devices/0000:62:00.0/vendor 2>/dev/null)" != "0x10de" ] ||
-  EGPU_PCI=0000:62:00.0
+if [ -z "$EGPU_PCI" ] && nvidia_at_bdf 0000:62:00.0; then EGPU_PCI=0000:62:00.0; fi
 KSCREEN=${KSCREEN_DOCTOR:-kscreen-doctor}
 
 strip_ansi() {
@@ -111,6 +110,10 @@ is_hdmi_output() {
 
 connected_egpu_connectors() {
   local node base output device
+  # A display belongs to an eGPU only if the card driving it is an NVIDIA GPU.
+  # Enforced here as well as at resolution time, so a wrong address can never
+  # hand an ordinary external display (USB-C monitor, XR glasses) to the eGPU.
+  nvidia_at_bdf "$EGPU_PCI" || return 0
   for node in /sys/class/drm/card*-*; do
     [ -e "$node/status" ] || continue
     [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue

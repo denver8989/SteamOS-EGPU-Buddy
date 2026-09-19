@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.25"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.26"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -605,7 +605,7 @@ class Plugin:
             _sh(["/usr/local/sbin/egpu-rearm"], 10); decky.logger.info("flood lockout cleared by Attach")
         if _gpu_bdf() and not os.path.exists("/sys/module/nvidia_drm"):
             # on the bus but never brought up (lockout, or an attach that stopped early): the full attach, not just a session switch
-            _spawn_root_job("attach", ["/usr/local/sbin/egpu-hotplug-mount.sh"])
+            _spawn_root_job("attach", ["/usr/local/sbin/egpu-hotplug-mount.sh", "--manual"])
             return {"ok": True, "message": "Attaching: driver load, then Game Mode restarts on the eGPU display (about 30 seconds). Reopen this menu afterwards."}
         if _gpu_bdf():
             out = _gamescope_env("OUTPUT_CONNECTOR").split(",")[0]

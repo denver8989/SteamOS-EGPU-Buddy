@@ -96,6 +96,48 @@ if [ ! -e /run/egpu-rearmed ]; then
 fi
 
 log "=== hotplug-mount triggered ==="
+# A Thunderbolt/USB4 "add" is not an eGPU: docks, displays and storage enclosures
+# fire the same event. We cannot tell them apart before the PCIe tunnel forms, so
+# we try once per device and then remember the answer. A device that has already
+# been through the full bring-up without ever producing a GPU is left completely
+# alone from then on — no authorize, no de-authorize/re-authorize (which would
+# drop a dock and any display on it), no DPC poke, no bus rescan.
+# Three strikes, not one: a real enclosure can fail to produce its GPU on a given
+# plug (the PCIe tunnel is slow and racy, and can take minutes), and writing one
+# off after a single miss would silently stop the software working. Any successful
+# attach clears the list entirely.
+NOT_EGPU=/var/lib/nvegpu/not-egpu   # lines: "<thunderbolt unique_id> <failed bring-ups>"
+STRIKES=3
+tb_uids(){ local tb; for tb in /sys/bus/thunderbolt/devices/*-*; do
+    [ -e "$tb/device_name" ] && cat "$tb/unique_id" 2>/dev/null; done; }
+strikes_for(){   # awk cannot open a file that is not there, and would print nothing at all
+  [ -s "$NOT_EGPU" ] || { printf '0\n'; return 0; }
+  awk -v u="$1" '$1==u{print $2+0; found=1} END{if(!found) print 0}' "$NOT_EGPU" 2>/dev/null; }
+known_not_egpu(){
+  local uid any=1
+  for uid in $(tb_uids); do
+    any=0
+    [ "$(strikes_for "$uid")" -ge "$STRIKES" ] || return 1
+  done
+  return $any   # no Thunderbolt device at all => not "known", let the normal path run
+}
+remember_not_egpu(){
+  local uid n rest
+  mkdir -p /var/lib/nvegpu 2>/dev/null || return 0
+  for uid in $(tb_uids); do
+    n=$(( $(strikes_for "$uid") + 1 ))
+    rest=$(grep -v "^$uid " "$NOT_EGPU" 2>/dev/null || true)
+    { [ -z "$rest" ] || printf '%s\n' "$rest"; printf '%s %s\n' "$uid" "$n"; } > "$NOT_EGPU" 2>/dev/null || true
+    [ "$n" -lt "$STRIKES" ] || log "$uid produced no GPU $n times — treating it as a dock, not an enclosure (cleared by any successful attach, or: rm $NOT_EGPU)"
+  done
+}
+# A deliberate press of Attach always tries, whatever we think we learned.
+if [ "${1:-}" = "--manual" ]; then
+  rm -f "$NOT_EGPU" 2>/dev/null || true
+elif [ -z "$(find_gpu || true)" ] && known_not_egpu; then
+  log "only known non-eGPU Thunderbolt devices are attached — nothing to do (press Attach to override)"
+  exit 0
+fi
 gate_fail(){ log "NOT attaching: $1"; mkdir -p /run/nvegpu; printf '{"state":"FAILED","message":"%s"}\n' "$1" > /run/nvegpu/gm-status.json; exit 0; }
 # wait for boltd to authorize the dock (udev add fires before authorization)
 dock=""
@@ -112,7 +154,7 @@ if [ -z "$dock" ]; then
   command -v boltctl >/dev/null 2>&1 && for tb in /sys/bus/thunderbolt/devices/*-*; do [ -e "$tb/unique_id" ] && boltctl enroll --policy auto "$(cat "$tb/unique_id")" >/dev/null 2>&1 || true; done
   for _ in $(seq 1 14); do dock=$(authorized_dock || true); [ -n "$dock" ] && break; sleep 1; done
 fi
-[ -n "$dock" ] || { log "no authorized dock within 20s — exit"; exit 0; }
+[ -n "$dock" ] || { log "no authorized dock within 20s — exit"; remember_not_egpu; exit 0; }
 log "dock authorized: $dock"
 
 gpu=$(find_gpu || true)
@@ -123,7 +165,12 @@ if [ -z "$gpu" ]; then
   echo 1 > /sys/bus/pci/rescan 2>/dev/null; sleep 3
   for _ in $(seq 1 20); do gpu=$(find_gpu || true); [ -n "$gpu" ] && break; sleep 1; done
 fi
-[ -n "$gpu" ] || { log "GPU did not enumerate — exit"; exit 0; }
+[ -n "$gpu" ] || { log "GPU did not enumerate — exit"; remember_not_egpu; exit 0; }
+# Remember that a real eGPU has attached here: the boot path uses this to decide
+# whether a Thunderbolt device is worth poking the bus for, so a dock-only machine
+# never pays for that.
+mkdir -p /var/lib/nvegpu 2>/dev/null && : > /var/lib/nvegpu/egpu-seen 2>/dev/null || true
+rm -f "$NOT_EGPU" 2>/dev/null || true   # a GPU is here: whatever is plugged in deserves a fresh judgement
 # SteamOS only: after an OS update the driver extension may still be rebuilding and the kernel parameters may not be
 # active yet; bringing the eGPU up in that window is the unprotected first connection. No other system gets this gate.
 if command -v steamos-readonly >/dev/null 2>&1; then

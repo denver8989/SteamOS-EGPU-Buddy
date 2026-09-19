@@ -15,6 +15,9 @@
 set -u
 PRIV=/usr/local/sbin/nv-egpu-buddy-privileged
 LOG=/var/log/egpu-boot-enumerate.log
+# Written the first time a real NVIDIA eGPU is seen on this machine; gates the
+# bus-poking recovery below so it can never run on someone's plain dock.
+SEEN=/var/lib/nvegpu/egpu-seen
 log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>&1; }
 
 # --- BOOTLOOP-BREAKER (2026-08-20): never re-load a flooding eGPU at boot -------
@@ -60,6 +63,14 @@ log "=== boot-enumerate (lean) start ==="
 dock_present || { log "no TB dock — iGPU boot"; exit 0; }
 
 gpu=$(find_gpu || true)
+# A Thunderbolt device is not an eGPU: docks, displays and storage enclosures all
+# look the same here. Only poke the bus (DPC clear + rescan) and spend 30s waiting
+# if an eGPU has actually attached on this machine before. A dock-only machine
+# then boots straight through instead of paying that wait at every boot.
+if [ -z "$gpu" ] && [ ! -e "$SEEN" ]; then
+  log "TB device present but no eGPU has ever attached on this machine — not poking the bus (a dock is not an enclosure)"
+  exit 0
+fi
 if [ -z "$gpu" ]; then
   log "eGPU not enumerated — clear DPC (trigger+status), reauth, rescan"
   "$PRIV" dpc-off >/dev/null 2>&1 || true
@@ -68,6 +79,7 @@ if [ -z "$gpu" ]; then
   for _ in $(seq 1 30); do gpu=$(find_gpu || true); [ -n "$gpu" ] && break; sleep 1; done
 fi
 [ -n "$gpu" ] || { log "eGPU did not enumerate within timeout — iGPU boot"; exit 0; }
+mkdir -p "$(dirname "$SEEN")" 2>/dev/null && : > "$SEEN" 2>/dev/null || true
 
 # FLR while driverless — NOT ReBAR. The manual egpu-attach.sh (the path that produced the known-good
 # June captures: sane 154W power reading, GPU boosting) always did this; the lean boot path skipped it.
