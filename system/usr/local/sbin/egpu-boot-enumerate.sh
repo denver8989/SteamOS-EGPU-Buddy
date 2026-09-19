@@ -20,16 +20,12 @@ LOG=/var/log/egpu-boot-enumerate.log
 SEEN=/var/lib/nvegpu/egpu-seen
 log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>&1; }
 
-# --- BOOTLOOP-BREAKER (2026-08-20): never re-load a flooding eGPU at boot -------
-if [ ! -e /run/egpu-rearmed ]; then
-  if [ -e /var/lib/nvegpu/flood-lockout ]; then
-    log "FLOOD LOCKOUT active — skipping boot-enumerate. Run: sudo egpu-rearm"; exit 0
-  fi
-  if dmesg 2>/dev/null | grep -qi 'data fabric sync flood'; then
-    mkdir -p /var/lib/nvegpu 2>/dev/null; date '+%F %T' > /var/lib/nvegpu/flood-lockout 2>/dev/null
-    log "PREVIOUS BOOT FLOODED — set lockout, skipping boot-enumerate to break the loop. Run: sudo egpu-rearm"
-    exit 0
-  fi
+# The flood lockout that used to live here is gone: it refused to bring the eGPU up at boot
+# until the user ran egpu-rearm, which read as "the eGPU just stopped working". Unplugging the
+# eGPU is the simple escape from a reset loop. The reset is still recorded in flood-history.
+if [ ! -e /run/egpu-rearmed ] && dmesg 2>/dev/null | grep -qi 'data fabric sync flood'; then
+  mkdir -p /var/lib/nvegpu 2>/dev/null; date '+%F %T' >> /var/lib/nvegpu/flood-history 2>/dev/null
+  log "note: the platform reset itself while the eGPU was connected on a previous boot (recorded; continuing)"
 fi
 
 find_gpu(){

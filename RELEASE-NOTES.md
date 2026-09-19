@@ -1,3 +1,20 @@
+0.7.36 — the flood lockout is gone.
+
+When the platform reset itself while the eGPU was connected (an AMD "data fabric sync flood"), this software set a
+persistent lockout and refused every later attach until the user ran `egpu-rearm`. The intent was to break a reboot
+loop. In practice it cost far more than it prevented:
+
+- plugging the eGPU in did nothing, with no obvious reason why
+- boot stalled for two and a half minutes waiting for a GPU it had already decided not to bring up
+- and the way out was a command, on a device that may have no keyboard
+
+The loop it guarded against is escaped by unplugging the eGPU — one action, obvious to anyone holding the device. So
+the lockout is removed: an attach is never refused because of a past reset, and boot never waits on one.
+
+**The reset is still recorded.** `flood-history` is what tells the interface that this machine resets when the eGPU link
+drops, which is why it keeps a standing "always Safe Detach before unplugging" note. That record costs nothing and is
+worth keeping; the refusal was not. Leftover lockout state from an older version is cleared automatically.
+
 0.7.35 — this software could leave a handheld sitting at a boot menu. Update.
 
 **A SteamOS machine could be left needing a keyboard to boot.** Applying the kernel parameters regenerates the GRUB

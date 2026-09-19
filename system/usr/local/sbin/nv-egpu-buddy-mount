@@ -429,15 +429,6 @@ if ! external_tb_connected && [ -z "$(detect_nvidia_gpu_bdf || true)" ]; then
   exit 0
 fi
 
-# The flood lockout means the attach hook will refuse to bring the eGPU up anyway, so waiting
-# 90s for it at boot achieves nothing except holding the login manager back. A user saw
-# "A start job is running for Session-independent eGPU compute mount (2min 39s)" and reasonably
-# read it as a failed boot. Press Attach (or run egpu-rearm) to clear the lockout deliberately.
-if [ -e /var/lib/nvegpu/flood-lockout ] && [ ! -e /run/egpu-rearmed ]; then
-  log "flood lockout active — not waiting for the eGPU at boot (use Attach, or run egpu-rearm)"
-  exit 0
-fi
-
 refresh_gpu_target
 log "waiting up to ${WAIT_SECONDS}s for $GPU"
 if ! wait_for_gpu; then
