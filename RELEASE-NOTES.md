@@ -1,3 +1,21 @@
+0.7.44 — 16 GiB at boot, and the eGPU session no longer tears itself down a minute after boot.
+
+Two faults, both introduced by the boot-time BAR1 work in 0.7.38.
+
+**The boot re-enumeration read as a cable pull.** Removing the bridge to re-size the windows fires a PCI remove event
+for the GPU, and the udev rule that handles surprise removal acted on it: about ninety seconds into boot it killed
+gamescope and Steam, unloaded the driver, and put the session back on the built-in screen — with the eGPU still
+plugged in. That is what "the screens went black and Game Mode came back on the handheld" was. The re-enumeration now
+marks the removal as deliberate, and the recovery skips it, the same way it already skips a Safe Detach.
+
+**256 MiB was never normal, and reporting it as such was wrong.** The resize was asked for once, three seconds after the
+rescan, and refused — while the very same request succeeded on the very same machine and port a minute later, straight
+to 16384 MiB. The kernel simply had not finished assigning the re-enumerated bridge windows yet. It now retries for
+twenty seconds after re-enumeration, and briefly before it, instead of taking the first refusal as the answer.
+
+A full BAR is what this is for. A machine that can reach 16 GiB should not be left at 256 MiB because the question was
+asked too early.
+
 0.7.43 — the quiet boot stays fixed this time, because it repairs itself.
 
 The verbose boot has now been "fixed" three times and come back twice. The reason is not the fix — it is that **every

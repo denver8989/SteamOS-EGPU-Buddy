@@ -323,10 +323,20 @@ case "$action" in
       [ "$(cat "/sys/bus/pci/devices/$_rt_dev/vendor" 2>/dev/null)" = "0x10de" ] ||
         die "$_rt_dev (class $_rt_c) is behind $_rt_bridge and is not part of the eGPU; refusing re-enumeration" 2
     done
+    # Removing the bridge fires a PCI remove event for the GPU, and the udev rule reads that as a
+    # cable pull: the surprise-removal recovery then tore the eGPU session down ~90s into boot, with
+    # the card still plugged in. Mark the removal as ours for the duration.
+    mkdir -p /run/nvegpu 2>/dev/null
+    date +%s > /run/nvegpu/deliberate-removal
     printf 'removing %s to re-enumerate the eGPU tunnel\n' "$_rt_bridge"
     echo 1 > "/sys/bus/pci/devices/$_rt_bridge/remove"
     sleep 2
     echo 1 > /sys/bus/pci/rescan
+    # give the kernel time to finish assigning the bridge windows before anyone asks for a big BAR:
+    # asking 3 seconds after the rescan was refused, while the same request succeeded later
+    for _rt_i in $(seq 1 20); do [ -e "$GDEV" ] && break; sleep 1; done
+    sleep 5
+    rm -f /run/nvegpu/deliberate-removal
     ;;
   rescan)
     [ "$#" -eq 0 ] || die "rescan takes no arguments"

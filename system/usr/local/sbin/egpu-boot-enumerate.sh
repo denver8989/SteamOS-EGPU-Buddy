@@ -121,7 +121,12 @@ if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gp
   # bridge windows were sized at boot for the BARs the device already had), re-enumerate the
   # tunnel so the kernel sizes them again the way it does for a hot-plug, and ask once more.
   for _ in $(seq 1 15); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
-  if _out=$("$PRIV" resize 14 2>&1); then
+  _first=0
+  for _try in 1 2 3; do
+    if _out=$("$PRIV" resize 14 2>&1); then _first=1; break; fi
+    sleep 2
+  done
+  if [ "$_first" = 1 ]; then
     log "BAR1 resized while driverless -> $(bar1_mib "$gpu")MiB"
   else
     log "BAR1 resize refused: ${_out:-no reason given}"
@@ -130,11 +135,17 @@ if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gp
       for _ in $(seq 1 20); do [ -e "/sys/bus/pci/devices/$gpu" ] && break; sleep 1; done
       for _ in $(seq 1 10); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
       if [ -e "/sys/bus/pci/devices/$gpu" ] && [ ! -L "/sys/bus/pci/devices/$gpu/driver" ]; then
-        if _out=$("$PRIV" resize 14 2>&1); then
-          log "BAR1 resized after re-enumeration -> $(bar1_mib "$gpu")MiB"
-        else
-          log "BAR1 still refused after re-enumeration: ${_out:-no reason given}"
-        fi
+        # Keep asking: the kernel finishes assigning the re-enumerated bridge windows a few seconds
+        # after the device reappears. Asking once, immediately, was refused — and the SAME request
+        # succeeded a minute later on the same machine, which is how 256MiB got mistaken for normal.
+        _done=0
+        for _try in $(seq 1 10); do
+          if _out=$("$PRIV" resize 14 2>&1); then
+            log "BAR1 resized after re-enumeration (attempt $_try) -> $(bar1_mib "$gpu")MiB"; _done=1; break
+          fi
+          sleep 2
+        done
+        [ "$_done" = 1 ] || log "BAR1 still refused after 20s of retries: ${_out:-no reason given}"
       else
         log "the eGPU did not come back driverless after re-enumeration"
       fi
