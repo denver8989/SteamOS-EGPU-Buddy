@@ -1,3 +1,18 @@
+0.7.54 — uninstall is reachable with the eGPU unplugged.
+
+There was no way to uninstall without the eGPU connected. The uninstall button lives in the setup panel, which was two
+presses deep behind a button that cycles main -> details -> setup — and the details page in between rendered **nothing
+at all** when there was no eGPU status to show. So with the eGPU unplugged, the trail went: main page with no uninstall,
+then an apparently empty page, and most people stop there.
+
+Unplugged is precisely the state you are told to uninstall in.
+
+- The main page now has **"Setup, updates & uninstall"**, one press, always present, whatever the eGPU is doing.
+- The details page no longer comes up blank without an eGPU: it says so, and points at where setup lives.
+
+The uninstall button itself was never gated on the eGPU — only on something being installed — so nothing else had to
+change. It simply could not be found.
+
 0.7.53 — one clean restart to finish an update, not a sequence of them.
 
 0.7.52 stopped demanding a detach, but left the update to land "on the next reboot" — which in practice meant a plugin

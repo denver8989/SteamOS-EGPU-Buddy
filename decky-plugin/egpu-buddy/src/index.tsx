@@ -32,7 +32,7 @@ const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
-const PLUGIN_VERSION = "0.7.53";
+const PLUGIN_VERSION = "0.7.54";
 
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 // The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
@@ -105,6 +105,11 @@ function Content() {
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => setTab(tab === "main" ? "details" : tab === "details" ? "setup" : "main")}>{tab === "main" ? "Show details" : tab === "details" ? "Show setup & updates" : "Back to main"}</ButtonItem>
         </PanelSectionRow>
+        {tab !== "setup" && (
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => setTab("setup")}>Setup, updates &amp; uninstall</ButtonItem>
+          </PanelSectionRow>
+        )}
       </PanelSection>
       {tab === "main" && (
         <PanelSection title="eGPU">
@@ -157,6 +162,11 @@ function Content() {
           {msg && <PanelSectionRow><div style={{ fontSize: "12px" }}>{msg}</div></PanelSectionRow>}
           <PanelSectionRow><ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => run(() => checkUpdate(false))}>Check for updates</ButtonItem></PanelSectionRow>
           <PanelSectionRow><div style={{ fontSize: "11px", opacity: 0.7 }}>EGPU Buddy {PLUGIN_VERSION}{su && !su.installed_version ? " · not installed" : ""} · {up ? (up.available ? `update ${up.available} available` : up.checked ? "up to date" : "update check pending") : "…"}{up?.auto_update ? " · auto-update on" : " · auto-update off"}</div></PanelSectionRow>
+        </PanelSection>
+      )}
+      {tab === "details" && !s && (
+        <PanelSection title="eGPU details">
+          <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>No eGPU connected. Setup, updates and uninstall are still available above.</div></PanelSectionRow>
         </PanelSection>
       )}
       {tab === "details" && s && (
