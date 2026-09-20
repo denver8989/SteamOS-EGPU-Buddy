@@ -168,14 +168,19 @@ runuser -u deck -- env $RUNENV bash -c 'for h in /etc/nv-egpu-buddy/hooks.d/post
 # (steam_msg.sh + zenity) on screen AFTER the cleanup above has run. The pattern is bracketed so it
 # cannot match this command line - an unbracketed pkill -f killed the caller once.
 if [ "$GM" = 0 ]; then
-  ( sleep 20
-    if runuser -u deck -- pgrep -f "steam_[m]sg.sh" >/dev/null 2>&1; then
+  # POLL, do not check once: measured, the dialog appeared ~40s after the disconnect, well after a
+  # single check at 20s had already passed. Watch for 2 minutes and act the moment it shows up.
+  ( for _i in $(seq 1 24); do
+      sleep 5
+      runuser -u deck -- pgrep -f "steam_[m]sg.sh" >/dev/null 2>&1 || continue
       runuser -u deck -- pkill -f "steam_[m]sg.sh" 2>/dev/null
       runuser -u deck -- pkill -x zenity 2>/dev/null
       runuser -u deck -- pkill -x steam 2>/dev/null
-      sleep 2
+      runuser -u deck -- pkill -x steamwebhelper 2>/dev/null
+      sleep 3
       runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-late-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
-      log "cleared a late Steam X-error dialog and restarted Steam once"
-    fi ) &
+      log "cleared a late Steam X-error dialog (after ${_i}x5s) and restarted Steam once"
+      break
+    done ) &
 fi
 log "DONE"
