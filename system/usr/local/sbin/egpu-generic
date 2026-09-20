@@ -13,6 +13,25 @@ U=$(id -u "$UN" 2>/dev/null) || { echo "cannot resolve the desktop user"; exit 1
 RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
 PANEL=$(ls -d /sys/class/drm/card[0-9]*-eDP-* 2>/dev/null | head -1); PANEL=${PANEL##*/card[0-9]-}; PANEL=${PANEL:-eDP-1}
 ST=/run/nvegpu; mkdir -p $ST; LOG=/var/log/egpu-generic.log
+PRIV=/usr/local/sbin/nv-egpu-buddy-privileged
+
+# THE PLATFORM FIXES ARE NOT NVIDIA FIXES. The AMD SoC resets the machine instantly on an
+# unrecoverable interconnect error - a "data fabric sync flood", 0x08000800 - and PCIe tunnelling
+# between an AMD USB4 host and a Thunderbolt peripheral is a documented trigger for it. Nothing about
+# that depends on who made the graphics card, so an AMD or Intel eGPU on this hardware is exposed to
+# exactly the same instant reboot as an NVIDIA one. Apply the same mitigations here:
+#   - keep the USB4 root ports out of runtime suspend (they otherwise drop the tunnel)
+#   - mask AER surprise-down and the tunnel ports' fatal errors, so a cable pull reports instead of
+#     escalating to the fabric
+#   - clear any latched DPC containment left by a previous event
+# They are all config-space operations on the bridges and are vendor-neutral by construction.
+platform_guards(){
+  [ -x "$PRIV" ] || return 0
+  "$PRIV" pin-tunnel-ports on  2>/dev/null | while read -r l; do log "tunnel port: $l"; done
+  "$PRIV" mask-tunnel-ports    2>/dev/null | while read -r l; do log "tunnel port: $l"; done
+  "$PRIV" mask-surprise-down   2>/dev/null | while read -r l; do log "$l"; done
+  "$PRIV" dpc-off >/dev/null 2>&1 || true
+}
 log(){ printf '%s %s: %s\n' "$(date '+%F %T')" "${verb:-?}" "$*" >> "$LOG"; }
 status(){ printf '{"state":"%s","message":"%s"}\n' "$1" "$2" > $ST/gm-status.json; }
 as_deck(){ runuser -u "$UN" -- env $RUNENV "$@"; }
@@ -44,6 +63,9 @@ logout_plasma(){ as_deck qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logo
 
 case "$verb" in
 attach)
+  # platform guards first: the tunnel must be awake and its fatal errors masked BEFORE the card is
+  # touched, or a link event during bring-up can take the whole machine down with a fabric flood.
+  platform_guards
   [ -e $PENDING ] && { log "skip: detach in progress"; exit 0; }
   read -r bdf vendor card < <(egpu_find) || { log "no eGPU on the bus"; exit 0; }
   [ "$vendor" != nvidia ] || exit 0                       # NVIDIA has its own path

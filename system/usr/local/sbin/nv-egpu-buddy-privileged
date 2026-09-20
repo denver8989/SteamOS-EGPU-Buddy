@@ -17,7 +17,30 @@ detect_nvidia_gpu_bdf() {
   done | sort -V | head -n 1
 }
 
+# Fallback for a NON-NVIDIA eGPU (AMD, Intel). NVIDIA is still preferred above, so a machine with an
+# NVIDIA eGPU behaves exactly as before - this only answers when there is no NVIDIA card to find.
+# The rule is the one the safety guard already uses: a display-class PCI device that is NOT the one
+# driving the built-in panel. It matters because the platform fixes this helper performs - masking
+# surprise-down and AER on the tunnel, keeping the USB4 root ports awake, clearing DPC - are fixes for
+# the AMD SoC data-fabric sync flood, not for NVIDIA. Any eGPU on this hardware needs them.
+detect_any_egpu_bdf() {
+  local dev class panel internal=""
+  for panel in /sys/class/drm/card*-eDP-*; do
+    [ -e "$panel" ] || continue
+    internal=$(readlink -f "${panel%-eDP-*}/device" 2>/dev/null) && internal=${internal##*/}
+    break
+  done
+  for dev in /sys/bus/pci/devices/*; do
+    [ "$(basename "$dev")" != "$internal" ] || continue
+    class=$(cat "$dev/class" 2>/dev/null || true)
+    case "$class" in
+      0x0300*|0x0302*|0x0380*) basename "$dev" ;;
+    esac
+  done | sort -V | head -n 1
+}
+
 GPU=${EGPU_GPU_BDF:-${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}}
+GPU=${GPU:-$(detect_any_egpu_bdf)}
 [ -n "$GPU" ] || GPU=0000:62:00.0
 AUD=${EGPU_AUDIO_BDF:-${GPU%.*}.1}
 GDEV=/sys/bus/pci/devices/$GPU

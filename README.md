@@ -56,6 +56,15 @@ from a terminal:
 ./install.sh --amd
 ```
 
+**A note on the instant-reboot problem, because it is not an NVIDIA problem.** The AMD SoC resets the
+machine the moment it hits an unrecoverable interconnect error — a *data fabric sync flood*, `0x08000800`
+— and PCIe tunnelling between an AMD USB4 host and a Thunderbolt peripheral is a documented trigger.
+None of that depends on who made the graphics card, so an AMD or Intel eGPU on this hardware is exposed
+to exactly the same instant reboot as an NVIDIA one. The mitigations are therefore applied on the
+non-NVIDIA path too: the USB4 root ports are kept out of runtime suspend, AER surprise-down and the
+tunnel ports' fatal errors are masked so a cable pull reports instead of escalating, and any latched DPC
+containment is cleared. They are config-space operations on the bridges, vendor-neutral by construction.
+
 **This has never been run on real AMD or Intel eGPU hardware.** The non-NVIDIA attach/detach path
 (`egpu-generic`, udev rule 96) was written from the kernel's behaviour, not from a bench. It is kept
 completely separate from the NVIDIA path, so it cannot affect a working NVIDIA install — but it is
