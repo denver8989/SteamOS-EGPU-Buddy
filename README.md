@@ -45,12 +45,9 @@ been on the bench; it falls through to the default path, which may or may not su
 | Cable pull in Game Mode → stays in Game Mode | yes | yes |
 | Cable pull on the Desktop → returns to the Desktop | yes | yes |
 | Audio follows the eGPU output and returns on detach | yes | yes |
-| Rendering performance validated | yes | **no** — see below |
 
-The RTX 3080 used for this work has a faulty on-board power sensor: it reports a constant ~400 W at idle
-against a 320 W limit, so the driver holds its clocks at the floor. That is a defect of that individual
-card, not of the driver or of this project — it mounts, drives the display, and behaves correctly through
-every attach and detach path above, but it cannot be used to make performance claims.
+No benchmarks or performance figures are published for any card here. This project is about whether the eGPU
+attaches, renders, survives a cable pull and comes back — not about how fast it is.
 
 ## What you get
 

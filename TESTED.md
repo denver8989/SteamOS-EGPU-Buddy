@@ -21,10 +21,8 @@ Verified on that rig in one session:
   re-enabled as an output, and Steam comes back on its own
 - audio moves to the eGPU output on attach and back on detach
 
-Not verified on that rig: rendering performance. The RTX 3080 used has a faulty on-board power sensor (a constant
-~400 W reported at idle against a 320 W limit), so the driver pins its clocks at the floor. That is a defect of that
-individual card — it mounts, drives the display and survives every attach/detach path above — but no performance
-claim can be made from it.
+No benchmarks or performance figures are recorded for any rig: what is tracked here is whether the eGPU attaches,
+renders, survives a cable pull and comes back.
 
 ## Earlier: the reference rig
 
