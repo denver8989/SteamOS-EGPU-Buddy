@@ -152,6 +152,7 @@ log "dock authorized: $dock"
 
 # Keep the tunnel ports awake BEFORE looking for the GPU (see pin-tunnel-ports in the helper).
 "$PRIV" pin-tunnel-ports on 2>/dev/null | while read -r _l; do log "tunnel port: $_l"; done
+"$PRIV" mask-tunnel-ports 2>/dev/null | while read -r _l; do log "tunnel port: $_l"; done
 gpu=$(find_gpu || true)
 if [ -z "$gpu" ]; then
   # Gentle first. A card that was just powered on needs longer to train its link than one that was
@@ -239,6 +240,14 @@ egpu_is_ampere_consumer(){
 # A surprise removal leaves the nvidia modules loaded (kernel-internal refs); the re-enumerated GPU then
 # auto-binds before we can FLR it and nvkms display init fails (Xid 56, 2026-09-11). Unbind (GPU + audio fn)
 # so the driverless FLR below runs, then the normal load/bind follows.
+# ...but ONLY a GPU that is bound and NOT working. The marker never expires, and the display driver
+# coming up fires this hook again through udev: with a marker left over from an earlier unplug, the
+# hook unbound a healthy GPU 0.3s after nvidia-drm had initialised it (seen on an RTX 3080, and
+# nothing about it is specific to that card). A GPU with a DRM card is not stale.
+if [ -L "$GDEV/driver" ] && [ -e /run/nvegpu/surprise-pending ] && compgen -G "$GDEV/drm/card*" >/dev/null 2>&1; then
+  log "driver is bound AND has a DRM card: the GPU is working — clearing the stale surprise marker, not unbinding"
+  rm -f /run/nvegpu/surprise-pending
+fi
 if [ -L "$GDEV/driver" ] && [ -e /run/nvegpu/surprise-pending ]; then
   log "stale-bound after a surprise removal -> unbind for a driverless FLR"
   _aud="${gpu%.*}.1"; [ -L "/sys/bus/pci/devices/$_aud/driver" ] && echo "$_aud" > "/sys/bus/pci/devices/$_aud/driver/unbind" 2>/dev/null
@@ -250,8 +259,8 @@ EGPU_SKIP_LINKPIN=0; EGPU_SKIP_REBAR=0; EGPU_SKIP_FLR=0
 # and this one logged nothing at all while the steps it was meant to skip ran anyway
 log "card check: gpu='${gpu:-unset}' id=$(cat "/sys/bus/pci/devices/${gpu:-none}/device" 2>/dev/null || echo unreadable)"
 if egpu_is_ampere_consumer "$gpu"; then
-  EGPU_SKIP_LINKPIN=1; EGPU_SKIP_REBAR=1; EGPU_SKIP_FLR=1
-  log "RTX 30 series (GA10x): lean bring-up — no FLR, no ReBAR, no link pin"
+  EGPU_SKIP_LINKPIN=0; EGPU_PIN_CORRECTED=1; EGPU_SKIP_REBAR=1; EGPU_SKIP_FLR=1
+  log "RTX 30 series (GA10x): lean bring-up — no FLR, no ReBAR, corrected Gen3 link pin"
 fi
 if [ ! -L "$GDEV/driver" ] && [ "$EGPU_SKIP_FLR" = 1 ]; then
   # The FLR is what leaves this card decoding nothing: config space still reads, but every MMIO
@@ -336,6 +345,23 @@ fi
 pin_link_speed(){
   # skipped for the cards whose link does not survive it (see egpu_is_ampere_consumer)
   [ "${EGPU_SKIP_LINKPIN:-0}" = 1 ] && { log "LINK-PIN: skipped for this card"; return 0; }
+  if [ "${EGPU_PIN_CORRECTED:-0}" = 1 ]; then
+    # The legacy writes below put 0x003N into Link Control 2. Bit 4 of that register is ENTER
+    # COMPLIANCE, set by mistake (the intent was bit 5 only = 0x002N). A card whose speed change does
+    # not finish inside Recovery falls back through Polling, sees the bit and enters compliance test
+    # mode: link dead, width 63. That is what "this card cannot take a link pin" really was.
+    # Masked writes: touch target speed, CLEAR enter-compliance, set autonomous-speed-disable, and
+    # retrain touching only the retrain bit. Verified on an RTX 3080: 16GT/s -> 8GT/s x4, link up.
+    # (The legacy path is left exactly as it was tested on the RTX 5060 Ti.)
+    local _b _g _gen; _g=${1:-$gpu}; _b=$(basename "$(dirname "$(readlink -f "/sys/bus/pci/devices/$_g")")")
+    _gen=$(cat /etc/nv-egpu-buddy/link-gen 2>/dev/null || echo 3); case "$_gen" in 1|2|3|4|5) ;; *) _gen=3 ;; esac
+    setpci -s "${_b#0000:}" CAP_EXP+30.w=002${_gen}:003f 2>/dev/null || true
+    setpci -s "${_g#0000:}" CAP_EXP+30.w=002${_gen}:003f 2>/dev/null || true
+    setpci -s "${_b#0000:}" CAP_EXP+10.w=0020:0020 2>/dev/null || true
+    sleep 2
+    log "LINK-PIN (corrected): $(lspci -vv -s "${_g#0000:}" 2>/dev/null | grep -oE 'LnkSta:.*' | head -1)"
+    return 0
+  fi
   local gpu_full=$1 gen bridge gpu_s bridge_s
   gen=$(cat /etc/nv-egpu-buddy/link-gen 2>/dev/null || echo 3)
   case "$gen" in 1|2|3|4|5) ;; *) gen=3 ;; esac
@@ -381,6 +407,12 @@ pin_link_speed "$gpu"
 # must un-hide it before the session is restaged, or the login env script leaves KWin on both GPUs (seen 2026-09-18)
 /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1 || true
 mask_surprise_down "$gpu"
+# Debug hold: stop here, with the card enumerated and protected but NO driver loaded, so the link
+# can be inspected and the bring-up done by hand one step at a time. Off unless the flag exists.
+if [ -e /etc/nv-egpu-buddy/hold-before-driver ]; then
+  log "HOLD: /etc/nv-egpu-buddy/hold-before-driver is set — stopping before the driver load"
+  exit 0
+fi
 log "GPU $gpu healthy (cfg=$cfg) — load driver + display stack"
 # Config space answering is not proof the card can be driven: the driver talks to it through BAR0,
 # and a BAR that the kernel has assigned but the HARDWARE register does not hold (lspci marks it
@@ -392,8 +424,14 @@ _bar_hw_addr=$(( 0x${_bar_hw:-0} & ~0xf ))
 if [ -n "$_bar_kn" ] && [ "$_bar_hw_addr" -ne "$(( _bar_kn ))" ]; then
   log "BAR0 MISMATCH: hardware holds 0x$(printf %x "$_bar_hw_addr"), the kernel assigned $_bar_kn — the card cannot decode MMIO like this"
   log "re-enumerating the GPU function so the kernel programs its BARs again"
+  # (a link retrain can bounce the link, and a bounce resets the card's config space: the BARs go
+  #  back to zero while the kernel still believes its own assignment — measured on an RTX 3080)
+  mkdir -p /run/nvegpu; date +%s > /run/nvegpu/deliberate-removal
+  _aud="${gpu%.*}.1"; [ -e "/sys/bus/pci/devices/$_aud" ] && echo 1 > "/sys/bus/pci/devices/$_aud/remove" 2>/dev/null
   echo 1 > "$GDEV/remove" 2>/dev/null; sleep 1; echo 1 > /sys/bus/pci/rescan 2>/dev/null
-  for _ in $(seq 1 15); do [ -e "$GDEV" ] && break; sleep 1; done
+  for _ in $(seq 1 15); do [ -e "$GDEV" ] && break; sleep 1; done; sleep 2
+  rm -f /run/nvegpu/deliberate-removal
+  "$PRIV" mask-surprise-down >/dev/null 2>&1 || true
   _bar_hw=$(setpci -s "${gpu#0000:}" BASE_ADDRESS_0 2>/dev/null)
   log "after re-enumeration: hardware BAR0=0x${_bar_hw:-?} kernel=$(awk 'NR==1{print $1}' "$GDEV/resource" 2>/dev/null)"
 else

@@ -1,3 +1,38 @@
+0.7.67 — the RTX 3080 mounts. Same driver as the 5060 Ti, fully automatic, in a different enclosure.
+
+Verified on a Legion Go (SteamOS 3.8) with an RTX 3080 in an **Aoostar AG03**: plug in, and Game Mode comes up on the
+monitor at 5120x1440@144 with HDR, handheld panel dark, sound on the eGPU — on the same open 610.57.04 driver the
+RTX 5060 Ti uses. No second driver stack. From the machine's own log:
+
+    LINK-PIN (corrected): Speed 8GT/s, Width x4
+    mounted 0000:65:00.0 + display stack ready (DRM card: card1)
+    HEALTH GATE OK: NVML responds        ->  NVIDIA GeForce RTX 3080, 10240 MiB, Gen 3, x4
+
+Getting there took finding five separate faults, every one of them in this project rather than in the card:
+
+- **The link pin set the wrong bit.** It wrote `0x003N` to Link Control 2; bit 4 of that register is *Enter
+  Compliance*, set by mistake (the intent was bit 5 alone, `0x002N`). A card whose speed change does not finish inside
+  Recovery falls back through Polling, sees the bit and enters compliance test mode — link dead, width 63. "This card
+  cannot take a link pin" was never true. The corrected pin (masked writes, compliance cleared) holds Gen3 x4.
+- **A link bounce wipes the card's BARs and nobody told the kernel.** The hardware BAR0 register read `00000000` while
+  the kernel still believed `0x60000000`; every MMIO read failed and the driver reported the GPU had "fallen off the
+  bus". The attach now compares the two and re-enumerates the GPU when they differ.
+- **The hook unbound a healthy GPU.** A marker left by an earlier unplug never expires, and nvidia-drm coming up fires
+  the hook again through udev — which then "recovered" a working card 0.3 seconds after it initialised. A GPU with a
+  DRM card is never treated as stale now. This one is not specific to any card.
+- **The AMD USB4 tunnel ports were asleep** (`control=auto, suspended`) — a documented fault on exactly this pairing,
+  AMD Phoenix `1022:14ef` + Intel JHL9480 (CachyOS/linux-cachyos#1057). They are pinned awake while an eGPU is in use
+  and released afterwards, and the host ports are masked against fatal errors *before* the card arrives, not after.
+- **Re-authorizing the enclosure was the first resort** when a cold card was slow to appear — a software cable pull, on
+  a root port whose fatal bits cannot be masked. It now waits with gentle rescans first.
+
+Also: the installer now flushes to disk before it says done. A machine that hard-reset 40 seconds after an install
+came back with a zero-byte privileged helper — and an empty script succeeds at everything, silently.
+
+**Scoped on purpose.** The lean bring-up and the corrected pin apply to Ampere consumer ids only (`0x22xx`-`0x25xx`).
+The RTX 5060 Ti path is byte-for-byte what was tested — including the legacy pin value, which works there only because
+that card's speed change completes before the bad bit is ever evaluated. It should be corrected too, after a test.
+
 0.7.66 — a card that resets the machine no longer causes a boot loop.
 
 A GPU that floods the data fabric during bring-up takes the machine down again the moment the next boot touches it. The

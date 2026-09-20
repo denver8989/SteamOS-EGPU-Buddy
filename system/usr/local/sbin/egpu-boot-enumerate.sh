@@ -69,6 +69,7 @@ clear_dpc_status(){   # clear any latched DPC containment status on the USB4 roo
 log "=== boot-enumerate (lean) start ==="
 dock_present || { log "no TB dock — iGPU boot"; exit 0; }
 "$PRIV" pin-tunnel-ports on 2>/dev/null | while read -r _l; do log "tunnel port: $_l"; done
+"$PRIV" mask-tunnel-ports 2>/dev/null | while read -r _l; do log "tunnel port: $_l"; done
 
 gpu=$(find_gpu || true)
 # A Thunderbolt device is not an eGPU: docks, displays and storage enclosures all

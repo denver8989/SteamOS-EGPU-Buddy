@@ -272,6 +272,31 @@ case "$action" in
     [ "$#" -eq 0 ] || die "status takes no arguments"
     gpu_state
     ;;
+  mask-tunnel-ports)
+    # The same protection as mask-surprise-down, but for the HOST tunnel root ports alone, which
+    # exist whether or not anything is plugged in. mask-surprise-down needs the GPU on the bus, so
+    # until now the root ports were unprotected during the riskiest moment of all: plug-in, tunnel
+    # set-up and link training, before any GPU has enumerated. Ports with DPC are left alone.
+    [ "$#" -eq 0 ] || die "mask-tunnel-ports takes no arguments"
+    for _mtp in $(lspci -Dn 2>/dev/null | awk '$1 ~ /^[0-9a-f]{4}:00:/ && $2 ~ /^0604:/ {print $1}'); do
+      lspci -s "$_mtp" 2>/dev/null | grep -qiE 'usb4|thunderbolt' || continue
+      _mtp_off=0x100; _mtp_aer=""; _mtp_dpc=0
+      for _ in $(seq 1 48); do
+        _mtp_v=$(setpci -s "$_mtp" "$_mtp_off".l 2>/dev/null) || break
+        _mtp_id=$(( 0x$_mtp_v & 0xffff )); _mtp_nxt=$(( (0x$_mtp_v >> 20) & 0xffc ))
+        [ "$_mtp_id" -eq 29 ] && _mtp_dpc=1
+        [ "$_mtp_id" -eq 1 ] && _mtp_aer=$_mtp_off
+        [ "$_mtp_nxt" -eq 0 ] && break; _mtp_off=$(printf 0x%x "$_mtp_nxt")
+      done
+      [ "$_mtp_dpc" = 1 ] && { printf '%s: has DPC, left alone\n' "$_mtp"; continue; }
+      [ -n "$_mtp_aer" ] || { printf '%s: no AER capability\n' "$_mtp"; continue; }
+      setpci -s "$_mtp" "$(printf 0x%x $((_mtp_aer+0x08)))".l=ffffffff 2>/dev/null
+      setpci -s "$_mtp" "$(printf 0x%x $((_mtp_aer+0x0c)))".l=00000000 2>/dev/null
+      printf '%s: masked (UEMsk=%s UESvrt=%s)\n' "$_mtp" \
+        "$(setpci -s "$_mtp" "$(printf 0x%x $((_mtp_aer+0x08)))".l 2>/dev/null)" \
+        "$(setpci -s "$_mtp" "$(printf 0x%x $((_mtp_aer+0x0c)))".l 2>/dev/null)"
+    done
+    ;;
   pin-tunnel-ports)
     # AMD USB4 tunnel root ports runtime-suspend while a Thunderbolt 5 (Intel JHL9480) device is
     # connected, and the PCIe hierarchy behind them then fails to appear — documented on exactly

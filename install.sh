@@ -116,6 +116,15 @@ fi
 # into a read-only overlay: a second install then fails with "Read-only file system" (seen on a real device, 0.7.21).
 # So: unmerge for the duration of the install, and merge again on EVERY way out. Not while the driver is in use.
 SYSEXT_TOOL="$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
+# SteamOS keeps the system partition read-only. The Decky plugin disables that around the install,
+# but running this script directly (from the .run, or by hand) did not — it unmerged the driver
+# extension, started writing, and failed at the first file with "Read-only file system", leaving a
+# half-installed system. Do it here so every route works the same way.
+if command -v steamos-readonly >/dev/null 2>&1 && [ "$(steamos-readonly status 2>/dev/null)" = enabled ]; then
+  say "== SteamOS: making the system partition writable for the install"
+  sudo steamos-readonly disable >/dev/null 2>&1 || true
+  trap 'sudo steamos-readonly enable >/dev/null 2>&1 || true' EXIT
+fi
 if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/mounts 2>/dev/null; then
   # "the driver is loaded" is not the same as "the eGPU is in use". A machine that booted with the
   # eGPU attached has the modules loaded with nothing using them, and refusing there meant the only
@@ -318,4 +327,9 @@ if [ "${CMDLINE_MISSING:-0}" = 1 ]; then
 fi
 # SteamOS has no NVIDIA driver of its own: without the extension the eGPU cannot work at all, so this is not a "done"
 if [ "${DRIVER_FAILED:-0}" = 1 ]; then say "== NOT finished: the NVIDIA driver was not built. Keep the eGPU unplugged and run the install again (needs internet)."; exit 20; fi
+# Flush everything to disk before saying "done". A machine that hard-resets shortly after an install
+# (a fabric flood gives no warning) came back with a ZERO-BYTE privileged helper and boot script: the
+# files had been written but never reached the disk, and an empty script "succeeds" at everything —
+# so no protection was applied and no driver was loaded, with nothing in any log to say why.
+sync
 say "== done. Reboot with the eGPU disconnected, then plug it in. Read TESTED.md before relying on any of this."
