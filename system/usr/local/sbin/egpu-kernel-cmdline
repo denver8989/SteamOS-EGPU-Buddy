@@ -4,8 +4,13 @@
 # --check prints the parameters missing from the RUNNING kernel (exit 1 if any). --apply writes them into the
 # bootloader config (backup kept) and regenerates it; a reboot is needed afterwards.
 set -u
-# hpmemprefsize stays at 16G: the value the RTX 5060 Ti is proven at (it reaches a full 16GiB BAR1
-# at boot). Do not "tune" this without that card connected to retest.
+# hpmemprefsize=8G. This is a PER-EMPTY-HOTPLUG-PORT reserve, not a pool, and a Thunderbolt switch
+# has FOUR downstream ports. The arithmetic that has to fit inside the 64G root-port window:
+#   32G  the port holding the card (a 16GiB BAR1 needs 16GiB alignment, so the window rounds to 32G)
+#  +24G  three empty ports at 8G each
+#   ----
+#   56G  fits, and 0x5c00000000 is 16GiB-aligned so the BAR can start at the bottom of the window.
+# At 16G the empty ports want 48G and the total is 80G, which does not fit. RETEST THE 5060 Ti.
 #
 # Measured on an RTX 3080 behind a JHL9480 Thunderbolt switch, 2026-09-20: this knob is NOT what
 # limits that card's BAR1 to 256MiB. The switch has four downstream ports and the kernel's
@@ -15,7 +20,7 @@ set -u
 # the whole 64G root-port window. Lowering it to 8G shrank the siblings to 512M but the switch's
 # own upstream window came out at 1984M, still short of 16GiB. All four bridges advertise 64-bit
 # prefetchable decode, so the hardware can route it; the allocator will not place it.
-WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=16G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
+WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=8G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
 # The boot-verbosity parameters SteamOS's own configuration carries. Regenerating the GRUB config
 # puts them where steamenv_boot strips them, so we re-add them somewhere it does not touch.
 QUIET="loglevel=3 quiet splash plymouth.ignore-serial-consoles"

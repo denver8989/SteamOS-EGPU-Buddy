@@ -355,7 +355,17 @@ case "$action" in
     # windows firmware assigned, so a resize is refused with ENOSPC; a hot-plugged device gets the
     # reserve from pci=hpmemprefsize instead. Removing only the GPU is not enough — its parent
     # bridge keeps its window — so the bridge below the root port goes, and comes back with it.
-    [ "$#" -eq 0 ] || die "reenumerate-tunnel takes no arguments"
+    # mode "switch" (default) removes the whole Thunderbolt subtree; "endpoint" removes only the
+    # GPU's own functions and leaves the switch — and therefore the LINK — up. That distinction is
+    # the whole game for a resized BAR: removing the switch bounces the tunnel link, and a link
+    # reset returns the card's Resizable BAR control register to its default, so by the time the
+    # kernel sizes the bridge windows the card is asking for its stock BAR again. Measured:
+    #   pcieport 0000:63:00.0: ... cannot fit 0x30000000 required for 0000:64:00.0
+    #   pcieport 0000:64:00.0: bridge window [mem size 0x22000000 64bit pref]: can't assign
+    # 0x22000000 is 512MiB+32MiB — the stock BARs, not the 16GiB that had just been asked for.
+    _rt_mode=${1:-switch}
+    case "$_rt_mode" in switch|port) ;; *) die "reenumerate-tunnel takes switch or port" 2 ;; esac
+    [ "$#" -le 1 ] || die "reenumerate-tunnel takes at most one argument"
     [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing re-enumeration" 2
     _rt_real=$(readlink -f "$GDEV" 2>/dev/null) || die "GPU is not present" 2
     # path looks like /sys/devices/pci0000:00/0000:00:04.1/0000:63:00.0/0000:64:00.0/0000:65:00.0
@@ -377,33 +387,68 @@ case "$action" in
     # Removing the bridge fires a PCI remove event for the GPU, and the udev rule reads that as a
     # cable pull: the surprise-removal recovery then tore the eGPU session down ~90s into boot, with
     # the card still plugged in. Mark the removal as ours for the duration.
-    # Release the memory windows of the switch's EMPTY downstream ports first.
+    # Release the prefetchable window of EVERY bridge in this switch before removing it.
     #
-    # A Thunderbolt switch has four downstream ports and the kernel hands each one a share of the
-    # parent window so that anything plugged in later has somewhere to live. A software remove does
-    # not reprogram those registers, so on the rescan the kernel reads the old values back and adds
-    # them to what the switch must fit. Measured on a JHL9480 with one RTX 3080: the three empty
-    # ports were still holding ~24GiB each, so the switch asked for 88GiB out of a 64GiB root-port
-    # window and the whole re-assignment failed — taking the GPU's BAR with it:
-    #   pci 0000:63:00.0: bridge window [mem size 0x15e7f00000 64bit pref]: can't assign; no space
-    # Parking those windows (base above limit, which is how a disabled bridge window is expressed)
-    # drops the phantom demand. They are empty and the rescan reprograms them from scratch anyway.
-    for _rt_dp in $(find "$_rt_root" -mindepth 1 -maxdepth 2 -name '0000:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f].[0-7]' -printf '%f\n' 2>/dev/null | sort -u); do
-      case "$(cat "/sys/bus/pci/devices/$_rt_dp/class" 2>/dev/null)" in 0x0604*) ;; *) continue ;; esac
-      # a port with anything behind it keeps its window: that is where the eGPU lives
-      compgen -G "$(readlink -f "/sys/bus/pci/devices/$_rt_dp")/0000:*" >/dev/null 2>&1 && continue
-      _rt_pf=$(setpci -s "${_rt_dp#0000:}" 0x24.l 2>/dev/null) || continue
-      # bits 3:0 of each half say whether the window is 64-bit capable — keep them as they are
-      _rt_lo=$(( 0x$_rt_pf & 0xf )); _rt_hi=$(( (0x$_rt_pf >> 16) & 0xf ))
-      setpci -s "${_rt_dp#0000:}" 0x24.l="$(printf %08x $(( (_rt_hi << 16) | 0xfff0 | _rt_lo )))" 2>/dev/null || true
-      setpci -s "${_rt_dp#0000:}" 0x28.l=ffffffff 2>/dev/null || true
-      setpci -s "${_rt_dp#0000:}" 0x2c.l=00000000 2>/dev/null || true
-      printf 'parked the empty downstream port %s so it stops reserving address space\n' "$_rt_dp"
-    done
+    # A software remove does not reprogram bridge window registers, so on the rescan the kernel
+    # reads the old values straight back and anchors to them instead of sizing around what the card
+    # now asks for. Measured on a JHL9480 with one RTX 3080, at every reserve value tried:
+    #   pci 0000:65:00.0: BAR 1 [mem size 0x400000000 64bit pref]: can't assign; no space
+    # because the port above the card kept its retained 384MiB window — far too small for the 16GiB
+    # the card had just been told to ask for. Parking only the EMPTY ports was not enough; the
+    # occupied port and the switch's own upstream port hold the sizes that matter.
+    #
+    # Parking is expressed the way the spec expresses a disabled window: base above limit. The low
+    # four bits of each half declare 64-bit decode capability and are preserved. Everything here is
+    # about to be removed and re-enumerated, so nothing is left in a half-configured state.
+    _rt_park() {
+      local _p=$1 _v _lo _hi
+      _v=$(setpci -s "${_p#0000:}" 0x24.l 2>/dev/null) || return 0
+      _lo=$(( 0x$_v & 0xf )); _hi=$(( (0x$_v >> 16) & 0xf ))
+      setpci -s "${_p#0000:}" 0x24.l="$(printf %08x $(( (_hi << 16) | 0xfff0 | _lo )))" 2>/dev/null || true
+      setpci -s "${_p#0000:}" 0x28.l=ffffffff 2>/dev/null || true
+      setpci -s "${_p#0000:}" 0x2c.l=00000000 2>/dev/null || true
+      printf 'released the prefetchable window of %s so the kernel sizes it again from scratch\n' "$_p"
+    }
+    if [ "$_rt_mode" = switch ]; then
+      for _rt_dp in $_rt_bridge $(find "$_rt_root" -mindepth 1 -maxdepth 2 -name '0000:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f].[0-7]' -printf '%f\n' 2>/dev/null | sort -u); do
+        case "$(cat "/sys/bus/pci/devices/$_rt_dp/class" 2>/dev/null)" in 0x0604*) ;; *) continue ;; esac
+        _rt_park "$_rt_dp"
+      done
+    fi
     mkdir -p /run/nvegpu 2>/dev/null
     date +%s > /run/nvegpu/deliberate-removal
-    printf 'removing %s to re-enumerate the eGPU tunnel\n' "$_rt_bridge"
-    echo 1 > "/sys/bus/pci/devices/$_rt_bridge/remove"
+    if [ "$_rt_mode" = port ]; then
+      # Remove the DOWNSTREAM PORT the card sits on — not the card, and not the switch.
+      #  - removing the card alone leaves that port's window assigned, so the kernel keeps trying to
+      #    squeeze a 16GiB BAR into the 384MiB it already had;
+      #  - removing the switch tears down the tunnel and resets the link, which throws away the
+      #    card's BAR request before the kernel ever sizes anything.
+      # Removing the port frees its window in the kernel AND leaves the link to the card untouched.
+      _rt_parent=$(basename "$(dirname "$_rt_real")")
+      case "$_rt_parent" in
+        0000:*) ;;
+        *) die "could not identify the port above the GPU" 2 ;;
+      esac
+      [ -e "/sys/bus/pci/devices/$_rt_parent/class" ] ||
+        die "the port above the GPU is not a PCI device" 2
+      # ALL of the switch's downstream ports, not just the card's. Freeing one port's window is not
+      # enough: the siblings keep theirs, and their windows fragment the switch's address space so
+      # there is no contiguous, correctly aligned block left for a 16GiB BAR — the kernel reports
+      #   pcieport 0000:64:00.0: bridge window [mem size ...]: can't assign; no space
+      # even with 64GiB sitting in the switch window. Removing them all hands the whole range back
+      # so the kernel can lay it out in one go with the big BAR already in view. The switch itself
+      # stays, so the tunnel link — and the card's BAR request — survive. Empty ports lose nothing
+      # and every port is re-created by the rescan.
+      for _rt_dp in $(find "$_rt_root" -mindepth 1 -maxdepth 1 -name '0000:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f].[0-7]' -printf '%f\n' 2>/dev/null | sort -ur); do
+        case "$(cat "/sys/bus/pci/devices/$_rt_dp/class" 2>/dev/null)" in 0x0604*) ;; *) continue ;; esac
+        [ -e "/sys/bus/pci/devices/$_rt_dp/remove" ] || continue
+        printf 'removing downstream port %s (switch and link stay up)\n' "$_rt_dp"
+        echo 1 > "/sys/bus/pci/devices/$_rt_dp/remove"
+      done
+    else
+      printf 'removing %s to re-enumerate the eGPU tunnel\n' "$_rt_bridge"
+      echo 1 > "/sys/bus/pci/devices/$_rt_bridge/remove"
+    fi
     sleep 2
     echo 1 > /sys/bus/pci/rescan
     # give the kernel time to finish assigning the bridge windows before anyone asks for a big BAR:
@@ -411,6 +456,9 @@ case "$action" in
     for _rt_i in $(seq 1 20); do [ -e "$GDEV" ] && break; sleep 1; done
     sleep 5
     rm -f /run/nvegpu/deliberate-removal
+    # report what the card ends up ASKING for, which is the thing that decides the window size
+    _rt_bar=$(cat "$GDEV/resource" 2>/dev/null | sed -n 2p | awk '{printf "%d", (strtonum("0x"$2)-strtonum("0x"$1)+1)/1048576}')
+    printf 'after re-enumeration the card holds BAR1 %sMiB\n' "${_rt_bar:-0}"
     ;;
   rescan)
     [ "$#" -eq 0 ] || die "rescan takes no arguments"

@@ -145,6 +145,14 @@ try:
 except Exception: print(0)
 EOF
 }
+# Stop the kernel binding a driver behind our back for the whole of the BAR work. udev autoloads
+# nvidia the moment the device appears and it kept winning the race between the steps below — the
+# register write would land and the re-enumeration a fraction of a second later was refused with
+# "GPU has a bound driver". Unbinding after the fact is worse than not binding at all, because the
+# driver's own remove path can reset the card and take the BAR request with it. Restored to 1
+# immediately after, and the driver is then loaded deliberately.
+_autoprobe_was=$(cat /sys/bus/pci/drivers_autoprobe 2>/dev/null || echo 1)
+echo 0 > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true
 if [ "$EGPU_SKIP_RESIZE" = 1 ]; then
   log "BAR resize skipped for this card (BAR1 left as the firmware set it)"
 elif [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
@@ -196,13 +204,22 @@ elif [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
     take_card_back || true
     if _rset=$("$PRIV" rebar-set "$_max" 2>&1); then
       log "asked the card directly for its largest BAR1 — $_rset"
-      if _rout=$("$PRIV" reenumerate-tunnel 2>&1); then
+      # endpoint mode: remove only the GPU, leave the switch and the tunnel LINK up, so the card
+      # keeps the big BAR request it was just given. Removing the switch resets the link and the
+      # request with it.
+      if _rout=$("$PRIV" reenumerate-tunnel port 2>&1); then
+        # log what it actually did, not just that it returned 0: the parking of the empty ports and
+        # the removal are the steps that decide whether the big BAR can be placed
+        printf '%s\n' "$_rout" | while read -r _rl; do [ -n "$_rl" ] && log "  re-enum: $_rl"; done
         for _ in $(seq 1 20); do [ -e "/sys/bus/pci/devices/$gpu" ] && break; sleep 1; done
         # The device node appears while the kernel is still assigning resources, so reading the BAR
         # straight away reports 0 and the back-down below then throws away a resize that was about
         # to succeed. Wait for the BAR to actually be placed.
         for _ in $(seq 1 15); do [ "$(bar1_mib "$gpu")" -gt 0 ] 2>/dev/null && break; sleep 1; done
         _mib_now=$(bar1_mib "$gpu")
+        journalctl -k --since "-90 seconds" --no-pager 2>/dev/null |
+          grep -iE "can.t assign|failed to assign|cannot fit|bridge window .*(pref|63:00|64:00)" |
+          tail -8 | sed 's/^.*kernel: //' | while read -r _kl; do log "  kernel: $_kl"; done
         log "after re-enumeration: BAR1 ${_mib_now}MiB, window above the card $(cat /sys/bus/pci/devices/$gpu/resource 2>/dev/null | sed -n 2p | cut -c1-40)"
         # 0MiB means the kernel could not place it at all and the card has no usable BAR1: that is
         # worse than the stock size, so put the request back and re-enumerate once more.
@@ -231,6 +248,7 @@ elif [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
   fi
 fi
 
+echo "${_autoprobe_was:-1}" > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true
 log "eGPU at $gpu — load driver (FLR done, BAR1 $(bar1_mib "$gpu")MiB)"
 "$PRIV" load-nvidia >/dev/null 2>&1 || true
 [ -L "/sys/bus/pci/devices/$gpu/driver" ] || "$PRIV" bind-nvidia >/dev/null 2>&1 || true
