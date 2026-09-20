@@ -4,11 +4,13 @@
 # --check prints the parameters missing from the RUNNING kernel (exit 1 if any). --apply writes them into the
 # bootloader config (backup kept) and regenerates it; a reboot is needed afterwards.
 set -u
-# A 16GiB BAR1 often cannot be placed at boot (the kernel answers ENOSPC, "No space left on
-# device"): it must be 16GiB-aligned and shares the hotplug window with the GPU's other BARs.
-# That is a PERFORMANCE limit only — nothing gates on the BAR size any more — so this stays at
-# the value that has always been shipped rather than growing the reservation on a guess.
-WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=16G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
+# hpmemprefsize=32G, measured rather than guessed. A 16GiB BAR1 must be 16GiB-aligned AND shares
+# the hotplug prefetchable window with the card's other prefetchable BARs, so it does not fit in a
+# reserve of exactly 16G. On an RTX 3080 the card accepted a 16GB request and the kernel then said
+#   pci 0000:65:00.0: BAR 1 [mem size 0x400000000 64bit pref]: can't assign; no space
+# with the window at 16G. Doubling the reserve gives the bar somewhere to land. Costs nothing on a
+# machine with no eGPU: it only sizes hotplug bridge windows in address space, not memory.
+WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=32G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
 # The boot-verbosity parameters SteamOS's own configuration carries. Regenerating the GRUB config
 # puts them where steamenv_boot strips them, so we re-add them somewhere it does not touch.
 QUIET="loglevel=3 quiet splash plymouth.ignore-serial-consoles"

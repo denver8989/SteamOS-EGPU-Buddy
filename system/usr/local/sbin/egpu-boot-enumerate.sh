@@ -109,8 +109,12 @@ egpu_is_ampere_consumer(){
 EGPU_SKIP_FLR=0; EGPU_SKIP_RESIZE=0
 log "card check: gpu='${gpu:-unset}' id=$(cat "/sys/bus/pci/devices/${gpu:-none}/device" 2>/dev/null || echo unreadable)"
 if egpu_is_ampere_consumer "$gpu"; then
-  EGPU_SKIP_FLR=1; EGPU_SKIP_RESIZE=1
-  log "RTX 30 series (GA10x): lean boot bring-up — no FLR, no BAR resize"
+  # No FLR (it stops this card answering on MMIO), but DO try the bar: boot is the only moment the
+  # kernel sizes bridge windows around what the card asks for. A hot-plugged card cannot grow an
+  # already-assigned window — measured: "can't assign; no space" every time, however it was asked.
+  # The back-down below covers the case where a big bar stops the driver initialising.
+  EGPU_SKIP_FLR=1; EGPU_SKIP_RESIZE=0
+  log "RTX 30 series (GA10x): lean boot bring-up — no FLR, BAR resize attempted (backs down if the driver refuses)"
 fi
 
 # FLR while driverless — NOT ReBAR. The manual egpu-attach.sh (the path that produced the known-good
