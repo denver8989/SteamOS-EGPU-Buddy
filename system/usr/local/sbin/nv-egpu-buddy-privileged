@@ -377,6 +377,29 @@ case "$action" in
     # Removing the bridge fires a PCI remove event for the GPU, and the udev rule reads that as a
     # cable pull: the surprise-removal recovery then tore the eGPU session down ~90s into boot, with
     # the card still plugged in. Mark the removal as ours for the duration.
+    # Release the memory windows of the switch's EMPTY downstream ports first.
+    #
+    # A Thunderbolt switch has four downstream ports and the kernel hands each one a share of the
+    # parent window so that anything plugged in later has somewhere to live. A software remove does
+    # not reprogram those registers, so on the rescan the kernel reads the old values back and adds
+    # them to what the switch must fit. Measured on a JHL9480 with one RTX 3080: the three empty
+    # ports were still holding ~24GiB each, so the switch asked for 88GiB out of a 64GiB root-port
+    # window and the whole re-assignment failed — taking the GPU's BAR with it:
+    #   pci 0000:63:00.0: bridge window [mem size 0x15e7f00000 64bit pref]: can't assign; no space
+    # Parking those windows (base above limit, which is how a disabled bridge window is expressed)
+    # drops the phantom demand. They are empty and the rescan reprograms them from scratch anyway.
+    for _rt_dp in $(find "$_rt_root" -mindepth 1 -maxdepth 2 -name '0000:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f].[0-7]' -printf '%f\n' 2>/dev/null | sort -u); do
+      case "$(cat "/sys/bus/pci/devices/$_rt_dp/class" 2>/dev/null)" in 0x0604*) ;; *) continue ;; esac
+      # a port with anything behind it keeps its window: that is where the eGPU lives
+      compgen -G "$(readlink -f "/sys/bus/pci/devices/$_rt_dp")/0000:*" >/dev/null 2>&1 && continue
+      _rt_pf=$(setpci -s "${_rt_dp#0000:}" 0x24.l 2>/dev/null) || continue
+      # bits 3:0 of each half say whether the window is 64-bit capable — keep them as they are
+      _rt_lo=$(( 0x$_rt_pf & 0xf )); _rt_hi=$(( (0x$_rt_pf >> 16) & 0xf ))
+      setpci -s "${_rt_dp#0000:}" 0x24.l="$(printf %08x $(( (_rt_hi << 16) | 0xfff0 | _rt_lo )))" 2>/dev/null || true
+      setpci -s "${_rt_dp#0000:}" 0x28.l=ffffffff 2>/dev/null || true
+      setpci -s "${_rt_dp#0000:}" 0x2c.l=00000000 2>/dev/null || true
+      printf 'parked the empty downstream port %s so it stops reserving address space\n' "$_rt_dp"
+    done
     mkdir -p /run/nvegpu 2>/dev/null
     date +%s > /run/nvegpu/deliberate-removal
     printf 'removing %s to re-enumerate the eGPU tunnel\n' "$_rt_bridge"
@@ -427,6 +450,61 @@ case "$action" in
     [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing resize" 2
     [ -e "$GDEV/resource1_resize" ] || die "BAR1 resize control is absent" 2
     echo "$1" > "$GDEV/resource1_resize"
+    ;;
+  rebar-set)
+    # Write the Resizable-BAR control register for BAR1 DIRECTLY, rather than asking the kernel via
+    # /sys/.../resource1_resize.
+    #
+    # Why both exist: the sysfs path asks the KERNEL to resize, and it refuses with ENOSPC unless
+    # the bridge window immediately above the card is already big enough. Behind a Thunderbolt
+    # tunnel it never is. That window gets sized around whatever the card asked for at enumeration
+    # — measured on an RTX 3080: 384MiB above a 256MiB BAR, with 64GiB sitting free at the root port
+    # one level up — and the kernel re-assigns it at the SAME size when asked to resize. Removing
+    # and rescanning the tunnel does not help either: on rescan the card still asks for 256MiB, so
+    # the window comes back 384MiB again.
+    #
+    # So change what the CARD ASKS FOR first, then re-enumerate: the kernel sizes the window around
+    # a 16GiB request and takes the space from the reserve above (pci=hpmemprefsize). The register
+    # survives a software remove/rescan because nothing resets the device.
+    #
+    # This leaves the kernel's view of the BAR stale by design, so it is only ever half a job:
+    # ALWAYS follow it with reenumerate-tunnel.
+    [ "$#" -eq 1 ] || die "rebar-set requires one size code"
+    case "$1" in ''|*[!0-9]*) die "rebar-set takes a size code" 2 ;; esac
+    [ "$1" -le 31 ] || die "rebar-set code $1 is out of range" 2
+    _rb_mask=$(cat "$GDEV/resource1_resize" 2>/dev/null)
+    [ -n "$_rb_mask" ] || die "BAR1 resize control is absent" 2
+    [ $(( (0x$_rb_mask >> $1) & 1 )) -eq 1 ] ||
+      die "this GPU does not support BAR1 size code $1 (it advertises mask 0x$_rb_mask)" 2
+    require_gpu_alive "BAR1 register write"
+    [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing BAR1 register write" 2
+    # Find the Resizable BAR extended capability (id 0x15) by walking the extended capability list.
+    # Discovered, never hardcoded: the offset differs between cards.
+    _rb_off=0x100; _rb_cap=""
+    for _ in $(seq 1 48); do
+      _rb_v=$(setpci -s "${GPU#0000:}" "$_rb_off".l 2>/dev/null) || break
+      [ -n "$_rb_v" ] || break
+      _rb_id=$(( 0x$_rb_v & 0xffff )); _rb_nxt=$(( (0x$_rb_v >> 20) & 0xffc ))
+      [ "$_rb_id" -eq 21 ] && { _rb_cap=$_rb_off; break; }
+      [ "$_rb_nxt" -eq 0 ] && break
+      _rb_off=$(printf 0x%x "$_rb_nxt")
+    done
+    [ -n "$_rb_cap" ] || die "no Resizable BAR capability on this GPU" 2
+    # Entries are 8 bytes: capability register at cap+4+8n, control register at cap+8+8n. The low
+    # three bits of a control register say which BAR it controls, so find the one owning BAR1.
+    _rb_ctl=""
+    for _rb_n in 0 1 2 3 4 5; do
+      _rb_c=$(printf 0x%x $(( _rb_cap + 8 + 8 * _rb_n )))
+      _rb_cv=$(setpci -s "${GPU#0000:}" "$_rb_c".l 2>/dev/null) || break
+      [ -n "$_rb_cv" ] || break
+      [ $(( 0x$_rb_cv & 0x7 )) -eq 1 ] && { _rb_ctl=$_rb_c; break; }
+    done
+    [ -n "$_rb_ctl" ] || die "this GPU has no resizable BAR1 entry" 2
+    _rb_old=$(setpci -s "${GPU#0000:}" "$_rb_ctl".l)
+    # The size lives in bits 13:8 as log2(bytes)-20, which is the same number as the sysfs size code
+    _rb_new=$(printf %08x $(( (0x$_rb_old & ~0x3f00) | ($1 << 8) )))
+    setpci -s "${GPU#0000:}" "$_rb_ctl".l="$_rb_new"
+    printf 'BAR1 control at %s: %s -> %s (size code %s)\n' "$_rb_ctl" "$_rb_old" "$_rb_new" "$1"
     ;;
   iommu-passthrough)
     # Realise the cmdline's iommu=pt intent for the eGPU. The kernel marks anything behind Thunderbolt

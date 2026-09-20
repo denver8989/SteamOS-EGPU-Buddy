@@ -4,13 +4,18 @@
 # --check prints the parameters missing from the RUNNING kernel (exit 1 if any). --apply writes them into the
 # bootloader config (backup kept) and regenerates it; a reboot is needed afterwards.
 set -u
-# hpmemprefsize=32G, measured rather than guessed. A 16GiB BAR1 must be 16GiB-aligned AND shares
-# the hotplug prefetchable window with the card's other prefetchable BARs, so it does not fit in a
-# reserve of exactly 16G. On an RTX 3080 the card accepted a 16GB request and the kernel then said
-#   pci 0000:65:00.0: BAR 1 [mem size 0x400000000 64bit pref]: can't assign; no space
-# with the window at 16G. Doubling the reserve gives the bar somewhere to land. Costs nothing on a
-# machine with no eGPU: it only sizes hotplug bridge windows in address space, not memory.
-WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=32G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
+# hpmemprefsize stays at 16G: the value the RTX 5060 Ti is proven at (it reaches a full 16GiB BAR1
+# at boot). Do not "tune" this without that card connected to retest.
+#
+# Measured on an RTX 3080 behind a JHL9480 Thunderbolt switch, 2026-09-20: this knob is NOT what
+# limits that card's BAR1 to 256MiB. The switch has four downstream ports and the kernel's
+# hot-plug resource distribution sizes the window above the OCCUPIED port from what the card asks
+# for at enumeration (384MiB) while splitting everything else between the three EMPTY ports.
+# Raising the reserve to 32G made it worse — the empty siblings then took ~21.6G each and consumed
+# the whole 64G root-port window. Lowering it to 8G shrank the siblings to 512M but the switch's
+# own upstream window came out at 1984M, still short of 16GiB. All four bridges advertise 64-bit
+# prefetchable decode, so the hardware can route it; the allocator will not place it.
+WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=16G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
 # The boot-verbosity parameters SteamOS's own configuration carries. Regenerating the GRUB config
 # puts them where steamenv_boot strips them, so we re-add them somewhere it does not touch.
 QUIET="loglevel=3 quiet splash plymouth.ignore-serial-consoles"

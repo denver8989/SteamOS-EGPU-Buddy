@@ -147,7 +147,28 @@ EOF
 }
 if [ "$EGPU_SKIP_RESIZE" = 1 ]; then
   log "BAR resize skipped for this card (BAR1 left as the firmware set it)"
-elif [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
+elif [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
+  # udev autoloads nvidia the moment the device appears, and it often wins the race to bind before
+  # this point — especially on the cards where the FLR is skipped, because the FLR was what used to
+  # keep the device busy long enough. A bound driver makes the kernel refuse the resize AND makes
+  # the tunnel re-enumeration refuse outright, so the card silently keeps its firmware BAR and the
+  # whole block used to be skipped without a word. Measured on an RTX 3080:
+  #   nvidia 0000:65:00.0: BAR 1 [mem size 0x20000000 64bit pref]: can't assign; no space
+  # the "nvidia" prefix instead of "pci" is the tell that the driver had already claimed it.
+  # Take the card back here; it is bound again deliberately a few lines further down.
+  # It is not enough to check once at the top: the resize retries below take several seconds and
+  # udev binds the driver DURING them, so the re-enumeration that follows was refused every time
+  # while the log showed a clean card at the start. Take the card back immediately before each step
+  # that needs it.
+  take_card_back() {
+    [ -L "/sys/bus/pci/devices/$gpu/driver" ] || return 0
+    log "the driver claimed the card — unbinding it before the BAR work"
+    "$PRIV" unbind-nvidia >/dev/null 2>&1 || true
+    for _ in $(seq 1 10); do [ -L "/sys/bus/pci/devices/$gpu/driver" ] || break; sleep 1; done
+    [ -L "/sys/bus/pci/devices/$gpu/driver" ] && { log "could not unbind it; BAR stays as the firmware set it"; return 1; }
+    return 0
+  }
+  take_card_back || true
   # 16GiB or nothing. A PARTIAL resize is worse than none: on a real machine 4GiB was accepted and
   # then the driver would not create a DRM card at all, so a boot that used to work at 256MiB
   # ended with no eGPU. The sizes in between buy little and cost that risk.
@@ -168,27 +189,37 @@ elif [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$
     log "BAR1 resized while driverless -> $(bar1_mib "$gpu")MiB"
   else
     log "BAR1 resize refused: ${_out:-no reason given}"
-    log "re-enumerating the eGPU tunnel to get hot-plug sized bridge windows"
-    if "$PRIV" reenumerate-tunnel >/dev/null 2>&1; then
-      for _ in $(seq 1 20); do [ -e "/sys/bus/pci/devices/$gpu" ] && break; sleep 1; done
-      for _ in $(seq 1 10); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
-      if [ -e "/sys/bus/pci/devices/$gpu" ] && [ ! -L "/sys/bus/pci/devices/$gpu/driver" ]; then
-        # Keep asking: the kernel finishes assigning the re-enumerated bridge windows a few seconds
-        # after the device reappears. Asking once, immediately, was refused — and the SAME request
-        # succeeded a minute later on the same machine, which is how 256MiB got mistaken for normal.
-        _done=0
-        for _try in $(seq 1 10); do
-          if _out=$("$PRIV" resize "$_max" 2>&1); then
-            log "BAR1 resized after re-enumeration (attempt $_try) -> $(bar1_mib "$gpu")MiB"; _done=1; break
-          fi
-          sleep 2
-        done
-        [ "$_done" = 1 ] || log "BAR1 still refused after 20s of retries: ${_out:-no reason given}"
+    # The kernel will not grow the bridge window directly above the card, and re-enumerating alone
+    # does not help because on rescan the card still asks for the small BAR. So make the CARD ask
+    # for its largest BAR first, then re-enumerate: the window is then sized around that request out
+    # of the reserve above it (pci=hpmemprefsize). See rebar-set in the privileged helper.
+    take_card_back || true
+    if _rset=$("$PRIV" rebar-set "$_max" 2>&1); then
+      log "asked the card directly for its largest BAR1 — $_rset"
+      if _rout=$("$PRIV" reenumerate-tunnel 2>&1); then
+        for _ in $(seq 1 20); do [ -e "/sys/bus/pci/devices/$gpu" ] && break; sleep 1; done
+        # The device node appears while the kernel is still assigning resources, so reading the BAR
+        # straight away reports 0 and the back-down below then throws away a resize that was about
+        # to succeed. Wait for the BAR to actually be placed.
+        for _ in $(seq 1 15); do [ "$(bar1_mib "$gpu")" -gt 0 ] 2>/dev/null && break; sleep 1; done
+        _mib_now=$(bar1_mib "$gpu")
+        log "after re-enumeration: BAR1 ${_mib_now}MiB, window above the card $(cat /sys/bus/pci/devices/$gpu/resource 2>/dev/null | sed -n 2p | cut -c1-40)"
+        # 0MiB means the kernel could not place it at all and the card has no usable BAR1: that is
+        # worse than the stock size, so put the request back and re-enumerate once more.
+        if [ "${_mib_now:-0}" -lt 512 ]; then
+          log "the kernel still could not place the large BAR — restoring the stock request"
+          take_card_back || true
+          "$PRIV" rebar-set 8 >/dev/null 2>&1 || true
+          "$PRIV" reenumerate-tunnel >/dev/null 2>&1 || true
+          for _ in $(seq 1 20); do [ -e "/sys/bus/pci/devices/$gpu" ] && break; sleep 1; done
+          log "restored: BAR1 $(bar1_mib "$gpu")MiB"
+        fi
       else
-        log "the eGPU did not come back driverless after re-enumeration"
+        log "tunnel re-enumeration refused: ${_rout:-no reason given} — restoring the stock request"
+        "$PRIV" rebar-set 8 >/dev/null 2>&1 || true
       fi
     else
-      log "tunnel re-enumeration refused; leaving the BAR as it is"
+      log "could not set the BAR1 request directly: ${_rset:-no reason given}"
     fi
   fi
   # never leave a partially resized BAR behind: it is the size that wedges the driver
