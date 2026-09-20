@@ -605,6 +605,18 @@ egpu_external_only(){
   # The session pin has done its job (it only had to survive THIS relogin). Release it immediately: it sorts last and would
   # otherwise outrank the system's own choice, so "Return to Gaming Mode" just re-loaded the desktop (seen on a real device).
   /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || true
+  # ...but then NOTHING tells the login manager to come back to the desktop if this session dies.
+  # KWin is pinned NVIDIA-only (that is what keeps rendering off the AMD card and out of the
+  # tunnel), so a cable pull kills it and the login manager auto-logs in to ITS default. On SteamOS
+  # that default is Game Mode - measured: kwin dies and sddm selects gamescope-wayland.desktop in
+  # the SAME SECOND, long before any recovery hook can run. On CachyOS this never happened because
+  # the default there was already plasma; that is the whole difference between the two systems.
+  # steamosctl set-default-login-mode is NOT usable for this: it errors out with
+  #   Error: I/O error: No such file or directory (os error 2)
+  # and leaves the sddm config untouched. So re-pin instead, which does work - the drop-in just has
+  # to out-sort SteamOS's own zz-steamos-autologin.conf (see egpu-dm-session).
+  /usr/local/sbin/egpu-dm-session pin plasma >/dev/null 2>&1 &&
+    log "login fallback -> plasma (losing the card now returns to the desktop, not Game Mode)"
   sleep 4
   for t in 1 2 3 4 5 6 7 8; do
     ext=$(ksd -o 2>/dev/null \

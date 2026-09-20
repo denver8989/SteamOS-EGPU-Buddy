@@ -533,6 +533,12 @@ unset _v _p
 # marker with "gamemode" — so a cable pull on the desktop was recovered as Game Mode.
 pgrep -x kwin_wayland >/dev/null 2>&1 ||
   printf gamemode > "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-session-type" 2>/dev/null || true
+  # Keep the login manager's fallback pointing at the session actually in use, so that if this
+  # session dies the machine comes back to Game Mode rather than somewhere else. The desktop attach
+  # path sets the same knob to "desktop" for the mirror-image reason. DETECTION-GATED: steamosctl
+  # exists only on SteamOS; CachyOS is untouched.
+  # A real Game Mode session removes the desktop fallback pin, so Game Mode is the default again.
+  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged session-fallback game >/dev/null 2>&1 || true
 # A Safe Detach restarts this session ON PURPOSE for the handheld screen, with the NVIDIA userspace already hidden: the eGPU
 # can never become "ready" then, and the result is ignored below anyway. Waiting cost ~30 s of dark screen per detach.
 if [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-detach-mode" ] || [ -e /run/nvegpu/gm-detach-pending ]; then

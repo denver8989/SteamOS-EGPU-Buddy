@@ -36,6 +36,14 @@ fi
 # it is written at the start of BOTH session types, so it names the latest one. (Until 0.7.22 only Game Mode wrote it: after
 # one Game Mode session an unplug in the Desktop was treated as Game Mode and the desktop was replaced by Game Mode.)
 if [ "$GM" = 0 ] && [ "$DESK" = 0 ] && ! pgrep -x kwin_wayland >/dev/null 2>&1; then [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1; fi
+# The marker WINS over a live gamescope. A cable pull kills KWin first, so by the time this runs the
+# display manager has already fallen back to Game Mode and a gamescope IS running - that is a
+# consequence of the removal, not evidence of what the user was doing. The gamescope wrapper refuses
+# to claim the marker in exactly this case, so a marker still reading "desktop" is trustworthy.
+if [ "$DESK" = 1 ] && [ "$GM" = 1 ]; then
+  log "gamescope is live but the marker says desktop - treating it as the fallback it is"
+  GM=0
+fi
 log "session evidence: gamescope=$GM desktop=$DESK marker=$(cat /run/user/$U/egpu-session-type 2>/dev/null)"
 log "game-mode=$GM"
 # 1. user-manager env -> iGPU immediately (the relaunching session must not point at the dead card)
@@ -128,11 +136,46 @@ if [ "$GM" = 0 ]; then
 fi
 # 5. internal panel back on + failover watcher promotes eDP-1; audio to internal
 /usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
+# ...and RE-ENABLE it as an output, not just power the backlight. The attach path disables eDP-1
+# deliberately (external-only, so KWin never composites across two GPUs over the tunnel), and
+# nothing put it back when the external display vanished with the cable. Measured on a real device:
+# backlight lit, connector "enabled=disabled", dpms Off - a blank screen on the only display left.
+# kscreen-doctor needs a display or Qt aborts, so the socket is discovered and the call is skipped
+# rather than crashed when no session is up yet.
+if [ "$GM" = 0 ]; then
+  _wd=$(basename "$(ls -1 /run/user/$U/wayland-[0-9] 2>/dev/null | head -1)" 2>/dev/null)
+  if [ -n "$_wd" ]; then
+    for _ in 1 2 3 4 5; do
+      runuser -u deck -- env $RUNENV WAYLAND_DISPLAY="$_wd" DISPLAY=:0 \
+        kscreen-doctor output.eDP-1.enable output.eDP-1.priority.1 >/dev/null 2>&1 && break
+      sleep 2
+    done
+    runuser -u deck -- env $RUNENV WAYLAND_DISPLAY="$_wd" DISPLAY=:0 kscreen-doctor --dpms on >/dev/null 2>&1 || true
+    log "eDP-1 re-enabled: enabled=$(cat /sys/class/drm/card*-eDP-1/enabled 2>/dev/null | head -1) dpms=$(cat /sys/class/drm/card*-eDP-1/dpms 2>/dev/null | head -1)"
+  else
+    log "no Wayland socket yet - leaving eDP-1 to the session that comes up"
+  fi
+fi
 # that sink name is the Legion Go 2's internal speaker route; elsewhere PipeWire falls back to the internal device by itself
 [ "$(/usr/local/sbin/egpu-detect --device 2>/dev/null)" = legion-go-2 ] && runuser -u deck -- env $RUNENV bash -c 'pactl set-default-sink alsa_output.pci-0000_c2_00.6.pro-output-0' >/dev/null 2>&1
 runuser -u deck -- env $RUNENV bash -c 'for h in /etc/nv-egpu-buddy/hooks.d/post-detach/*; do [ -x "$h" ] && systemd-run --user --collect --quiet --unit=egpu-hook-$(basename "$h")-$(date +%s) "$h" >/dev/null 2>&1; done' >/dev/null 2>&1   # user hooks (none shipped)
 # kill the whole broken Steam (its X-error dialog and Xalia helper are children, and they linger on screen) and start once
-[ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; pkill -f "steam.*Xalia" 2>/dev/null; pkill -x zenity 2>/dev/null; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-surprise-steam-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1   # plain steam on the iGPU session (old instance is dead/zombie)
+[ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; pkill -f "steam.*Xalia" 2>/dev/null; pkill -x zenity 2>/dev/null; pkill -f "steam_[m]sg.sh" 2>/dev/null; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-surprise-steam-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1   # plain steam on the iGPU session (old instance is dead/zombie)
 [ "$GM" = 1 ] || runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 notify-send -a NV-EGPU-Buddy "eGPU disconnected" "Desktop moved to the internal screen." >/dev/null 2>&1 || true
 /usr/local/sbin/nv-egpu-buddy-privileged pin-tunnel-ports auto >/dev/null 2>&1 || true
+# SteamOS's own autostart launches Steam again seconds later, racing the freshly published
+# DISPLAY/XAUTHORITY; that instance leaves the "Unable to open a connection to X" dialog
+# (steam_msg.sh + zenity) on screen AFTER the cleanup above has run. The pattern is bracketed so it
+# cannot match this command line - an unbracketed pkill -f killed the caller once.
+if [ "$GM" = 0 ]; then
+  ( sleep 20
+    if runuser -u deck -- pgrep -f "steam_[m]sg.sh" >/dev/null 2>&1; then
+      runuser -u deck -- pkill -f "steam_[m]sg.sh" 2>/dev/null
+      runuser -u deck -- pkill -x zenity 2>/dev/null
+      runuser -u deck -- pkill -x steam 2>/dev/null
+      sleep 2
+      runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-late-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
+      log "cleared a late Steam X-error dialog and restarted Steam once"
+    fi ) &
+fi
 log "DONE"

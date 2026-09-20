@@ -483,6 +483,24 @@ case "$action" in
       die "NVIDIA DRM card exists; refusing unbind" 2
     echo "$GPU" > /sys/bus/pci/drivers/nvidia/unbind
     ;;
+  session-fallback)
+    # Point the login manager's autologin at the session type that is actually running, so that if
+    # that session dies the machine comes back to the same place. This is the whole reason a cable
+    # pull on the desktop used to land in Game Mode: KWin is deliberately pinned NVIDIA-only, so it
+    # dies with the card, and the login manager then autologins into ITS default - on SteamOS that
+    # is gamescope, chosen in the same second, long before any recovery hook can run. CachyOS never
+    # had the problem because its default was already plasma.
+    # Called by the session scripts themselves (not just the attach hook), so switching to the
+    # desktop BY HAND is covered too.
+    [ "$#" -eq 1 ] || die "session-fallback takes desktop or game"
+    case "$1" in
+      desktop) /usr/local/sbin/egpu-dm-session pin plasma >/dev/null 2>&1 &&
+                 printf 'login fallback -> plasma\n' ;;
+      game)    /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 &&
+                 printf 'login fallback -> system default (Game Mode)\n' ;;
+      *) die "session-fallback takes desktop or game" 2 ;;
+    esac
+    ;;
   resize)
     [ "$#" -eq 1 ] || die "resize requires one size code"
     # Ask the CARD what it supports instead of listing sizes that suit one GPU. resource1_resize is

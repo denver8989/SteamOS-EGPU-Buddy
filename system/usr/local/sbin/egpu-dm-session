@@ -9,7 +9,10 @@
 #   egpu-dm-session show                              directory + session currently pinned
 set -u
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
-DROP=zz-egpu-buddy-session.conf
+# Must sort AFTER every file the OS ships, because the last Session= wins. SteamOS ships
+# /etc/sddm.conf.d/zz-steamos-autologin.conf, and "zz-egpu..." sorts BEFORE "zz-steamos...", so the
+# old name was silently outranked and the pin did nothing on SteamOS.
+DROP=zzz-egpu-buddy-session.conf
 
 dm_dir(){
   local dm d=""
