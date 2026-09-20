@@ -6,6 +6,37 @@
 # stack once free (else standby fails), clear DPC containment on the tunnel port so a replug can link.
 set -u; U=1000; RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
 LOG=/var/log/egpu-surprise-recover.log; log(){ printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+
+# --steam-watch: the delayed Steam repair, run as its own transient unit (see where it is armed).
+if [ "${1:-}" = --steam-watch ]; then
+  # 1) the loud failure: the "Unable to open a connection to X" dialog (steam_msg.sh + zenity).
+  #    POLL - measured, it appeared ~40s after the disconnect, so a single check missed it.
+  #    The pattern is bracketed so it cannot match this command line.
+  for _i in $(seq 1 24); do
+    sleep 5
+    runuser -u deck -- pgrep -f "steam_[m]sg.sh" >/dev/null 2>&1 || continue
+    runuser -u deck -- pkill -f "steam_[m]sg.sh" 2>/dev/null
+    runuser -u deck -- pkill -x zenity 2>/dev/null
+    runuser -u deck -- pkill -x steam 2>/dev/null
+    runuser -u deck -- pkill -x steamwebhelper 2>/dev/null
+    sleep 3
+    runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-late-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
+    log "steam-watch: cleared the X-error dialog after ${_i}x5s and restarted Steam"
+    break
+  done
+  # 2) the quiet failure: no dialog, Steam simply not running. The restart in the main run happens
+  #    while the session is still settling (Xwayland crashed seconds after it on a real device), so
+  #    Steam dies with it and --collect removes the failed unit, leaving nothing to see.
+  sleep 30
+  if ! runuser -u deck -- pgrep -x steam >/dev/null 2>&1; then
+    runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-settled-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
+    sleep 20
+    log "steam-watch: Steam was not running after the session settled - started it (now $(runuser -u deck -- pgrep -xc steam 2>/dev/null || echo 0))"
+  else
+    log "steam-watch: Steam is running; nothing to do"
+  fi
+  exit 0
+fi
 [ "$(id -u)" = 0 ] || exit 1
 # safe detach / reattach own their PCI-remove -> not a surprise
 [ -e /run/user/$U/nv-egpu-buddy/detach-handoff-active ] && { log "skip: safe-detach in progress"; exit 0; }
@@ -163,34 +194,13 @@ runuser -u deck -- env $RUNENV bash -c 'for h in /etc/nv-egpu-buddy/hooks.d/post
 [ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; pkill -f "steam.*Xalia" 2>/dev/null; pkill -x zenity 2>/dev/null; pkill -f "steam_[m]sg.sh" 2>/dev/null; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-surprise-steam-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1   # plain steam on the iGPU session (old instance is dead/zombie)
 [ "$GM" = 1 ] || runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 notify-send -a NV-EGPU-Buddy "eGPU disconnected" "Desktop moved to the internal screen." >/dev/null 2>&1 || true
 /usr/local/sbin/nv-egpu-buddy-privileged pin-tunnel-ports auto >/dev/null 2>&1 || true
-# SteamOS's own autostart launches Steam again seconds later, racing the freshly published
-# DISPLAY/XAUTHORITY; that instance leaves the "Unable to open a connection to X" dialog
-# (steam_msg.sh + zenity) on screen AFTER the cleanup above has run. The pattern is bracketed so it
-# cannot match this command line - an unbracketed pkill -f killed the caller once.
+# The delayed Steam repair runs as its OWN transient unit. It CANNOT be a background subshell:
+# udev starts this script with "systemd-run --no-block /usr/local/sbin/egpu-surprise-recover", so
+# when this process exits systemd kills the whole cgroup and takes any "( ... ) &" with it.
+# Measured twice on a real disconnect: the sweep never ran and Steam was left dead with no trace.
 if [ "$GM" = 0 ]; then
-  # POLL, do not check once: measured, the dialog appeared ~40s after the disconnect, well after a
-  # single check at 20s had already passed. Watch for 2 minutes and act the moment it shows up.
-  ( for _i in $(seq 1 24); do
-      sleep 5
-      runuser -u deck -- pgrep -f "steam_[m]sg.sh" >/dev/null 2>&1 || continue
-      runuser -u deck -- pkill -f "steam_[m]sg.sh" 2>/dev/null
-      runuser -u deck -- pkill -x zenity 2>/dev/null
-      runuser -u deck -- pkill -x steam 2>/dev/null
-      runuser -u deck -- pkill -x steamwebhelper 2>/dev/null
-      sleep 3
-      runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-late-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
-      log "cleared a late Steam X-error dialog (after ${_i}x5s) and restarted Steam once"
-      break
-    done
-    # And the quieter failure: no dialog at all, Steam simply not running. The restart above happens
-    # while the session is still settling - measured, Xwayland crashed seconds after it - so Steam
-    # dies with it and nothing says so. --collect removes the failed unit, which is why there was no
-    # trace. Give the session a minute to settle, then start it once if it is not there.
-    sleep 45
-    if ! runuser -u deck -- pgrep -x steam >/dev/null 2>&1; then
-      runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-settled-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
-      sleep 15
-      log "Steam was not running after the session settled - started it: now $(runuser -u deck -- pgrep -xc steam 2>/dev/null || echo 0)"
-    fi ) &
+  systemd-run --no-block --collect --quiet --unit="egpu-steam-watch-$(date +%s)" \
+    /usr/local/sbin/egpu-surprise-recover --steam-watch >/dev/null 2>&1 &&
+    log "steam-watch armed (separate unit, survives this run)"
 fi
 log "DONE"
