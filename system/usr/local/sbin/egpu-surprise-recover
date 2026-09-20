@@ -88,12 +88,21 @@ else
 igpu=$(for c in /sys/class/drm/card[0-9]; do [ "$(cat $c/device/vendor 2>/dev/null)" = 0x1002 ] && basename $c && break; done)
 # same as the planned detach: the NVIDIA Vulkan ICD is gone with the card, so the pin to it must go too
 runuser -u deck -- env $RUNENV systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES >/dev/null 2>&1
+# Build the iGPU Vulkan ICD list from what is ACTUALLY on disk. This used to be the hardcoded path
+# /usr/share/vulkan/icd.d/radeon_icd.json, which does not exist on SteamOS - it ships
+# radeon_icd.x86_64.json and radeon_icd.i686.json - so every disconnect pointed Steam at a missing
+# driver and it failed with
+#   W: Failed to load Vulkan ICD #0 from .../radeon_icd.json: No such file or directory
+#   steam: Exit code: -2
+# Both architectures are listed, because 32-bit titles need the i686 one.
+_icd=$(ls -1 /usr/share/vulkan/icd.d/radeon_icd.*.json /usr/share/vulkan/icd.d/radeon_icd.json 2>/dev/null | paste -sd: -)
+[ -n "$_icd" ] || _icd=$(ls -1 /usr/share/vulkan/icd.d/*.json 2>/dev/null | grep -v nvidia | paste -sd: -)
 runuser -u deck -- env $RUNENV systemctl --user set-environment \
   "KWIN_DRM_DEVICES=/dev/dri/${igpu:-card1}" \
   "KWIN_RENDER_NODES=/dev/dri/$(ls /sys/class/drm/${igpu:-card1}/device/drm 2>/dev/null | grep -m1 renderD)" \
   "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json" \
   "__GLX_VENDOR_LIBRARY_NAME=mesa" \
-  "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.json" "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json" >/dev/null 2>&1
+  "VK_DRIVER_FILES=$_icd" "VK_ICD_FILENAMES=$_icd" >/dev/null 2>&1
 runuser -u deck -- env $RUNENV systemctl --user unset-environment PROTON_ENABLE_NVAPI DXVK_ENABLE_NVAPI PROTON_HIDE_NVIDIA_GPU >/dev/null 2>&1
 log "user env -> iGPU (${igpu:-card1})"
 fi
