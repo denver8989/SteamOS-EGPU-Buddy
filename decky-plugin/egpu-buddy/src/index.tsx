@@ -32,7 +32,7 @@ const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
-const PLUGIN_VERSION = "0.7.54";
+const PLUGIN_VERSION = "0.7.55";
 
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 // The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
@@ -84,6 +84,9 @@ function Content() {
   const plMin = Number(tel["power.min_limit"] ?? 100), plMax = Number(tel["power.max_limit"] ?? 320);
   const plNow = pl ?? Math.round(Number(tel["power.limit"] ?? plMax));
   const controlsOk = !!(s?.present && s?.driver_loaded && s?.on_egpu);
+  // "mounted" for uninstall purposes: the driver is loaded, so /usr cannot be written and the
+  // extension cannot be unmerged. Detaching is what clears it.
+  const egpuMounted = !!(s?.driver_loaded);
   const WHAT = "Installs the hot-plug scripts, the Game Mode session, the GBM gamescope, the boot policy, the desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept.";
   const confirmInstall = (title: string, go: () => Promise<Result>) => {
     const needAccept = !!(su?.untested && !su.accepted_untested);
@@ -107,7 +110,7 @@ function Content() {
         </PanelSectionRow>
         {tab !== "setup" && (
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => setTab("setup")}>Setup, updates &amp; uninstall</ButtonItem>
+            <ButtonItem layout="below" onClick={() => setTab("setup")}>Setup &amp; updates</ButtonItem>
           </PanelSectionRow>
         )}
       </PanelSection>
@@ -161,6 +164,17 @@ function Content() {
           {s?.gm_status?.state && s.gm_status.state !== "ATTACHED" && s.gm_status.state !== "IDLE" && <PanelSectionRow><div style={{ fontSize: "13px", fontWeight: 600, color: s.gm_status.state === "SAFE_COMPLETE" || s.gm_status.state === "DETACHED" ? "#4caf50" : s.gm_status.state.includes("DO_NOT") || s.gm_status.state === "FAILED" ? "#ff6b6b" : "#f0b429" }}>{s.gm_status.state === "SAFE_COMPLETE" || s.gm_status.state === "DETACHED" ? "Safe to unplug the cable." : s.gm_status.message}</div></PanelSectionRow>}
           {msg && <PanelSectionRow><div style={{ fontSize: "12px" }}>{msg}</div></PanelSectionRow>}
           <PanelSectionRow><ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => run(() => checkUpdate(false))}>Check for updates</ButtonItem></PanelSectionRow>
+          {su?.installed_version && (
+            <>
+              <PanelSectionRow>
+                <ButtonItem layout="below" disabled={busy || !!su?.busy || egpuMounted}
+                  onClick={() => { if (confirmSetup === "uninstall") { setConfirmSetup(""); run(uninstallSystem); } else setConfirmSetup("uninstall"); }}>
+                  {confirmSetup === "uninstall" ? "Press again to confirm uninstall" : "Uninstall"}
+                </ButtonItem>
+              </PanelSectionRow>
+              {egpuMounted && <PanelSectionRow><div style={{ fontSize: "11px", opacity: 0.7 }}>Safe Detach the eGPU first: the system files cannot be removed while its driver is running.</div></PanelSectionRow>}
+            </>
+          )}
           <PanelSectionRow><div style={{ fontSize: "11px", opacity: 0.7 }}>EGPU Buddy {PLUGIN_VERSION}{su && !su.installed_version ? " · not installed" : ""} · {up ? (up.available ? `update ${up.available} available` : up.checked ? "up to date" : "update check pending") : "…"}{up?.auto_update ? " · auto-update on" : " · auto-update off"}</div></PanelSectionRow>
         </PanelSection>
       )}

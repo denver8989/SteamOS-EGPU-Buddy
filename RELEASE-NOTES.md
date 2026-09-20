@@ -1,3 +1,15 @@
+0.7.55 — Uninstall is on the main page, and says why when it cannot run.
+
+0.7.54 moved uninstall one press closer; that was still one press too many. Asking someone to press a button that
+cycles through pages to find how to remove the software is not a design, it is a scavenger hunt.
+
+**Uninstall is now on the main page**, next to everything else, whenever something is installed.
+
+While the eGPU is mounted it is **greyed out with the reason** — "Safe Detach the eGPU first: the system files cannot
+be removed while its driver is running" — rather than hidden or silently failing. Hiding a control makes it look
+missing; disabling it without saying why makes it look broken. The same reason now appears in the setup panel, which
+previously let you press Uninstall with the driver loaded and simply fail.
+
 0.7.54 — uninstall is reachable with the eGPU unplugged.
 
 There was no way to uninstall without the eGPU connected. The uninstall button lives in the setup panel, which was two
