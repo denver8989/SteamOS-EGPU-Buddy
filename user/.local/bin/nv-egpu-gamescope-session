@@ -686,6 +686,11 @@ if [ -e /run/nvegpu/diag ]; then export PROTON_LOG=1 VK_LOADER_DEBUG=error,warn 
   case "${OUTPUT_CONNECTOR:-}" in ""|"*"|eDP-1|eDP-1,*|"*",*) exit 0 ;; esac
   sudo -n /usr/local/sbin/nv-egpu-buddy-privileged panel-off >/dev/null 2>&1 &&
     log "handheld panel off (Game Mode is on ${OUTPUT_CONNECTOR%%,*})"
+  # Sound follows the picture here as well. Booting WITH the eGPU attached never runs the attach
+  # hook's session step, so without this the picture moved to the monitor and the sound stayed on
+  # the handheld's speakers — which is exactly what happened on a real boot.
+  [ -x "$HOME/.local/bin/egpu-audio.sh" ] &&
+    log "audio: $("$HOME/.local/bin/egpu-audio.sh" follow 2>&1 | tr '\n' ' ')"
 ) &
 
 # panel watchdog: after a relogin gamescope can start with an inactive libseat seat (no modeset, handheld stays dark).

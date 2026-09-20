@@ -522,7 +522,7 @@ if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then
   # GAME MODE: keep the gamescope autologin; restart gamescope onto the eGPU output (the
   # nv-egpu-gamescope-session wrapper does the routing). Deferred while a game runs.
   log "eGPU display up + Game Mode -> gamescope switch onto the eGPU"; sleep 2
-  gpu_healthy && { /usr/local/sbin/egpu-gamemode-switch >/dev/null 2>&1; log "gamemode-switch rc=$?"; }
+  gpu_healthy && { /usr/local/sbin/egpu-gamemode-switch >/dev/null 2>&1; log "gamemode-switch rc=$?"; egpu_audio_follow; }
   exit 0
 fi
 # Only a running desktop session may pin the autologin to the desktop (the NVIDIA-only re-login must come back to

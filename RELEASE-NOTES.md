@@ -1,3 +1,17 @@
+0.7.62 — audio actually follows the eGPU, on the paths people use.
+
+0.7.49 moved sound to the eGPU on attach. On a real machine it did not: the picture went to the monitor and the sound
+stayed on the handheld's speakers. The attach hook ran twenty-nine times on that boot and called the audio step
+**zero** times — it had been wired into the desktop relogin branch only, which a Game Mode attach never reaches.
+
+Now it runs where attaches actually happen:
+
+- **Game Mode attach**, right after the session switches to the eGPU
+- **Booting with the eGPU attached**, where the session wrapper brings Game Mode up and the attach hook's session step
+  never runs at all — this path had no audio handling whatsoever
+
+Unchanged: it sets the default output and does not own it. Change it afterwards and it stays changed.
+
 0.7.61 — an uninstall that cannot remove a file no longer reports success.
 
 Confirmed on the device what 0.7.59 was written against. The uninstall log from a real run:
