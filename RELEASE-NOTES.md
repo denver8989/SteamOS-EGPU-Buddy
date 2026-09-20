@@ -1,3 +1,19 @@
+0.7.49 — sound follows the eGPU, and lets go when you tell it to.
+
+Attaching the eGPU now moves audio to the monitor on the end of the cable, in Game Mode and on the desktop, and a Safe
+Detach puts it back where it was rather than leaving a dead output as the default.
+
+**It sets the default; it does not own it.** Nothing is written to any configuration file, no sink is removed or
+suspended, and a change made afterwards — Steam's audio menu, KDE's sound settings, anywhere — simply wins and stays.
+Checked on a real machine: after the eGPU took the default, switching back to the speakers held at 12 and 24 seconds
+with both outputs still present and usable. Software that insists on owning your audio is worse than software that
+leaves it alone.
+
+The output is found by the PCI address of the eGPU's own audio function and by its port being **available** — not by
+the port's name. NVIDIA calls DisplayPort audio `hdmi-output-N` as well, so matching the name would work on one cable
+and fail on the other; this works on both, and picks nothing at all rather than a dead output when the eGPU has no
+available one.
+
 0.7.48 — the first build proven end to end on SteamOS, booting with the eGPU attached.
 
 This is the release to use. Everything before it has at least one of the faults fixed in the last few versions, and

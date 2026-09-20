@@ -31,6 +31,10 @@ hide_one(){ mv -f "$1" "$1.egpu-off" 2>/dev/null && return 0
   mkdir -p /run/nvegpu; [ -e $HID ] || { : > $HID; chmod 000 $HID; }
   mount --bind $HID "$1" 2>/dev/null && echo "$1" >> $BINDS; }
 unhide_all(){ [ -r $BINDS ] && { tac $BINDS | while read -r b; do [ -n "$b" ] && umount "$b" 2>/dev/null; done; rm -f $BINDS; }; return 0; }
+# sound was moved to the eGPU on attach; put it back rather than leaving a dead default behind
+audio_restore(){ runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+  /home/deck/.local/bin/egpu-audio.sh restore >/dev/null 2>&1 || true; }
 hide_nv(){ panel_bl 0; /usr/local/sbin/egpu-panel on >/dev/null 2>&1; for f in $HIDE_LIST; do [ -e "$f" ] && hide_one "$f"; done; ldconfig 2>/dev/null
   : ; }
 restore_nv(){ unhide_all; for f in $HIDE_LIST; do [ -e "$f.egpu-off" ] && mv -f "$f.egpu-off" "$f"; done; ldconfig 2>/dev/null
@@ -199,5 +203,6 @@ rm -f "$DM"
 # bring Decky back: the unload step kills it because its backend holds /dev/nvidia*
 [ "$DECKY_WAS_UP" = 1 ] && ! systemctl is-active plugin_loader.service >/dev/null 2>&1 && { systemctl start plugin_loader.service >/dev/null 2>&1 || true; say "      Decky plugin loader restarted"; }
 runuser -u deck -- env $RUNENV bash -c 'pgrep -x plasmashell >/dev/null || (setsid plasmashell >/dev/null 2>&1 &)' 2>/dev/null
+audio_restore
 [ "$on_bus" = 0 ] && say "DONE — safe to unplug. Re-attach WITHOUT replug: sudo egpu-reattach" \
                   || say "DONE — but GPU still on bus; do NOT unplug."

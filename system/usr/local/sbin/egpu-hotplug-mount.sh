@@ -161,6 +161,13 @@ fi
 # whether a Thunderbolt device is worth poking the bus for, so a dock-only machine
 # never pays for that.
 mkdir -p /var/lib/nvegpu 2>/dev/null && : > /var/lib/nvegpu/egpu-seen 2>/dev/null || true
+# Sound should follow the picture: the monitor on the end of the cable is usually where you want it.
+# Sets the default output only — it is not locked, and a later change anywhere else wins (see egpu-audio.sh).
+egpu_audio_follow(){
+  runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    /home/deck/.local/bin/egpu-audio.sh follow 2>&1 | while read -r _l; do log "audio: $_l"; done
+}
 rm -f "$NOT_EGPU" 2>/dev/null || true   # a GPU is here: whatever is plugged in deserves a fresh judgement
 # SteamOS only: after an OS update the driver extension may still be rebuilding and the kernel parameters may not be
 # active yet; bringing the eGPU up in that window is the unprotected first connection. No other system gets this gate.
@@ -433,6 +440,7 @@ egpu_external_only(){
   # KWin pinned to the NVIDIA card never lists eDP-1, so kscreen cannot turn it off: the panel keeps the previous
   # compositor's last frame. egpu-panel is a no-op when a compositor owns card1.
   /usr/local/sbin/egpu-panel off >/dev/null 2>&1 && log "EXTERNAL-ONLY: eDP-1 CRTC off (panel unowned after NVIDIA-only relogin)"
+  egpu_audio_follow
 }
 set_autologin_plasma(){ /usr/local/sbin/egpu-dm-session pin plasma >/dev/null 2>&1 || true; }
 # 2026-09-10: a monitor that is asleep / still training its link is NOT a reason to skip the

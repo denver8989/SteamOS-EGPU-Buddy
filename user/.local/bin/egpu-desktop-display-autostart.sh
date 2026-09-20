@@ -133,7 +133,9 @@ else
   # kscreen can only switch off outputs the compositor OWNS, and in the NVIDIA-only desktop it does not own the panel's
   # card at all, so that call is a no-op there. The CRTC is then left on by whoever had it last (the previous session, or
   # the console) and the panel sits lit and black. Ask the privileged helper, which talks to DRM directly, as well.
-  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged panel-off >/dev/null 2>&1 || true
+  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged panel-off >/dev/null 2>&1
+  # sound follows the picture onto the eGPU's HDMI/DisplayPort output (default only, not locked)
+  "$(dirname "$0")/egpu-audio.sh" follow 2>&1 | while read -r _l; do log "audio: $_l"; done || true
 fi
 
 # Verify that the TV is active; rescue to the handheld if the handoff failed.
