@@ -1,3 +1,12 @@
+0.7.60 — correction: the main-page result from 0.7.59 was not actually in it.
+
+0.7.59's notes said progress and the result now show on the main page. That edit failed and I published the notes
+regardless — the second time today I have done that. The uninstall fixes in 0.7.59 are real and were verified; the
+interface change was not in the build.
+
+It is in this one: progress appears on the main page while install or uninstall runs, and finishes with "Uninstalled.
+The machine is back to how it was." — where the button is, not two pages away.
+
 0.7.59 — uninstall now removes this project's own files, and says so where you pressed the button.
 
 Two faults found by actually uninstalling on a device.

@@ -32,7 +32,7 @@ const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
-const PLUGIN_VERSION = "0.7.59";
+const PLUGIN_VERSION = "0.7.60";
 
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 // The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
@@ -163,6 +163,12 @@ function Content() {
           </PanelSectionRow>
           {s?.gm_status?.state && s.gm_status.state !== "ATTACHED" && s.gm_status.state !== "IDLE" && <PanelSectionRow><div style={{ fontSize: "13px", fontWeight: 600, color: s.gm_status.state === "SAFE_COMPLETE" || s.gm_status.state === "DETACHED" ? "#4caf50" : s.gm_status.state.includes("DO_NOT") || s.gm_status.state === "FAILED" ? "#ff6b6b" : "#f0b429" }}>{s.gm_status.state === "SAFE_COMPLETE" || s.gm_status.state === "DETACHED" ? "Safe to unplug the cable." : s.gm_status.message}</div></PanelSectionRow>}
           {msg && <PanelSectionRow><div style={{ fontSize: "12px" }}>{msg}</div></PanelSectionRow>}
+          {/* Install and uninstall run as background jobs. Without their progress and result HERE, the
+              main page said "uninstall started" and never changed, and the only way to learn whether it
+              had finished or failed was to go digging two pages deep. */}
+          {su?.step && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.85 }}>{su.step}</div></PanelSectionRow>}
+          {su?.busy === false && su?.rc === 0 && !su?.installed_version &&
+            <PanelSectionRow><div style={{ fontSize: "12px", color: "#4caf50" }}>Uninstalled. The machine is back to how it was.</div></PanelSectionRow>}
           <PanelSectionRow><ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => run(() => checkUpdate(false))}>Check for updates</ButtonItem></PanelSectionRow>
           {su?.installed_version && (
             <>
