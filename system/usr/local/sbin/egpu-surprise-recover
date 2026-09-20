@@ -181,6 +181,16 @@ if [ "$GM" = 0 ]; then
       runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-late-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
       log "cleared a late Steam X-error dialog (after ${_i}x5s) and restarted Steam once"
       break
-    done ) &
+    done
+    # And the quieter failure: no dialog at all, Steam simply not running. The restart above happens
+    # while the session is still settling - measured, Xwayland crashed seconds after it - so Steam
+    # dies with it and nothing says so. --collect removes the failed unit, which is why there was no
+    # trace. Give the session a minute to settle, then start it once if it is not there.
+    sleep 45
+    if ! runuser -u deck -- pgrep -x steam >/dev/null 2>&1; then
+      runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-settled-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
+      sleep 15
+      log "Steam was not running after the session settled - started it: now $(runuser -u deck -- pgrep -xc steam 2>/dev/null || echo 0)"
+    fi ) &
 fi
 log "DONE"
