@@ -1,3 +1,12 @@
+0.7.51 — one version, not two.
+
+The interface showed "EGPU Buddy 0.7.45 (system files 0.7.46, update pending)" — two version numbers, and a state the
+user is expected to reason about. There is only one version of this software. If the system files need updating, the
+plugin updates them; that is what the Install button is for, and it already says so.
+
+The footer now shows a single version. Where the system files really are behind the plugin, it says what to do —
+"Press Install to finish updating" — instead of printing two numbers and leaving you to work out which matters.
+
 0.7.50 — HDMI proven on the device: 4K at 120 Hz, and the cable can be swapped live.
 
 Swapping the display cable on a running session, on the machine rather than in theory:
