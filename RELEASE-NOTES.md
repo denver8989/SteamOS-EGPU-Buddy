@@ -1,3 +1,18 @@
+0.7.66 — a card that resets the machine no longer causes a boot loop.
+
+A GPU that floods the data fabric during bring-up takes the machine down again the moment the next boot touches it. The
+result is a boot loop whose only exit is unplugging the eGPU — which is what happened on an RTX 3080, three failed
+boots deep, with SteamOS's own recovery menu counting them.
+
+0.7.36 removed the persistent flood lockout, and that was right: it refused attaches silently, stalled boot for
+two and a half minutes, and needed a command to clear. What it should have left behind is this:
+
+**If the previous boot ended in a sync flood, the eGPU is left alone for ONE boot.** It says so on screen, clears
+itself, and the next boot tries again with no intervention and nothing to run. Pressing Attach brings it up
+immediately if you want it anyway.
+
+That breaks the loop without any of the costs that got the old lockout removed.
+
 0.7.65 — flood protection covers the whole path, and the RTX 30 series gets a lean bring-up.
 
 **Surprise-removal protection was only masking the root port.** The hardware accepts just some of the

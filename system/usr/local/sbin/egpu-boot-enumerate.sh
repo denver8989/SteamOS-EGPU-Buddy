@@ -25,7 +25,16 @@ log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>&1; }
 # eGPU is the simple escape from a reset loop. The reset is still recorded in flood-history.
 if [ ! -e /run/egpu-rearmed ] && dmesg 2>/dev/null | grep -qi 'data fabric sync flood'; then
   mkdir -p /var/lib/nvegpu 2>/dev/null; date '+%F %T' >> /var/lib/nvegpu/flood-history 2>/dev/null
-  log "note: the platform reset itself while the eGPU was connected on a previous boot (recorded; continuing)"
+  # THIS BOOT ONLY. The old flood lockout was persistent and needed a command to clear, which cost
+  # more than it prevented and was removed. But a card that floods the fabric on bring-up takes the
+  # machine down again the moment we touch it, and the result is a boot loop the user can only
+  # escape by unplugging — which happened on an RTX 3080. So: skip the eGPU for one boot after a
+  # flood, say so, and clear automatically. The next boot tries again with no intervention.
+  log "the platform reset itself with the eGPU connected on the previous boot: skipping eGPU bring-up for THIS boot only"
+  log "nothing to clear — the next boot tries again by itself. Press Attach to bring it up now."
+  mkdir -p /run/nvegpu 2>/dev/null
+  printf '{"state":"IDLE","message":"%s"}\n' "The system reset itself with the eGPU connected on the last boot, so the eGPU was left alone this boot. Press Attach to bring it up now, or just reboot — it tries again by itself." > /run/nvegpu/gm-status.json 2>/dev/null
+  exit 0
 fi
 
 find_gpu(){
