@@ -14,6 +14,33 @@ LOG=/var/log/egpu-hotplug-mount.log
 # fdatasync every line: a fabric flood is an instant reset, and it took the unflushed tail of this
 # log with it every time — the lines that would have shown which step caused it
 log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>&1; sync -d "$LOG" 2>/dev/null || true; }
+
+# kscreen-doctor is a Qt program. With no WAYLAND_DISPLAY (and no DISPLAY) it cannot create a
+# platform plugin, Qt calls qFatal(), and the process ABORTS before doing anything at all:
+#   Process 134846 (kscreen-doctor) of user 1000 dumped core.
+#   QMessageLogger::fatal -> QGuiApplicationPrivate::createEventDispatcher
+# Every call in this hook used to pass XDG_RUNTIME_DIR only, so on a DESKTOP hot-plug the external
+# output was never enabled: the connector read "connected", KWin left it "enabled=disabled", and
+# the monitor stayed dark while everything else looked healthy. egpu-reattach always passed the
+# display variables, which is why a re-attach lit the screen and a hot-plug did not.
+# The socket is discovered rather than assumed — it is usually wayland-0, but not always.
+# It also refuses to run at all when there is no compositor socket yet. Calling it anyway does not
+# fail gracefully — Qt aborts and dumps core, which is noise in the journal that looks like a crash
+# in our own code, and is what the coredump after a surprise removal actually was (the yank took
+# the session with it, then recovery called this with nothing to talk to).
+ksd() {
+  local _wd _i
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    _wd=$(basename "$(ls -1 /run/user/1000/wayland-[0-9] 2>/dev/null | head -1)" 2>/dev/null)
+    [ -n "$_wd" ] && break
+    sleep 1
+  done
+  [ -n "$_wd" ] || { log "no Wayland session socket — skipping kscreen-doctor $*"; return 1; }
+  runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    WAYLAND_DISPLAY="$_wd" DISPLAY=:0 \
+    kscreen-doctor "$@"
+}
 exec 9>/run/egpu-hotplug-mount.lock 2>/dev/null || true
 flock -n 9 2>/dev/null || { log "another instance running — skip"; exit 0; }
 
@@ -534,7 +561,7 @@ egpu_external_only(){
   /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || true
   sleep 4
   for t in 1 2 3 4 5 6 7 8; do
-    ext=$(runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor -o 2>/dev/null \
+    ext=$(ksd -o 2>/dev/null \
             | grep -oE '\b(DP|HDMI-A)-[0-9]+' | grep -vx eDP-1 | head -1)
     [ -n "$ext" ] && break
     sleep 2
@@ -545,17 +572,14 @@ egpu_external_only(){
     # user has no screen at all". Put the built-in panel back and say so.
     log "EXTERNAL-ONLY: no eGPU output found via kscreen — restoring the built-in panel instead of darkening it"
     /usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
-    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor \
-      output.eDP-1.enable output.eDP-1.priority.1 >/dev/null 2>&1 || true
-    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor --dpms on >/dev/null 2>&1 || true
+    ksd output.eDP-1.enable output.eDP-1.priority.1 >/dev/null 2>&1 || true
+    ksd --dpms on >/dev/null 2>&1 || true
     mkdir -p /run/nvegpu; printf '{"state":"FAILED","message":"%s"}\n' "The eGPU monitor stopped responding during the switch. You are back on the built-in screen." > /run/nvegpu/gm-status.json 2>/dev/null
     return 0
   fi
-  runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor \
-    output."$ext".enable output."$ext".priority.1 >/dev/null 2>&1
+  ksd output."$ext".enable output."$ext".priority.1 >/dev/null 2>&1
   sleep 1
-  if runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 kscreen-doctor \
-       output.eDP-1.disable >/dev/null 2>&1; then
+  if ksd output.eDP-1.disable >/dev/null 2>&1; then
     log "EXTERNAL-ONLY: $ext primary, eDP-1 disabled"
   else
     log "EXTERNAL-ONLY: failed to disable eDP-1 -> DPMS off via egpu-panel"; /usr/local/sbin/egpu-panel off >/dev/null 2>&1
