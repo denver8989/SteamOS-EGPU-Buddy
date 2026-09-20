@@ -66,6 +66,11 @@ projects say, collected so a tester knows where to look first rather than starti
 | Attach with the eGPU already plugged in at boot | should work | needs `xe.max_vfs=0` (see below) |
 | Hot-plug attach | should work | often a 3-minute stall, then failure, without the flag |
 | Surprise cable pull | **kernel-dependent** | unknown |
+| Session returns to where it was after a cable pull | yes — same mechanism as NVIDIA | yes |
+| Built-in panel re-enabled as an output | yes | yes |
+| Audio follows the eGPU and returns on detach | yes | yes |
+| Steam restarted after a cable pull | yes | yes |
+| Fabric-flood protections (USB4 pin, AER mask, DPC clear) | yes | yes |
 | Resizable BAR / large BAR1 | host-dependent | **reported broken** over Thunderbolt |
 | Switching the *primary render* GPU without a session restart | **not possible on any Wayland compositor** | same |
 

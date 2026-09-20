@@ -13,6 +13,7 @@ U=$(id -u "$UN" 2>/dev/null) || { echo "cannot resolve the desktop user"; exit 1
 RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
 PANEL=$(ls -d /sys/class/drm/card[0-9]*-eDP-* 2>/dev/null | head -1); PANEL=${PANEL##*/card[0-9]-}; PANEL=${PANEL:-eDP-1}
 ST=/run/nvegpu; mkdir -p $ST; LOG=/var/log/egpu-generic.log
+USER_BIN=$(getent passwd "$UN" | cut -d: -f6)/.local/bin
 PRIV=/usr/local/sbin/nv-egpu-buddy-privileged
 
 # THE PLATFORM FIXES ARE NOT NVIDIA FIXES. The AMD SoC resets the machine instantly on an
@@ -55,10 +56,25 @@ set_boot_vga(){ local d f; mkdir -p $BIND; echo 1 > $BIND/1; echo 0 > $BIND/0; c
 user_env_igpu(){ local ic; ic=$(igpu_card)
   as_deck systemctl --user set-environment "KWIN_DRM_DEVICES=/dev/dri/${ic:-card1}" >/dev/null 2>&1
   as_deck systemctl --user unset-environment DRI_PRIME WLR_DRM_DEVICES KWIN_RENDER_NODES >/dev/null 2>&1; }
-pin_plasma(){ pgrep -x kwin_wayland >/dev/null || return 0   # keep the relogin on the Desktop (conf.d wins over the main file)
-  [ -e /etc/plasmalogin.conf ] || [ -d /etc/plasmalogin.conf.d ] || return 0   # only on systems that use plasmalogin autologin
-  printf '[Autologin]\nRelogin=true\nSession=plasma.desktop\nUser=%s\n' "$UN" > /etc/plasmalogin.conf
-  install -d -m 0755 /etc/plasmalogin.conf.d; printf '[Autologin]\nSession=plasma.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf; }
+# Arm the login manager's fallback at the SESSION that is running, through the shared tool.
+# This used to write /etc/plasmalogin.conf* directly, which meant it did nothing at all on SteamOS (no
+# plasmalogin) and hand-wrote a file named after SteamOS's own autologin drop-in. Both matter: KWin is
+# pinned to the eGPU, so it dies with the cable, and the login manager then autologins into ITS default
+# - Game Mode on SteamOS - within the same second, long before anything here can react. egpu-dm-session
+# knows both login managers and names its drop-in so it out-sorts the ones the distro ships.
+pin_plasma(){ pgrep -x kwin_wayland >/dev/null || return 0
+  [ -x /usr/local/sbin/egpu-dm-session ] || return 0
+  /usr/local/sbin/egpu-dm-session pin plasma >/dev/null 2>&1 &&
+    log "login fallback -> plasma (losing the card returns to the desktop, not Game Mode)"; }
+unpin_session(){ [ -x /usr/local/sbin/egpu-dm-session ] && /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || true; }
+audio(){ [ -x "$USER_BIN/egpu-audio.sh" ] && as_deck "$USER_BIN/egpu-audio.sh" "$1" >/dev/null 2>&1 || true; }
+panel_output_back(){   # the panel must come back as an OUTPUT, not just back-lit: the attach path
+  local wd                                   # disables it for external-only and nothing re-enables it,
+  wd=$(basename "$(ls -1 /run/user/$U/wayland-[0-9] 2>/dev/null | head -1)" 2>/dev/null)  # which leaves a
+  [ -n "$wd" ] || return 0                   # lit but blank screen on the only display left.
+  as_deck env WAYLAND_DISPLAY="$wd" DISPLAY=:0 kscreen-doctor output."$PANEL".enable output."$PANEL".priority.1 >/dev/null 2>&1
+  as_deck env WAYLAND_DISPLAY="$wd" DISPLAY=:0 kscreen-doctor --dpms on >/dev/null 2>&1 || true
+  log "panel re-enabled: $(cat /sys/class/drm/card*-"$PANEL"/enabled 2>/dev/null | head -1)"; }
 logout_plasma(){ as_deck qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout 2>/dev/null || as_deck qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout 2>/dev/null; }
 
 case "$verb" in
@@ -88,7 +104,8 @@ attach)
   logout_plasma && log "session logout issued — autologin restarts Plasma with the eGPU as primary" || log "logout failed; log out and in to move the desktop to the eGPU"
   ( for _ in $(seq 1 30); do sleep 2; as_deck kscreen-doctor -o 2>/dev/null | grep -q "$out" && break; done; sleep 4
     as_deck kscreen-doctor output."$out".enable output."$out".priority.1 >/dev/null 2>&1; sleep 1
-    as_deck kscreen-doctor output."$PANEL".disable >/dev/null 2>&1 && log "external-only: $out primary, panel off" ) &
+    as_deck kscreen-doctor output."$PANEL".disable >/dev/null 2>&1 && log "external-only: $out primary, panel off"
+      audio follow ) &
   ;;
 detach)
   read -r bdf vendor card < <(egpu_find) || { status IDLE "No eGPU connected."; exit 0; }
@@ -118,6 +135,12 @@ surprise)
   egpu_find >/dev/null && exit 0                          # some other function went away; the GPU is still there
   log "surprise removal of $(cat $MARK)"; rm -f $MARK $MOVED; clear_boot_vga; user_env_igpu
   /usr/local/sbin/nv-egpu-buddy-privileged panel-on >/dev/null 2>&1
+  panel_output_back; audio restore
+  # Steam dies with the session that was rendering on the card, and the display manager's relogin races
+  # it. The NVIDIA path's repair is vendor-neutral, so reuse it: it waits for the session to settle,
+  # starts Steam once, then clears the "Unable to open a connection to X" dialog if one appears.
+  [ -x /usr/local/sbin/egpu-surprise-recover ] && systemd-run --no-block --collect --quiet \
+    --unit="egpu-steam-watch-$(date +%s)" /usr/local/sbin/egpu-surprise-recover --steam-watch >/dev/null 2>&1 || true
   if game_mode; then sleep 3; as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1; status IDLE "eGPU unplugged. Game Mode is back on the handheld screen."
   else pin_plasma; fi                                      # KWin exits when its primary GPU vanishes; autologin brings Plasma back on the panel
   ;;

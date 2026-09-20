@@ -13,6 +13,27 @@ set -u
 # is the re-enumeration in egpu-boot-enumerate.sh: ask the card for the big BAR first, keep the
 # tunnel link up, and hand back every downstream port at once.
 WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=16G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
+
+# Intel Arc in an enclosure: the xe driver asks its SR-IOV mailbox at probe, and over a Thunderbolt
+# tunnel that mailbox does not answer - the driver then waits out a three-minute fallback and gives up
+# with -ETIMEDOUT, which looks exactly like "the eGPU does not work". Disabling virtual functions skips
+# that path. Added ONLY on systems that actually have the xe driver, so nothing else sees an unknown
+# parameter. Intel does not officially support Arc in an eGPU enclosure at all; this is the workaround
+# the reports converge on, and it is untested here.
+_intel_gpu_present(){
+  local d
+  for d in /sys/bus/pci/devices/*; do
+    [ "$(cat "$d/vendor" 2>/dev/null)" = 0x8086 ] || continue
+    case "$(cat "$d/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) return 0 ;; esac
+  done
+  return 1
+}
+# The module ships on distros that have no Intel GPU at all (CachyOS does), so gate on the DEVICE being
+# present, not on the driver existing - otherwise this would rewrite the kernel command line of every
+# working NVIDIA machine for no reason.
+if _intel_gpu_present; then
+  WANT="$WANT xe.max_vfs=0"
+fi
 # The boot-verbosity parameters SteamOS's own configuration carries. Regenerating the GRUB config
 # puts them where steamenv_boot strips them, so we re-add them somewhere it does not touch.
 QUIET="loglevel=3 quiet splash plymouth.ignore-serial-consoles"
