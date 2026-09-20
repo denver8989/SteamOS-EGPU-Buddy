@@ -36,7 +36,12 @@ PCI device id (`0x22xx`–`0x25xx`, the GA10x desktop line), so the mechanism co
 card from each family has actually been tested, the RTX 3080 and the RTX 5060 Ti. Ada (RTX 40) has never
 been on the bench; it falls through to the default path, which may or may not suit it.
 
-### AMD / Intel eGPUs — experimental, testers wanted
+### AMD / Intel eGPUs — the beta part of this app
+
+NVIDIA support is the tested, released part. **Non-NVIDIA support ships in the same build but is the
+beta part of it**, and it is selected entirely by what is plugged in — the NVIDIA rules never enter it,
+so it cannot change how a tested NVIDIA install behaves. It is here rather than on a side branch so that
+the people who have the hardware can shape it with feedback.
 
 An AMD or Intel eGPU needs neither of the two NVIDIA-only pieces: the patched `nvidia-open` build (the
 long part of an install — several minutes of compiling) and the GBM-scanout gamescope, which exists
