@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.57"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.58"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -337,6 +337,13 @@ def _clean_env(**extra):
     e.update(extra); return e
 
 
+def _cmdline_reboot_needed():
+    """True only when the RUNNING kernel lacks parameters this software needs."""
+    if not os.path.exists("/usr/local/sbin/egpu-kernel-cmdline"):
+        return False
+    return _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--check"], 5)[0] != 0
+
+
 def _setup_worker(action, with_driver=False, version=None):
     env = _clean_env(EGPU_TARGET_USER=USER, HOME=USER_HOME, EGPU_AUTO_YES="1", EGPU_ACCEPT_UNTESTED="1" if _accepted() else "0")
     ro = shutil.which("steamos-readonly")
@@ -366,7 +373,8 @@ def _setup_worker(action, with_driver=False, version=None):
         _setup["rc"] = rc
         _slog(f"{action} finished rc={rc}" + ("" if rc == 0 else " (see log)"), 100)
         if action == "install":
-            _notify("Install finished. Reboot with the eGPU unplugged, then plug it in." if rc == 0 else
+            _notify(("Installed. Plug the eGPU in when you like." if not _cmdline_reboot_needed()
+                     else "Installed. One reboot activates the kernel parameters — the eGPU can stay plugged in.") if rc == 0 else
                     "The NVIDIA driver was not built. Keep the eGPU unplugged and open EGPU Buddy." if rc == RC_NO_DRIVER else
                     "Update staged: it finishes by itself on the next reboot. Nothing to unplug." if rc == RC_STAGED else
                     f"Install failed (rc {rc}). Open EGPU Buddy for details.")
@@ -534,12 +542,13 @@ class Plugin:
         except OSError:
             pass
         rc, out, _ = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--check"], 5) if os.path.exists("/usr/local/sbin/egpu-kernel-cmdline") else (0, "", "")
-        needs_reboot = False
-        try:
-            body = open(SETUP_LOG).read()
-            needs_reboot = any(k in body for k in ("building the patched nvidia-open", "pinning NVIDIA userspace", "installed: nvidia-open-egpu-dkms", "writing the kernel parameters", "packing the extension image"))
-        except OSError:
-            pass
+        # A reboot is needed for exactly one reason: the RUNNING kernel is missing parameters this
+        # software needs. Everything else an install does takes effect immediately — the driver
+        # extension merges live, the units start, the session picks its pieces up on the next Game
+        # Mode start. The old test looked for phrases in the install log, and install.sh prints
+        # "writing the kernel parameters" every single run, so it asked for a reboot after every
+        # install whether or not anything had changed. `--check` already answers this properly.
+        needs_reboot = rc != 0
         return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION, "needs_reboot": needs_reboot,
                 "unsupported": _unsupported(), "untested": _untested(), "accepted_untested": _accepted(),
                 "cmdline_missing": out.replace("missing kernel parameters: ", "") if rc != 0 else "",

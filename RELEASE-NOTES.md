@@ -1,3 +1,20 @@
+0.7.58 — stop asking for a reboot that is not needed, and stop telling people to unplug for it.
+
+After every install the panel said "Installed. Reboot with the eGPU unplugged." Both halves were wrong.
+
+It asked for a reboot **after every install**, changed or not: the test looked for phrases in the install log, and
+`install.sh` prints "writing the kernel parameters" on every single run. It never consulted
+`egpu-kernel-cmdline --check`, which already answers the question properly. On the machine this was found on, that check
+returns "kernel command line: ok" — nothing was missing, and no reboot was needed at all.
+
+A reboot is now asked for in exactly one case: the **running** kernel is missing a parameter this software needs.
+Everything else an install does takes effect immediately — the driver extension merges live, the units start, and the
+session picks up its pieces at the next Game Mode start.
+
+And the eGPU no longer has to be unplugged for it. That advice dates from when booting with the eGPU attached was
+unreliable; it now boots straight into Game Mode on the monitor with a full BAR1, so the message says the eGPU can stay
+plugged in.
+
 0.7.57 — uninstall now really does put the machine back.
 
 The intended result of uninstalling is the machine exactly as it was before this was ever installed — desktop and Game

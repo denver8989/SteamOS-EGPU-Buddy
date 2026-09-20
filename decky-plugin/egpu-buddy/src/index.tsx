@@ -32,7 +32,7 @@ const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
-const PLUGIN_VERSION = "0.7.57";
+const PLUGIN_VERSION = "0.7.58";
 
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 // The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
@@ -133,7 +133,7 @@ function Content() {
             <>
               {su.needs_reboot ? (
                 <>
-                  <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installed. Reboot with the eGPU unplugged.</div></PanelSectionRow>
+                  <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installed. One reboot activates the kernel parameters — the eGPU can stay plugged in.</div></PanelSectionRow>
                   <PanelSectionRow><ButtonItem layout="below" onClick={() => run(rebootSystem)}>Reboot the system</ButtonItem></PanelSectionRow>
                 </>
               ) : (
