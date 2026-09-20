@@ -1,3 +1,19 @@
+0.7.53 — one clean restart to finish an update, not a sequence of them.
+
+0.7.52 stopped demanding a detach, but left the update to land "on the next reboot" — which in practice meant a plugin
+reload, then a reboot, then the install. That is not one restart; it is several, and it looks like something went
+wrong.
+
+Now a staged update finishes inside **a single Game Mode restart**. The session wrapper installs it before the new
+session takes the display, so the work happens in the black gap of that one restart — the session goes down once and
+comes back updated. The panel says "Update ready — one Game Mode restart finishes it" with a button that does exactly
+that, and it is refused while a game is running, because interrupting a game is not a clean restart either.
+
+If the restart never comes, the boot path still installs it, as before. Nothing is ever left half-applied and nothing
+needs unplugging.
+
+The duplicate code path this first grew has been removed: one restart action, used by both places that need it.
+
 0.7.52 — updating never requires unplugging the eGPU again.
 
 Until now, updating while the eGPU was in use was reported as a failure: "Not installed: the eGPU is in use. Safe
