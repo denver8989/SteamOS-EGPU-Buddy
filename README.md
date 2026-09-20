@@ -5,25 +5,52 @@ moves to the monitor, unplug (safely or by yanking the cable) and it falls back 
 it comes back. Includes the fixes for the three things that made this unusable before: the NVIDIA scan-out
 corruption in gamescope, the driver hang on surprise removal, and games freezing at the loading screen.
 
-**Status: works on exactly one machine (mine). Claude (Anthropic) and Codex (OpenAI) were used as development assistants
-throughout; every change was tested on that machine as recorded in TESTED.md, and nothing is claimed beyond that. Everything else is untested. Read [TESTED.md](TESTED.md) before you
+**Status: works on two machines (both mine): a Legion Go 2 on CachyOS with an RTX 5060 Ti, and a Legion Go 1 on SteamOS with an RTX 3080. Claude (Anthropic) and Codex (OpenAI) were used as development assistants
+throughout; every change was tested on those machines as recorded in TESTED.md, and nothing is claimed beyond that. Everything else is untested. Read [TESTED.md](TESTED.md) before you
 run anything. This touches the kernel driver, boot configuration, udev, sudoers and your Game Mode session. Use at
 your own risk, keep a way to boot without the eGPU, and read the scripts before running them.**
 
 ## Tested hardware and software
 
-| Part | Tested configuration |
-|---|---|
-| Handheld | Lenovo Legion Go 2 (AMD Strix Halo, USB4/Thunderbolt 5) |
-| eGPU | Gigabyte AORUS AI Box, NVIDIA RTX 5060 Ti 16 GB (Blackwell) |
-| Display | Acer Predator X49 V, 5120×1440 super-ultrawide, DisplayPort |
-| Distro | CachyOS (Deckify), kernel `linux-cachyos-deckify` 7.1.8 |
-| Driver | `nvidia-open` 610.57.04 with the patches in `packaging/nvidia-open-egpu` |
-| gamescope | 3.16.23 (distro) for the handheld; 3.16.25 + GBM-scanout branch for the eGPU (built by the installer) |
-| Steam | Game Mode via `gamescope-session` + plasmalogin autologin; Decky Loader for the plugin |
+Two machines, two GPU families, two distros. Everything below was measured on real hardware; anything
+not listed here has not been tried.
 
-An RTX 3080 (Ampere) on driver 580 was used during earlier development; that combination is not covered by the
-current scripts.
+| Part | Rig A — the reference | Rig B — second family |
+|---|---|---|
+| Handheld | Lenovo Legion Go 2 (AMD Strix Halo, USB4/TB5) | Lenovo Legion Go 1 (AMD Phoenix, USB4) |
+| eGPU | Gigabyte AORUS AI Box | AOOSTAR AG03 (Intel JHL9480 TB5) |
+| GPU | NVIDIA RTX 5060 Ti 16 GB — Blackwell, GB206 | NVIDIA RTX 3080 10 GB — Ampere, GA102 |
+| Display | Acer Predator X49 V, 5120×1440 ultrawide, DisplayPort | same panel, DisplayPort |
+| Distro | CachyOS (Deckify), kernel 7.1.8 | SteamOS 3.8, kernel 6.16.12-valve24.5 |
+| Driver | `nvidia-open` 610.57.04 + the patches in `packaging/nvidia-open-egpu` | identical — same driver, no per-card build |
+| gamescope | 3.16.23 handheld; 3.16.25 + GBM-scanout branch for the eGPU | as shipped by SteamOS |
+| Session | `gamescope-session` + plasmalogin autologin | `gamescope-session` + sddm autologin |
+
+**GPU support.** Ampere (RTX 30) and Blackwell (RTX 50) both work on the same open driver, with no
+separate build and no per-card configuration by the user. The Ampere-specific bring-up is selected by
+PCI device id (`0x22xx`–`0x25xx`, the GA10x desktop line), so the mechanism covers the family — but one
+card from each family has actually been tested, the RTX 3080 and the RTX 5060 Ti. Ada (RTX 40) has never
+been on the bench; it falls through to the default path, which may or may not suit it.
+
+### What has been tested, per rig
+
+| Behaviour | RTX 5060 Ti | RTX 3080 |
+|---|---|---|
+| Boot with the eGPU attached | yes | yes |
+| Hot-plug attach in Game Mode | yes | yes |
+| Hot-plug attach on the Desktop | yes | yes |
+| Full 16 GiB BAR1 (ReBAR) | yes | yes — at boot and on hot-plug |
+| Safe detach, Game Mode | yes | yes |
+| Safe detach, Desktop | yes | yes |
+| Cable pull in Game Mode → stays in Game Mode | yes | yes |
+| Cable pull on the Desktop → returns to the Desktop | yes | yes |
+| Audio follows the eGPU output and returns on detach | yes | yes |
+| Rendering performance validated | yes | **no** — see below |
+
+The RTX 3080 used for this work has a faulty on-board power sensor: it reports a constant ~400 W at idle
+against a 320 W limit, so the driver holds its clocks at the floor. That is a defect of that individual
+card, not of the driver or of this project — it mounts, drives the display, and behaves correctly through
+every attach and detach path above, but it cannot be used to make performance claims.
 
 ## What you get
 

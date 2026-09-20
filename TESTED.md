@@ -1,8 +1,35 @@
 # What is tested, what is not, and what can bite you
 
-Everything below was verified on the single machine described in the README (Legion Go 2 + RTX 5060 Ti eGPU +
-5120×1440 DisplayPort monitor, CachyOS Deckify, nvidia-open 610.57.04). "Verified" means it was exercised
-repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing here has been run on a second machine.
+Everything below was verified on the machines described in the README. "Verified" means it was exercised
+repeatedly and behaved as described.
+
+## 2026-09-20 — second machine, second GPU family (0.7.68)
+
+Legion Go 1 (AMD Phoenix) + **SteamOS 3.8**, kernel 6.16.12-valve24.5, AOOSTAR AG03 enclosure (Intel JHL9480 TB5),
+**NVIDIA RTX 3080 10 GB (Ampere, GA102)**, the same `nvidia-open` 610.57.04 build as the 5060 Ti — no separate driver,
+no per-card configuration.
+
+Verified on that rig in one session:
+
+- boot with the eGPU attached, and hot-plug attach in **both** Game Mode and the Desktop
+- **full 16 GiB BAR1** in all three cases (it was 256 MiB before this release), confirmed by
+  `nvidia-smi -q` reporting `BAR1 Memory Usage Total: 16384 MiB`
+- Safe Detach from the plugin in Game Mode and on the Desktop: card off the bus, driver unloaded, the built-in
+  panel lit, the session back where it started, no AMD data-fabric sync flood
+- re-attach in software afterwards (`egpu-reattach`), with the 16 GiB BAR intact
+- cable pull in Game Mode → stays in Game Mode; cable pull on the Desktop → **returns to the Desktop**, the panel is
+  re-enabled as an output, and Steam comes back on its own
+- audio moves to the eGPU output on attach and back on detach
+
+Not verified on that rig: rendering performance. The RTX 3080 used has a faulty on-board power sensor (a constant
+~400 W reported at idle against a 320 W limit), so the driver pins its clocks at the floor. That is a defect of that
+individual card — it mounts, drives the display and survives every attach/detach path above — but no performance
+claim can be made from it.
+
+## Earlier: the reference rig
+
+Legion Go 2 + RTX 5060 Ti eGPU + 5120×1440 DisplayPort monitor, CachyOS Deckify, nvidia-open 610.57.04. Exercised
+repeatedly in one session on 2026-09-11/12.
 
 ## SteamOS: verified in a container built from Valve's image, not on a device (0.7.17)
 
