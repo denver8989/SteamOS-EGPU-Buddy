@@ -147,14 +147,42 @@ snd_n=""
 for s in /sys/class/sound/card[0-9]*; do
   case "$(readlink -f "$s/device" 2>/dev/null)" in *"$HDA"*) snd_n=${s##*card}; break ;; esac
 done
+# Release the card ourselves instead of telling the user to go and do it by hand. The attach path
+# deliberately moves sound onto the eGPU (egpu-audio.sh follow), so on a normal detach WirePlumber
+# is ALWAYS holding this card open and the guard below would abort every single time — which is
+# exactly what happened the first time a detach was tried after audio-follow shipped. Putting sound
+# back where it came from and switching the card profile off is what makes WirePlumber close the
+# ALSA device; the profile is restored by the attach path when the eGPU comes back.
 if [ -n "$snd_n" ]; then
-  held=$(fuser /dev/snd/controlC"$snd_n" /dev/snd/pcmC"$snd_n"D* 2>/dev/null | tr -s " ")
+  [ -x /home/deck/.local/bin/egpu-audio.sh ] &&
+    runuser -u deck -- env $RUNENV /home/deck/.local/bin/egpu-audio.sh restore >/dev/null 2>&1 || true
+  for _c in $(runuser -u deck -- env $RUNENV pactl list cards short 2>/dev/null | awk '{print $2}'); do
+    case "$_c" in
+      *"${HDA//:/_}"*) say "      releasing eGPU sound card profile ($_c)"
+                       runuser -u deck -- env $RUNENV pactl set-card-profile "$_c" off >/dev/null 2>&1 || true ;;
+    esac
+  done
+  for _ in $(seq 1 10); do
+    fuser /dev/snd/controlC"$snd_n" /dev/snd/pcmC"$snd_n"D* >/dev/null 2>&1 || break
+    sleep 1
+  done
+fi
+if [ -n "$snd_n" ]; then
+  # PCM only. WirePlumber keeps a control fd open on EVERY card it manages, for its whole life and
+  # regardless of profile — controlC0, controlC1, controlC2… — so including the control device here
+  # meant this guard could never pass on any system running PipeWire, and the detach aborted every
+  # time. The hazard the guard exists for is an ACTIVE STREAM (azx_remove -> cancel_work_sync ->
+  # D-state), which is a PCM fd. A surprise cable pull is strictly harsher than this orderly unbind
+  # and is already proven safe on the same machine with those control fds open.
+  held=$(fuser /dev/snd/pcmC"$snd_n"D* 2>/dev/null | tr -s " ")
   if [ -n "$held" ]; then
-    say "      eGPU sound card (card$snd_n) still open by:$held -- ABORTING before the unbind."
-    say "      (removing it now would hang in snd_card_free / D-state.) Release audio first:"
-    say "      set the eGPU card profile 'off' in PipeWire, then retry."
+    say "      eGPU sound card (card$snd_n) still PLAYING via:$held -- ABORTING before the unbind."
+    say "      (removing it mid-stream would hang in snd_card_free / D-state.)"
+    say "      Stop what is playing on the eGPU output, then retry."
     rm -f "$DM"; exit 5
   fi
+  _ctl=$(fuser /dev/snd/controlC"$snd_n" 2>/dev/null | tr -s " ")
+  [ -n "$_ctl" ] && say "      (card$snd_n control fd held by:$_ctl — normal PipeWire monitoring, not a stream)"
 fi
 if [ -L "/sys/bus/pci/devices/$HDA/driver" ]; then
   drv=$(basename "$(readlink -f "/sys/bus/pci/devices/$HDA/driver")")
