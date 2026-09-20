@@ -1,3 +1,23 @@
+0.7.61 — an uninstall that cannot remove a file no longer reports success.
+
+Confirmed on the device what 0.7.59 was written against. The uninstall log from a real run:
+
+    restored /home/deck/.local/bin/egpu-display-failover.sh
+    restored /home/deck/.local/bin/nv-egpu-gamescope-session
+    restored /home/deck/.config/plasma-workspace/env/00-egpu-free-nvidia-modeset.sh
+    uninstall finished rc=0
+
+Nothing was missed and nothing failed: each of those was **restored from a backup of an older copy of itself**, because
+every reinstall backs up what it replaces. 0.7.59 stopped that. This release adds the other half — the part that let it
+pass unnoticed:
+
+- a removal that fails now says so ("COULD NOT REMOVE <file>") instead of printing "removed"
+- and the uninstall exits non-zero, telling you to run `--verify`, rather than finishing rc=0 with the machine still
+  full of files
+
+A "successful" uninstall that leaves thirteen scripts behind is worse than one that fails honestly, because only one of
+them prompts anyone to look.
+
 0.7.60 — correction: the main-page result from 0.7.59 was not actually in it.
 
 0.7.59's notes said progress and the result now show on the main page. That edit failed and I published the notes

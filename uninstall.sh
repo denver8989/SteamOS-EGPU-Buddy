@@ -16,9 +16,13 @@ restore_or_remove(){ # $1 dest ; run in the right privilege context
   # has to leave the machine as it was found, so anything that is ours is removed, not restored.
   local d=$1 b; b=$(ls -t "$d".bak-egpu-buddy-* 2>/dev/null | head -1)
   if [ -n "$b" ] && ! grep -qsaiE 'egpu|nv-egpu-buddy' "$b"; then
-    mv -f "$b" "$d"; echo "restored $d"
+    mv -f "$b" "$d" && echo "restored $d" || echo "COULD NOT RESTORE $d"
   else
-    rm -f "$d"; echo "removed  $d"
+    rm -f "$d"
+    # say what actually happened: this printed "removed" for files it had not removed, and the
+    # uninstall still finished rc=0, so a machine full of leftovers looked like a clean uninstall
+    if [ -e "$d" ]; then echo "COULD NOT REMOVE $d (read-only filesystem?)"; UNINSTALL_INCOMPLETE=1
+    else echo "removed  $d"; fi
   fi
   rm -f "$d".bak-egpu-buddy-* 2>/dev/null || true   # our own backups were never part of the system
 }
@@ -136,4 +140,9 @@ sudo rm -f /etc/nv-egpu-buddy/version
 runtime_leftovers | while read -r d; do sudo rm -rf "$d"; done
 sudo rm -f /var/log/egpu-*.log /run/nvegpu/* 2>/dev/null
 userctl daemon-reload
+if [ -n "${UNINSTALL_INCOMPLETE:-}" ] || ls /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* >/dev/null 2>&1; then
+  echo "WARNING: some files could not be removed. Run 'sudo steamos-readonly disable' and uninstall again."
+  echo "done, but INCOMPLETE — run uninstall.sh --verify to see what is left."
+  exit 9
+fi
 echo "done. The stock gamescope-session / plasmalogin configuration is back in effect after a reboot."
