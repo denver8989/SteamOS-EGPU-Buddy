@@ -56,6 +56,36 @@ from a terminal:
 ./install.sh --amd
 ```
 
+#### What is likely to work, and what is likely to bite — from other people's reports
+
+Nothing below was measured here. It is what the kernel lists, the distro trackers and the other eGPU
+projects say, collected so a tester knows where to look first rather than starting from nothing.
+
+| | AMD (Radeon) | Intel (Arc) |
+|---|---|---|
+| Attach with the eGPU already plugged in at boot | should work | needs `xe.max_vfs=0` (see below) |
+| Hot-plug attach | should work | often a 3-minute stall, then failure, without the flag |
+| Surprise cable pull | **kernel-dependent** | unknown |
+| Resizable BAR / large BAR1 | host-dependent | **reported broken** over Thunderbolt |
+| Switching the *primary render* GPU without a session restart | **not possible on any Wayland compositor** | same |
+
+**Hot-unplug exists but has regressed more than once.** amdgpu gained hot-unplug in Linux 5.14,
+specifically so that pulling an enclosure stops crashing the machine. It is not settled: a Framework 13
+with a Razer Core X and an RX 6800 XT lost the card on `linux-cachyos` 6.19.10 with `pciehp Link Down /
+Card not present`, having worked on 6.19.6. **If a cable pull misbehaves, check your kernel version
+before anything else.**
+
+**Intel Arc is not officially supported in an enclosure at all**, by Intel's own statement. There is a
+specific, known failure: over a Thunderbolt tunnel the driver's SR-IOV mailbox does not answer, so it
+waits out a three-minute fallback and gives up with `-ETIMEDOUT`. The workaround is the kernel parameter
+**`xe.max_vfs=0`**. ReBAR is separately reported as still broken over Thunderbolt for Arc, which is
+consistent with this project skipping the BAR resize on the non-NVIDIA path.
+
+**No Wayland compositor can change its primary rendering GPU without restarting the display manager** —
+that is a protocol-level limitation, not a bug in anyone's driver. It is why this project restarts the
+session on attach rather than trying to re-route a live one, and why `boot_vga` is set (the same
+mechanism `all-ways-egpu` uses, and the one mutter, KWin and wlroots honour).
+
 **A note on the instant-reboot problem, because it is not an NVIDIA problem.** The AMD SoC resets the
 machine the moment it hits an unrecoverable interconnect error — a *data fabric sync flood*, `0x08000800`
 — and PCIe tunnelling between an AMD USB4 host and a Thunderbolt peripheral is a documented trigger.
