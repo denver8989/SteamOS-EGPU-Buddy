@@ -267,7 +267,21 @@ if want driver; then
     sudo bash "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" || { DRIVER_FAILED=1; echo "warning: the driver extension was not built (see above); the rest is installed. Do NOT connect the eGPU until it is."; }
   elif command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
 else
-  say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
+  # Do not cry wolf: on SteamOS the patched driver is delivered as a system extension, not as a
+  # pacman package, so "no package" says nothing about whether it is installed. The modules
+  # themselves are the proof — they carry strings only this project's patches add, which is the
+  # same test the privileged helper uses before it will load the display stack. Telling a user with
+  # a correctly patched driver that a cable yank might hang their compositor is worse than saying
+  # nothing: they stop trusting what the software reports.
+  if modinfo -n nvidia >/dev/null 2>&1 &&
+     { f=$(modinfo -n nvidia 2>/dev/null); case "$f" in
+         *.zst) zstd -dcq "$f" 2>/dev/null ;; *.xz) xz -dcq "$f" 2>/dev/null ;;
+         *.gz) gzip -dcq "$f" 2>/dev/null ;; *) cat "$f" 2>/dev/null ;; esac; } |
+     grep -qaF 'External GPU disconnected.'; then
+    say "== the installed NVIDIA modules are this project's patched build (surprise unplug is handled)"
+  else
+    say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
+  fi
 fi
 
 # ---- gamescope built on the device (only when no shipped build runs here; needs the SteamOS build root from the driver step)

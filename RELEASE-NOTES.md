@@ -1,3 +1,16 @@
+0.7.47 — stop telling SteamOS users their driver is unpatched when it is not.
+
+The installer ended with "patched driver not installed. Without it a cable yank can hang the compositor" on machines
+where the patched driver **was** installed and working. The check looked for a pacman package — and on SteamOS the
+patched driver is delivered as a system extension, not a package, so it found nothing and assumed the worst. A user who
+had already tested surprise unplug successfully on that very machine was told it was unsafe.
+
+It now asks the modules themselves, which is the same test the privileged helper uses before it will load the display
+stack: the build carries strings only this project's patches add. Verified against a real installation — the check finds
+them, and the installer now says so instead.
+
+A warning that fires when nothing is wrong is worse than no warning. People stop believing the ones that matter.
+
 0.7.46 — the real cause of the verbose boot AND the boot menu: one missing block.
 
 Regenerating the GRUB configuration on SteamOS drops the **steamenv header block** that SteamOS's own bootloader depends
