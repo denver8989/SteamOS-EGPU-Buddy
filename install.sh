@@ -136,7 +136,7 @@ if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/
       sudo modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia >/dev/null 2>&1 || true
     fi
   fi
-  if [ -d /sys/module/nvidia ]; then echo "The eGPU is in use. Safe Detach, then run the install again. Nothing was changed."; exit 21; fi
+  if [ -d /sys/module/nvidia ]; then echo "The eGPU is in use, so the system files cannot be written now. The update is STAGED: it installs by itself on the next reboot, before the eGPU is brought up. Nothing to unplug."; exit 21; fi
   say "== SteamOS: unmerging the driver extension while the system files are written"
   sudo systemd-sysext unmerge >/dev/null 2>&1 || { echo "could not unmerge the driver extension (files in use?). Reboot with the eGPU unplugged and run the install again. Nothing was changed."; exit 21; }
   trap 'sudo bash "$SYSEXT_TOOL" --activate >/dev/null 2>&1 || true' EXIT

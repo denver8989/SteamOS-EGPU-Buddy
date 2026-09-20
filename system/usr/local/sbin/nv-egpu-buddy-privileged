@@ -297,6 +297,31 @@ case "$action" in
       "$(setpci -s "$_msd_rp" "$(printf 0x%x $((_msd_aer+0x08)))".l 2>/dev/null)" \
       "$(setpci -s "$_msd_rp" "$(printf 0x%x $((_msd_aer+0x0c)))".l 2>/dev/null)"
     ;;
+  apply-staged-update)
+    # Install a payload that was staged because the eGPU was in use when the update ran. A Game Mode
+    # reload is a real window: the old session is gone and the new one has not taken the display yet,
+    # so the modules can be unloaded, the extension unmerged, the files written and the extension put
+    # back — without anyone having to unplug an eGPU to update the software that manages it.
+    [ "$#" -eq 0 ] || die "apply-staged-update takes no arguments"
+    _asu_src=/home/deck/.local/share/steamos-egpu-buddy
+    _asu_new=$(cat "$_asu_src/VERSION" 2>/dev/null || true)
+    _asu_have=$(cat /etc/nv-egpu-buddy/version 2>/dev/null || true)
+    [ -n "$_asu_new" ] && [ -x "$_asu_src/install.sh" ] || { printf 'nothing staged\n'; exit 0; }
+    [ "$_asu_new" != "$_asu_have" ] || { printf 'already installed\n'; exit 0; }
+    # refuse while the eGPU is actually presenting: writing /usr/local needs the extension unmerged
+    for _asu_c in /sys/class/drm/card[0-9]*-*/enabled; do
+      [ -e "$_asu_c" ] || continue
+      case "${_asu_c#/sys/class/drm/}" in *eDP-*) continue ;; esac
+      _asu_cd=$(basename "$(dirname "$_asu_c")"); _asu_cd=${_asu_cd%%-*}
+      [ "$(basename "$(readlink -f "/sys/class/drm/$_asu_cd/device/driver" 2>/dev/null)")" = nvidia ] || continue
+      [ "$(cat "$_asu_c" 2>/dev/null)" = enabled ] && die "the eGPU is presenting; staged update left for the next opportunity" 2
+    done
+    fuser /dev/nvidia* >/dev/null 2>&1 && die "the eGPU is in use; staged update left for the next opportunity" 2
+    printf 'installing staged update %s (have %s)\n' "$_asu_new" "${_asu_have:-none}"
+    EGPU_TARGET_USER=deck EGPU_AUTO_YES=1 EGPU_ACCEPT_UNTESTED=1 \
+      bash "$_asu_src/install.sh" >/var/log/egpu-staged-update.log 2>&1
+    printf 'staged update finished: now %s\n' "$(cat /etc/nv-egpu-buddy/version 2>/dev/null || echo unknown)"
+    ;;
   reenumerate-tunnel)
     # Re-enumerate the eGPU's whole Thunderbolt subtree so the kernel sizes the bridge windows
     # again, the way it does for a device that arrives AFTER boot. This is the difference between

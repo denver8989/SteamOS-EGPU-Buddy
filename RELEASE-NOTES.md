@@ -1,3 +1,21 @@
+0.7.52 — updating never requires unplugging the eGPU again.
+
+Until now, updating while the eGPU was in use was reported as a failure: "Not installed: the eGPU is in use. Safe
+Detach, unplug it, then install again." Being told to unplug an eGPU in order to update the software that manages the
+eGPU is absurd, and it was never even true — the new payload had already been unpacked, and the boot path installs it
+whenever the versions differ.
+
+So it is now what it always was: **staged**, and it finishes by itself. Two chances to land, neither needing anything
+from you:
+
+- **On a Game Mode reload** — the previous session is gone and the new one has not taken the display yet, which is a
+  real window to unload the modules, unmerge the extension, write the files and put it back.
+- **At the next boot**, as before, before the eGPU is brought up.
+
+It refuses only while the eGPU is genuinely presenting a picture, and then simply waits for the next opportunity
+instead of failing. The message says what is happening: "Update staged: it finishes by itself on the next reboot.
+Nothing to unplug."
+
 0.7.51 — one version, not two.
 
 The interface showed "EGPU Buddy 0.7.45 (system files 0.7.46, update pending)" — two version numbers, and a state the

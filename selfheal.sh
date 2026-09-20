@@ -17,7 +17,10 @@ need=0
 [ "$(cat /etc/nv-egpu-buddy/version 2>/dev/null)" = "$VER" ] || need=1
 [ "${SELFHEAL_FORCE:-0}" = 1 ] && need=1
 if [ $need = 1 ]; then
-  log "root integration missing or outdated (have '$(cat /etc/nv-egpu-buddy/version 2>/dev/null)', payload $VER): repairing"
+  # This is also how a STAGED update lands: the plugin unpacks a newer payload here when the eGPU
+  # was in use and /usr/local could not be written, and the versions then differ at the next boot.
+  # Nothing is displaying yet at this point, so there is no session to disturb and nothing to unplug.
+  log "root integration missing or outdated (have '$(cat /etc/nv-egpu-buddy/version 2>/dev/null)', payload $VER): installing"
   [ -n "$ro" ] && $ro disable >/dev/null 2>&1
   if command -v pacman >/dev/null 2>&1 && [ -d "$HERE/pkgcache" ]; then
     for p in "$HERE"/pkgcache/*.pkg.tar.*; do [ -f "$p" ] || continue

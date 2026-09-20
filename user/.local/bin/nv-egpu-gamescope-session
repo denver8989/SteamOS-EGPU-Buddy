@@ -57,6 +57,21 @@ log() {
   printf 'nv-egpu-gamescope-session: %s\n' "$*" >&2
 }
 
+# A Game Mode reload is the moment to finish an update that was staged because the eGPU was in use:
+# the previous session is gone and this one has not taken the display yet. Requiring a detach — or a
+# reboot — to update the software that manages the eGPU is absurd, so it happens here instead.
+# Refused automatically (and silently left for later) if the eGPU is actually presenting.
+apply_staged_update() {
+  local out
+  [ -x /usr/local/sbin/nv-egpu-buddy-privileged ] || return 0
+  [ "$(cat /etc/nv-egpu-buddy/version 2>/dev/null)" \
+    != "$(cat /home/deck/.local/share/steamos-egpu-buddy/VERSION 2>/dev/null)" ] || return 0
+  out=$(timeout 300 sudo -n /usr/local/sbin/nv-egpu-buddy-privileged apply-staged-update 2>&1) || true
+  [ -n "$out" ] && log "staged update: $(printf '%s' "$out" | tr '\n' ' ')"
+  return 0
+}
+apply_staged_update
+
 card_for_pci() {
   local pci=$1 card fallback=
   # A GPU can carry MORE THAN ONE DRM card: a stale card survives a driver reload or a

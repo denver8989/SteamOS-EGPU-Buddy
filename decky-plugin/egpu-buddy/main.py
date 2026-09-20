@@ -24,7 +24,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.51"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.52"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -72,6 +72,12 @@ STAGES = (("== preflight", 3, "Checking the system"), ("== installing user files
 # the one long stage with countable output: the compile prints ~15,500 lines (measured, same with any -j) until the next marker
 SPAN = {"==> Starting build()": (15500, 80)}
 RC_NO_DRIVER = 20   # install.sh on SteamOS: everything installed except the NVIDIA driver extension
+# install.sh cannot write /usr/local while the driver extension is merged and the eGPU is in use.
+# That is NOT a failed update: the new payload has already been unpacked into the self-heal source,
+# and the boot path installs it when the versions differ — before the eGPU is brought up, with no
+# session to disturb. So the update is STAGED and finishes on the next reboot. Nobody should have
+# to unplug an eGPU to update the software that manages it.
+RC_STAGED = 21
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 ST = "/run/nvegpu"
@@ -362,7 +368,7 @@ def _setup_worker(action, with_driver=False, version=None):
         if action == "install":
             _notify("Install finished. Reboot with the eGPU unplugged, then plug it in." if rc == 0 else
                     "The NVIDIA driver was not built. Keep the eGPU unplugged and open EGPU Buddy." if rc == RC_NO_DRIVER else
-                    "Not installed: the eGPU is in use. Safe Detach, unplug it, then install again." if rc == 21 else
+                    "Update staged: it finishes by itself on the next reboot. Nothing to unplug." if rc == RC_STAGED else
                     f"Install failed (rc {rc}). Open EGPU Buddy for details.")
     except Exception as ex:  # noqa: BLE001
         _setup["rc"] = 1
@@ -459,8 +465,9 @@ def _update_worker(version):
             _update["state"] = f"plugin {version} installed; restarting"; return
         _update["state"] = f"installing the system files {version}"
         _setup_worker("install", False, version)
-        if _setup["rc"] not in (0, RC_NO_DRIVER): raise RuntimeError(f"system files install failed rc={_setup['rc']}")
-        _update["state"] = f"updated to {version}" + ("; the NVIDIA driver was not built" if _setup["rc"] == RC_NO_DRIVER else ""); _update["available"] = ""
+        if _setup["rc"] not in (0, RC_NO_DRIVER, RC_STAGED): raise RuntimeError(f"system files install failed rc={_setup['rc']}")
+        _update["state"] = (f"updated to {version}; finishes on the next reboot" if _setup["rc"] == RC_STAGED
+                            else f"updated to {version}" + ("; the NVIDIA driver was not built" if _setup["rc"] == RC_NO_DRIVER else "")); _update["available"] = ""
         d = _settings(); d["last_update"] = version; _save_settings(d)
     except Exception as ex:  # noqa: BLE001
         d = _settings(); d.pop("continue_update", None); _save_settings(d)
