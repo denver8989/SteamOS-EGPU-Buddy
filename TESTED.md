@@ -40,6 +40,15 @@ Same Legion Go (the first one), SteamOS 3.8, kernel 6.16.12-valve24.5, RTX 5060 
 | Either USB4 port | both reach a full 16 GiB BAR1; the eGPU enumerates behind whichever root port is used |
 | Patched driver detection | read from the installed modules, not from a package SteamOS does not have |
 
+Also verified on 2026-09-20, by swapping the cable on a live session:
+
+| Verified on the device | Result |
+|---|---|
+| DisplayPort -> HDMI while attached, on a TV | `staging Game Mode output 4096x2160@120 on HDMI-A-1` — 4K at 120 Hz |
+| HDMI -> DisplayPort back again | `staging Game Mode output 5120x1440@144 on DP-9` |
+| The handheld panel during the gap with no eGPU output | came back on by itself, and went dark again once the TV had the picture |
+| Audio across both swaps | stayed on the eGPU output; the sink is chosen by port availability, so DP and HDMI behave the same |
+
 Not verified on this machine: a from-scratch install after a full uninstall (the next thing to test), and anything on
 hardware other than the two handhelds named here.
 

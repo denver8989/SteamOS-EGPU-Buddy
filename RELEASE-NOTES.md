@@ -1,3 +1,17 @@
+0.7.50 — HDMI proven on the device: 4K at 120 Hz, and the cable can be swapped live.
+
+Swapping the display cable on a running session, on the machine rather than in theory:
+
+    staging Game Mode output 4096x2160@120 on HDMI-A-1     (DisplayPort pulled, HDMI into a TV)
+    staging Game Mode output 5120x1440@144 on DP-9         (swapped back)
+
+The handheld panel came back on by itself during the moment when the eGPU had no output at all, and went dark again
+once the TV had the picture — the protection added in 0.7.29 doing its job on a real transition rather than a
+contrived one. Audio stayed on the eGPU output across both swaps, which is what choosing the sink by port
+availability rather than by port name buys: DisplayPort and HDMI behave identically.
+
+No code changes; this release records what is now verified.
+
 0.7.49 — sound follows the eGPU, and lets go when you tell it to.
 
 Attaching the eGPU now moves audio to the monitor on the end of the cable, in Game Mode and on the desktop, and a Safe
