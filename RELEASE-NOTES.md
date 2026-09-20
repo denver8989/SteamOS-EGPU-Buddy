@@ -1,3 +1,20 @@
+0.7.59 — uninstall now removes this project's own files, and says so where you pressed the button.
+
+Two faults found by actually uninstalling on a device.
+
+**Thirteen of this project's scripts survived a successful uninstall**, along with thirty-five backup files. Every
+install backs up the file it replaces, so after a few updates the newest backup of a file is simply an older copy of
+*our own*, and the uninstaller dutifully restored it. "Uninstall finished rc=0" and `/usr/local/sbin` still full of
+`egpu-*`. A backup is now only restored when it is genuinely something that predates this project; anything of ours is
+removed, and our backups are removed with it. Checked both directions: a foreign file's original is still restored.
+
+**The result appeared three pages away.** The main page said "uninstall started" and never changed — no completion, no
+failure, nothing — while the finished message sat in the setup panel behind two navigation steps. Progress and result
+now show on the main page, where the button is, ending with "Uninstalled. The machine is back to how it was."
+
+`uninstall.sh --verify` now also fails on any surviving `egpu-*` or backup file, so this class of leftover cannot pass
+as clean again.
+
 0.7.58 — stop asking for a reboot that is not needed, and stop telling people to unplug for it.
 
 After every install the panel said "Installed. Reboot with the eGPU unplugged." Both halves were wrong.

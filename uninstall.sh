@@ -9,8 +9,18 @@ USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6); USER_UID=$(id -u "$USER_N
 userctl(){ if [ "$AS_ROOT" = 1 ]; then runuser -u "$USER_NAME" -- env "XDG_RUNTIME_DIR=/run/user/$USER_UID" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$USER_UID/bus" systemctl --user "$@"; else systemctl --user "$@"; fi; }
 map_dest(){ case "$1" in system/*) echo "/${1#system/}";; user/*) echo "$USER_HOME/${1#user/}";; esac; }
 restore_or_remove(){ # $1 dest ; run in the right privilege context
+  # A backup is only worth restoring if it is something that was here BEFORE this project. Every
+  # reinstall backs up the file it replaces, so after a few updates the newest backup is simply an
+  # OLDER COPY OF OUR OWN FILE — and restoring that left thirteen of this project's scripts sitting
+  # in /usr/local/sbin after a "successful" uninstall, plus thirty-five backup files. Uninstalling
+  # has to leave the machine as it was found, so anything that is ours is removed, not restored.
   local d=$1 b; b=$(ls -t "$d".bak-egpu-buddy-* 2>/dev/null | head -1)
-  if [ -n "$b" ]; then mv -f "$b" "$d"; echo "restored $d"; else rm -f "$d"; echo "removed  $d"; fi
+  if [ -n "$b" ] && ! grep -qsaiE 'egpu|nv-egpu-buddy' "$b"; then
+    mv -f "$b" "$d"; echo "restored $d"
+  else
+    rm -f "$d"; echo "removed  $d"
+  fi
+  rm -f "$d".bak-egpu-buddy-* 2>/dev/null || true   # our own backups were never part of the system
 }
 runtime_leftovers(){
   printf '%s\n' \
@@ -27,6 +37,9 @@ if [ "${1:-}" = "--verify" ]; then
   left=0
   for f in $(cd "$ROOT" && find system user -type f); do
     d=$(map_dest "$f"); [ -e "$d" ] && { echo "LEFT  $d"; left=1; }
+  done
+  for f in /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* /usr/local/sbin/*.bak-egpu-buddy-*; do
+    [ -e "$f" ] && { echo "LEFT  $f"; left=1; }
   done
   for d in $(runtime_leftovers) /etc/sudoers.d/zz-steamos-egpu-buddy /etc/sudoers.d/steamos-egpu-buddy \
            /etc/extensions/egpu-nvidia.raw /etc/extensions/egpu-nvidia /home/.egpu-buddy \
