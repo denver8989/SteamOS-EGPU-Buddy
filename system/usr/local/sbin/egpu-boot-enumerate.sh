@@ -121,9 +121,11 @@ if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gp
   # bridge windows were sized at boot for the BARs the device already had), re-enumerate the
   # tunnel so the kernel sizes them again the way it does for a hot-plug, and ask once more.
   for _ in $(seq 1 15); do [ "$("$PRIV" status 2>/dev/null)" = "ALIVE" ] && break; sleep 1; done
+  # the largest bar THIS card offers: 16GiB suits a 16GB card and does not exist on a 10GB one
+  _max=$("$PRIV" resize-max 2>/dev/null); _max=${_max:-14}
   _first=0
   for _try in 1 2 3; do
-    if _out=$("$PRIV" resize 14 2>&1); then _first=1; break; fi
+    if _out=$("$PRIV" resize "$_max" 2>&1); then _first=1; break; fi
     sleep 2
   done
   if [ "$_first" = 1 ]; then
@@ -140,7 +142,7 @@ if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gp
         # succeeded a minute later on the same machine, which is how 256MiB got mistaken for normal.
         _done=0
         for _try in $(seq 1 10); do
-          if _out=$("$PRIV" resize 14 2>&1); then
+          if _out=$("$PRIV" resize "$_max" 2>&1); then
             log "BAR1 resized after re-enumeration (attempt $_try) -> $(bar1_mib "$gpu")MiB"; _done=1; break
           fi
           sleep 2
@@ -155,7 +157,8 @@ if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gp
   fi
   # never leave a partially resized BAR behind: it is the size that wedges the driver
   _mib=$(bar1_mib "$gpu")
-  if [ "$_mib" -gt 256 ] && [ "$_mib" -lt 16384 ]; then
+  _full=$(( 1 << (_max > 20 ? 20 : _max) ))   # MiB the card's largest bar would give
+  if [ "$_mib" -gt 256 ] && [ "$_mib" -lt "$_full" ]; then
     log "BAR1 ended at ${_mib}MiB — neither full nor stock, and that size wedges driver init: backing it down"
     "$PRIV" resize 8 >/dev/null 2>&1 || true
   fi

@@ -322,6 +322,19 @@ case "$action" in
       bash "$_asu_src/install.sh" >/var/log/egpu-staged-update.log 2>&1
     printf 'staged update finished: now %s\n' "$(cat /etc/nv-egpu-buddy/version 2>/dev/null || echo unknown)"
     ;;
+  resize-max)
+    # The largest BAR this particular card offers. Used instead of a fixed 16GiB so every GPU gets
+    # its full bar rather than the one that happened to be on the development machine.
+    [ "$#" -eq 0 ] || die "resize-max takes no arguments"
+    _rm_mask=$(cat "$GDEV/resource1_resize" 2>/dev/null)
+    [ -n "$_rm_mask" ] || die "BAR1 resize control is absent" 2
+    _rm_best=""
+    for _rm_b in $(seq 31 -1 0); do
+      [ $(( (0x$_rm_mask >> _rm_b) & 1 )) -eq 1 ] && { _rm_best=$_rm_b; break; }
+    done
+    [ -n "$_rm_best" ] || die "this GPU advertises no BAR1 sizes" 2
+    printf '%s\n' "$_rm_best"
+    ;;
   reenumerate-tunnel)
     # Re-enumerate the eGPU's whole Thunderbolt subtree so the kernel sizes the bridge windows
     # again, the way it does for a device that arrives AFTER boot. This is the difference between
@@ -388,9 +401,15 @@ case "$action" in
     ;;
   resize)
     [ "$#" -eq 1 ] || die "resize requires one size code"
-    # 14=16GB 13=8GB 12=4GB, and 8=256MB to back the BAR down again: a platform whose driver
-    # will not initialise with a large BAR has to be able to get back to where it started.
-    case "$1" in 8|12|13|14) ;; *) die "resize code $1 is not allowed" 2 ;; esac
+    # Ask the CARD what it supports instead of listing sizes that suit one GPU. resource1_resize is
+    # a bitmask: bit N set means 2^N MB is available. A 16GB BAR is right for a 16GB card and simply
+    # does not exist on a 10GB one, so a hardcoded list would leave other cards at the stock size.
+    _rz_mask=$(cat "$GDEV/resource1_resize" 2>/dev/null)
+    [ -n "$_rz_mask" ] || die "BAR1 resize control is absent" 2
+    case "$1" in ''|*[!0-9]*) die "resize takes a size code" 2 ;; esac
+    [ "$1" -le 31 ] || die "resize code $1 is out of range" 2
+    [ $(( (0x$_rz_mask >> $1) & 1 )) -eq 1 ] ||
+      die "this GPU does not support BAR1 size code $1 (it advertises mask 0x$_rz_mask)" 2
     require_gpu_alive "BAR1 resize"
     [ ! -L "$GDEV/driver" ] || die "GPU has a bound driver; refusing resize" 2
     [ -e "$GDEV/resource1_resize" ] || die "BAR1 resize control is absent" 2

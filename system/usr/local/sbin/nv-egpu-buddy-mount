@@ -299,10 +299,9 @@ free_siblings() {
 resize_bar1() {
   refresh_gpu_target
   [ -e "$GDEV/resource1_resize" ] || return 0
-  priv resize 14 >/dev/null 2>&1 ||
-    priv resize 13 >/dev/null 2>&1 ||
-    priv resize 12 >/dev/null 2>&1 ||
-    true
+  # the card's own largest bar; the fixed 14/13/12 ladder was the development GPU's sizes
+  local want; want=$(priv resize-max 2>/dev/null)
+  [ -n "$want" ] && priv resize "$want" >/dev/null 2>&1 || true
 }
 
 compute_attach_once() {

@@ -1,3 +1,16 @@
+0.7.64 — BAR1 size comes from the card, not from the one this was developed on.
+
+The boot path asked for a 16 GiB BAR1 and accepted nothing else — correct for the 16 GB card it was written against,
+and wrong for every other GPU. A 10 GB card does not advertise a 16 GiB bar at all, so every attempt would have failed
+and it would have run at the stock 256 MiB with no explanation.
+
+The card is now asked what it supports. `resource1_resize` is a bitmask of available sizes; the largest one it
+advertises is what gets requested, and "full bar or stock" means full *for that card*. Checked against three shapes:
+a 16 GB card picks 16384 MB, a card whose largest is 8 GB picks 8192 MB, and one offering only 64 MB picks that.
+
+This is the same rule as everywhere else in this project: read the hardware, never assume the development machine's
+values.
+
 0.7.63 — a cable pull on the desktop no longer dumps you into Game Mode.
 
 Unplugging the eGPU while using the **desktop** recovered into **Game Mode**. From the machine's own log:
