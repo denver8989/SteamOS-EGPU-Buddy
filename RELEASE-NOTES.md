@@ -1,3 +1,23 @@
+0.7.57 — uninstall now really does put the machine back.
+
+The intended result of uninstalling is the machine exactly as it was before this was ever installed — desktop and Game
+Mode both — with nothing left but the Decky plugin itself. Checking the installer line by line against the uninstaller
+found two things that would not have come back.
+
+**The boot configuration.** Installing regenerates the GRUB config, and uninstalling regenerated it again on the way
+out — and a regenerated config on SteamOS comes out without the steamenv header. Without it the bootloader strips the
+verbosity parameters and puts none back, and there is no timeout: a wall of console text, stopping at a menu, on a
+handheld with no keyboard. Uninstalling would have left exactly the two faults that cost the most time today. The
+header and the timeout are now restored on the way out, and `--verify` fails if a config is left that would stop at a
+menu.
+
+**`/etc/pacman.conf`.** Installing adds the NVIDIA userspace packages to `IgnorePkg` to pin them to the patched
+modules. Nothing removed them, so the package manager would keep holding packages back for software that is no longer
+installed. Uninstall now removes only those entries, never the rest of the line, and drops the line if it was empty
+before. Checked against every shape that line takes, including a commented-out one, which stays untouched.
+
+`uninstall.sh --verify` reports both, so "clean" means clean rather than "the files are gone".
+
 0.7.56 — correction to 0.7.55, and the setup panel now matches the main page.
 
 0.7.55's notes said the "Safe Detach first" reason also appeared in the setup panel. It did not: that edit failed and I

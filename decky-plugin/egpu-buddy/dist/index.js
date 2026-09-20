@@ -103,7 +103,7 @@ const setAutoUpdate = callable("set_auto_update");
 const checkUpdate = callable("check_update");
 const popNotice = callable("pop_notice");
 const vt = (v) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
-const PLUGIN_VERSION = "0.7.56";
+const PLUGIN_VERSION = "0.7.57";
 const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 // The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
 const Progress = ({ pct, title, step, started, expect }) => (SP_JSX.jsxs("div", { style: { width: "100%", boxSizing: "border-box", padding: "4px 0" }, children: [SP_JSX.jsxs("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" }, children: [SP_JSX.jsx("span", { children: title }), SP_JSX.jsxs("span", { children: [Math.round(pct), "%"] })] }), SP_JSX.jsx("div", { style: { width: "100%", height: "6px", borderRadius: "3px", background: "rgba(255,255,255,0.15)", overflow: "hidden" }, children: SP_JSX.jsx("div", { style: { width: `${Math.max(0, Math.min(100, pct))}%`, height: "100%", background: "#1a9fff", transition: "width .4s" } }) }), SP_JSX.jsx("div", { style: { fontSize: "12px", marginTop: "4px", whiteSpace: "normal" }, children: step }), SP_JSX.jsxs("div", { style: { fontSize: "11px", opacity: 0.75, marginTop: "2px", whiteSpace: "normal" }, children: [started ? `${mmss(Date.now() / 1000 - started)} elapsed` : "", expect ? ` · usually ${expect}` : ""] }), SP_JSX.jsx("div", { style: { fontSize: "11px", opacity: 0.75, marginTop: "2px", whiteSpace: "normal" }, children: "You can close this menu: it continues, and a notification appears when it is done." })] }));

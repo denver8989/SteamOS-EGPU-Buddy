@@ -34,6 +34,14 @@ if [ "${1:-}" = "--verify" ]; then
     [ -e "$d" ] && { echo "LEFT  $d"; left=1; }
   done
   grep -q '^sysext /usr ' /proc/mounts 2>/dev/null && { echo "LEFT  driver extension still merged into /usr"; left=1; }
+  grep -qE '^IgnorePkg.*\b(nvidia-utils|lib32-nvidia-utils|opencl-nvidia|lib32-opencl-nvidia)\b' /etc/pacman.conf 2>/dev/null &&
+    { echo "LEFT  pacman.conf still pins NVIDIA packages (IgnorePkg)"; left=1; }
+  # the boot configuration must be able to boot unattended and quietly, as it did before the install
+  bcfg=$(ls /efi/EFI/steamos/grub.cfg /boot/efi/EFI/steamos/grub.cfg /boot/grub/grub.cfg 2>/dev/null | head -1)
+  if [ -n "$bcfg" ] && sudo test -r "$bcfg"; then
+    sudo grep -q 'steamenv_init' "$bcfg" 2>/dev/null || sudo grep -qE '^[[:space:]]*set timeout=' "$bcfg" 2>/dev/null ||
+      { echo "LEFT  boot config would stop at a menu (no steamenv header and no timeout)"; left=1; }
+  fi
   # The plugin and the installed copy it runs from are kept ON PURPOSE when the uninstall
   # came from the plugin (it cannot delete itself mid-run, and you need it to reinstall).
   for d in "$USER_HOME/homebrew/plugins/EGPU-Buddy" "$USER_HOME/.local/share/steamos-egpu-buddy"; do
@@ -63,9 +71,51 @@ fi
 sudo /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || sudo rm -f /etc/plasmalogin.conf.d/zz-egpu-buddy-session.conf /etc/sddm.conf.d/zz-egpu-buddy-session.conf /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
 sudo rm -f /etc/sudoers.d/steamos-egpu-buddy /etc/sudoers.d/zz-steamos-egpu-buddy
 sudo rm -f /etc/atomic-update.conf.d/egpu-buddy.conf
+# The install pins the NVIDIA userspace by adding it to pacman's IgnorePkg. Leaving that behind means
+# the package manager keeps holding packages back for software that is no longer here — which is not
+# "the machine as it was". Remove only the entries this project adds, never the whole line, and drop
+# the line entirely if it was empty before.
+if [ -f /etc/pacman.conf ] && grep -qE '^IgnorePkg' /etc/pacman.conf; then
+  sudo cp -a /etc/pacman.conf "/etc/pacman.conf.bak-egpu-buddy-$(date +%Y%m%d-%H%M%S)"
+  for pk in nvidia-utils lib32-nvidia-utils opencl-nvidia lib32-opencl-nvidia; do
+    sudo sed -i -E "s/^(IgnorePkg[[:space:]]*=.*)[[:space:]]+$pk\b/\1/; s/^(IgnorePkg[[:space:]]*=)[[:space:]]*$pk\b/\1/" /etc/pacman.conf
+  done
+  # an IgnorePkg line left with nothing on it was not there before us
+  sudo sed -i -E '/^IgnorePkg[[:space:]]*=[[:space:]]*$/d' /etc/pacman.conf
+  echo "restored pacman.conf (NVIDIA package pins removed)"
+fi
 if [ -f /etc/default/grub.d/egpu-buddy.cfg ]; then sudo rm -f /etc/default/grub.d/egpu-buddy.cfg
   cfg=$(ls /efi/EFI/steamos/grub.cfg /boot/efi/EFI/steamos/grub.cfg /boot/grub/grub.cfg 2>/dev/null | head -1)
-  [ -n "$cfg" ] && sudo grub-mkconfig -o "$cfg" >/dev/null 2>&1 && echo "kernel parameters removed from the boot configuration ($cfg)"; fi
+  if [ -n "$cfg" ] && sudo grub-mkconfig -o "$cfg" >/dev/null 2>&1; then
+    echo "kernel parameters removed from the boot configuration ($cfg)"
+    # Uninstalling must leave the machine as it was found. grub-mkconfig on SteamOS produces a config
+    # WITHOUT the steamenv header block, and without it the bootloader strips the verbosity parameters
+    # and adds none back, and there is no timeout — so a boot comes up as a wall of console text and
+    # stops at a menu, on a handheld with no keyboard. Removing this project must not leave that behind.
+    if ! sudo grep -q 'steamenv_init' "$cfg" 2>/dev/null && sudo grep -q '^menuentry ' "$cfg" 2>/dev/null; then
+      sudo awk 'BEGIN{done=0}
+           /^menuentry / && !done {
+             print "## start header steamenv sub block (restored on uninstall)"
+             print "insmod steamenv"
+             print "steamenv_loader_mode=auto"
+             print "steamenv_kernel_mode=keep"
+             print "steamenv_quiet=\"loglevel=3 splash quiet plymouth.ignore-serial-consoles fbcon=vc:4-6\""
+             print "steamenv_noisy=\"loglevel=5 sysrq_always_enabled splash=verbose fbcon=nodefer\""
+             print "steamenv_verbosity=\"\""
+             print "timeout=0"
+             print "timeout_style=menu"
+             print "steamenv_init"
+             print "## end steamenv header sub block"
+             print ""
+             done=1
+           }
+           {print}' "$cfg" > /tmp/egpu-grub-restored.$$ && sudo cp /tmp/egpu-grub-restored.$$ "$cfg" && rm -f /tmp/egpu-grub-restored.$$
+      echo "restored SteamOS's boot header (quiet boot, no menu) — the machine boots as it did before"
+    fi
+    sudo grep -qE '^[[:space:]]*set timeout=' "$cfg" 2>/dev/null ||
+      { sudo sed -i '1i set timeout=0' "$cfg"; sudo sed -i '1i set timeout_style=hidden' "$cfg"; }
+  fi
+fi
 sudo rm -f /etc/nv-egpu-buddy/version
 # Everything else this project creates at RUNTIME rather than at install time. Without
 # these a reinstall is not a fresh install: it inherits old state, an old gamescope and
