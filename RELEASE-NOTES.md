@@ -1,3 +1,11 @@
+0.7.56 — correction to 0.7.55, and the setup panel now matches the main page.
+
+0.7.55's notes said the "Safe Detach first" reason also appeared in the setup panel. It did not: that edit failed and I
+published the notes anyway. The main-page button described there is real and works; the setup panel still let you press
+Uninstall with the driver loaded and watch it fail.
+
+Fixed here: the setup panel's Uninstall is disabled with the same reason, so both places behave identically.
+
 0.7.55 — Uninstall is on the main page, and says why when it cannot run.
 
 0.7.54 moved uninstall one press closer; that was still one press too many. Asking someone to press a button that

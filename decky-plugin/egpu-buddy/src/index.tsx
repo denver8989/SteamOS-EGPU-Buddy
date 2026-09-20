@@ -32,7 +32,7 @@ const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
-const PLUGIN_VERSION = "0.7.55";
+const PLUGIN_VERSION = "0.7.56";
 
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 // The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
@@ -242,10 +242,11 @@ function Content() {
             </ButtonItem>
           </PanelSectionRow>
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy || !!su?.busy || !su?.installed_version} onClick={() => { if (confirmSetup === "uninstall") { setConfirmSetup(""); run(uninstallSystem); } else setConfirmSetup("uninstall"); }}>
+            <ButtonItem layout="below" disabled={busy || !!su?.busy || !su?.installed_version || egpuMounted} onClick={() => { if (confirmSetup === "uninstall") { setConfirmSetup(""); run(uninstallSystem); } else setConfirmSetup("uninstall"); }}>
               {confirmSetup === "uninstall" ? "Press again to confirm uninstall" : "Uninstall system integration"}
             </ButtonItem>
           </PanelSectionRow>
+          {egpuMounted && su?.installed_version && <PanelSectionRow><div style={{ fontSize: "11px", opacity: 0.7 }}>Safe Detach the eGPU first: the system files cannot be removed while its driver is running.</div></PanelSectionRow>}
           {su?.log && <PanelSectionRow><div style={{ fontSize: "10px", whiteSpace: "pre-wrap", opacity: 0.8 }}>{su.log}</div></PanelSectionRow>}
         </PanelSection>
       )}
