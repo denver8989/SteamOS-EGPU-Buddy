@@ -1,15 +1,38 @@
 #!/bin/bash
-# egpu-kernel-cmdline --check | --apply [--dry-run]
+# egpu-kernel-cmdline --check | --written | --pending | --apply [--dry-run]
 # The kernel parameters the eGPU path needs (README "Kernel command line"), and how to persist them per bootloader.
 # --check prints the parameters missing from the RUNNING kernel (exit 1 if any). --apply writes them into the
 # bootloader config (backup kept) and regenerates it; a reboot is needed afterwards.
 set -u
+# hpmemprefsize=16G: one value for both cards. It is the size the RTX 5060 Ti is proven at, and the
+# RTX 3080 reaches a full 16GiB BAR1 at this value too, so neither card needs a special case.
+#
+# Note it is a PER-EMPTY-HOTPLUG-PORT reserve, not a pool, and a Thunderbolt switch has four
+# downstream ports — so raising it does not help a starved card, it starves it further by handing
+# more of the root-port window to ports with nothing behind them. What actually places a large BAR
+# is the re-enumeration in egpu-boot-enumerate.sh: ask the card for the big BAR first, keep the
+# tunnel link up, and hand back every downstream port at once.
 WANT="nvidia-drm.modeset=1 pci=realloc=on,hpmemsize=512M,hpmemprefsize=16G,noaer pcie_aspm=off thunderbolt.host_reset=0 thunderbolt.clx=0 iommu=pt pcie_ports=native"
+# The boot-verbosity parameters SteamOS's own configuration carries. Regenerating the GRUB config
+# puts them where steamenv_boot strips them, so we re-add them somewhere it does not touch.
+QUIET="loglevel=3 quiet splash plymouth.ignore-serial-consoles"
 MODE=${1:---check}; DRY=0; [ "${2:-}" = --dry-run ] && DRY=1
 missing(){ local cur; cur=$(cat /proc/cmdline); for p in $WANT; do case " $cur " in *" $p "*) ;; *) printf '%s ' "$p";; esac; done; }
 merge(){ # $1 = existing cmdline string -> string with our params (replacing any pci=/nvidia-drm.modeset=/pcie_aspm=/iommu= token)
   local out=""; for t in $1; do case "$t" in pci=*|nvidia-drm.modeset=*|pcie_aspm=*|thunderbolt.host_reset=*|thunderbolt.clx=*|iommu=*|pcie_ports=*) ;; *) out="$out $t";; esac; done
   printf '%s %s' "${out# }" "$WANT"; }
+# --pending: exit 0 when the parameters are WRITTEN to the bootloader configuration but the running kernel does not
+# have them yet (= a reboot is all that is missing). The plugin shows "reboot" then, not another "apply".
+written(){ local cfg
+  if command -v rpm-ostree >/dev/null 2>&1; then cfg=$(rpm-ostree kargs 2>/dev/null)
+  elif [ -f /etc/default/limine ]; then cfg=$(cat /etc/default/limine 2>/dev/null)
+  else cfg=$(cat /etc/default/grub /etc/default/grub.d/*.cfg /boot/loader/entries/*.conf 2>/dev/null); fi
+  for p in $WANT; do case "$cfg" in *"$p"*) ;; *) return 1;; esac; done; return 0; }
+# --written: exit 0 when the bootloader CONFIGURATION carries all parameters (they survive the next kernel update).
+# A running kernel can have them from hand-edited boot entries while the configuration they are regenerated from
+# does not (found on the development machine, 2026-09-19): then --check passes and the next kernel update drops them.
+if [ "$MODE" = --written ]; then written && { echo "kernel parameters persisted"; exit 0; }; echo "kernel parameters are NOT in the bootloader configuration"; exit 1; fi
+if [ "$MODE" = --pending ]; then [ -n "$(missing)" ] && written && { echo "kernel parameters written; reboot to activate"; exit 0; }; exit 1; fi
 if [ "$MODE" = --check ]; then m=$(missing); [ -z "$m" ] && { echo "kernel command line: ok"; exit 0; }; echo "missing kernel parameters: $m"; exit 1; fi
 [ "$MODE" = --apply ] || { echo "usage: $0 --check | --apply [--dry-run]"; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "--apply needs root"; exit 1; }
@@ -26,7 +49,74 @@ elif [ -f /etc/default/limine ]; then                                 # CachyOS 
   cur=$(sed -n 's/^KERNEL_CMDLINE\[default\]="\(.*\)"$/\1/p' /etc/default/limine | head -1); new=$(merge "$cur")
   edit /etc/default/limine "s|^KERNEL_CMDLINE\[default\]=\".*\"|KERNEL_CMDLINE[default]=\"$new\"|" && did=1
   [ $DRY = 1 ] || { command -v limine-update >/dev/null && limine-update >/dev/null 2>&1 && echo "limine-update done" || echo "run limine-update (or regenerate your Limine entries) to apply"; }
-elif [ -f /etc/default/grub ]; then                                   # GRUB (Arch, SteamOS)
+elif [ -f /etc/default/grub ] && command -v steamos-readonly >/dev/null 2>&1; then   # SteamOS: GRUB drop-in
+  # An OS update replaces /etc/default/grub, but grub-mkconfig also reads /etc/default/grub.d/*.cfg and SteamOS keeps
+  # files listed in /etc/atomic-update.conf.d across updates (install.sh lists this one). Verified on the 3.8.14 image.
+  d=/etc/default/grub.d/egpu-buddy.cfg
+  # An older apply may have written these straight into /etc/default/grub. Leaving them there
+  # puts two copies on the command line, and when a VALUE changes (16G -> 32G) it is not defined
+  # which one wins. Take ours out of the base file; the drop-in below is the single source.
+  if [ $DRY = 0 ] && grep -q 'hpmemprefsize\|nvidia-drm.modeset' /etc/default/grub 2>/dev/null; then
+    cur=$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' /etc/default/grub | head -1)
+    stripped=""
+    for t in $cur; do case "$t" in pci=*|nvidia-drm.modeset=*|pcie_aspm=*|thunderbolt.host_reset=*|thunderbolt.clx=*|iommu=*|pcie_ports=*) ;; *) stripped="$stripped $t" ;; esac; done
+    cp -a /etc/default/grub "/etc/default/grub.bak-egpu-buddy-$TS"
+    sed -E -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=\".*\"|GRUB_CMDLINE_LINUX_DEFAULT=\"${stripped# }\"|" /etc/default/grub
+    echo "removed an older copy of the parameters from /etc/default/grub (backup kept)"
+  fi
+  if [ $DRY = 1 ]; then echo "would write $d"; else mkdir -p /etc/default/grub.d
+    # SteamOS's steamenv_boot strips "loglevel=3 quiet splash plymouth.ignore-serial-consoles" from
+    # the line it boots, wherever they sit — measured: with our parameters after them they were
+    # dropped, and with our parameters before them they were dropped again, while everything in
+    # GRUB_CMDLINE_LINUX survived. Every boot became a wall of console text. So they are restored
+    # through GRUB_CMDLINE_LINUX, which is left alone. Harmless if the platform also adds its own.
+    # GRUB_TIMEOUT_STYLE too: a config regenerated by grub-mkconfig on SteamOS comes out with NO
+    # timeout directive at all, and GRUB then waits at a menu FOREVER. On a handheld with no
+    # keyboard that is indistinguishable from a dead machine — it happened to a user, who had to
+    # find a keyboard to boot. SteamOS's own config is not produced by grub-mkconfig, so it never
+    # had this problem until we regenerated it.
+    printf '# SteamOS EGPU Buddy: kernel parameters the eGPU path needs (kept across OS updates)\nGRUB_CMDLINE_LINUX_DEFAULT="%s ${GRUB_CMDLINE_LINUX_DEFAULT}"\nGRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} %s"\nGRUB_TIMEOUT=0\nGRUB_TIMEOUT_STYLE=hidden\n' "$WANT" "$QUIET" > "$d"; echo "wrote $d"; did=1; fi
+  cfg=$(ls /efi/EFI/steamos/grub.cfg /boot/efi/EFI/steamos/grub.cfg /boot/grub/grub.cfg 2>/dev/null | head -1)
+  if [ $DRY = 0 ] && [ -n "$cfg" ]; then
+    if grub-mkconfig -o "$cfg" >/dev/null 2>&1; then
+      echo "grub config regenerated: $cfg"
+      # Never leave a config that stops at a menu: this device may have no keyboard.
+      if ! grep -qE '^[[:space:]]*set timeout=' "$cfg"; then
+        sed -i '1i set timeout=0' "$cfg"
+        sed -i '1i set timeout_style=hidden' "$cfg"
+        echo "the regenerated config had no timeout: pinned it to boot straight through"
+      fi
+      # ...and restore the steamenv header block if grub-mkconfig did not produce one. SteamOS's
+      # bootloader strips the verbosity parameters out of the kernel line and puts back either
+      # $steamenv_quiet or $steamenv_noisy, chosen by $steamenv_verbosity — all defined in that
+      # header. A regenerated config without it therefore strips them and adds nothing, and every
+      # boot becomes a wall of console text. The SAME block sets timeout=0, so its absence is also
+      # what left a handheld sitting at a boot menu with no keyboard. One missing block, both faults.
+      if ! grep -q 'steamenv_init' "$cfg" 2>/dev/null && grep -q '^menuentry ' "$cfg" 2>/dev/null; then
+        awk 'BEGIN{done=0}
+             /^menuentry / && !done {
+               print "## start header steamenv sub block (restored by SteamOS EGPU Buddy)"
+               print "insmod steamenv"
+               print "steamenv_loader_mode=auto"
+               print "steamenv_kernel_mode=keep"
+               print "steamenv_quiet=\"loglevel=3 splash quiet plymouth.ignore-serial-consoles fbcon=vc:4-6\""
+               print "steamenv_noisy=\"loglevel=5 sysrq_always_enabled splash=verbose fbcon=nodefer\""
+               print "steamenv_verbosity=\"\""
+               print "timeout=0"
+               print "timeout_style=menu"
+               print "steamenv_init"
+               print "## end steamenv header sub block"
+               print ""
+               done=1
+             }
+             {print}' "$cfg" > "$cfg.egpu-new" && mv "$cfg.egpu-new" "$cfg"
+        echo "the regenerated config had no steamenv header: restored it (quiet boot + no menu)"
+      fi
+    else
+      echo "could not regenerate the GRUB config; kernel parameters are written but not active yet"
+    fi
+  fi
+elif [ -f /etc/default/grub ]; then                                   # GRUB (Arch)
   cur=$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' /etc/default/grub | head -1); new=$(merge "$cur")
   edit /etc/default/grub "s|^GRUB_CMDLINE_LINUX_DEFAULT=\".*\"|GRUB_CMDLINE_LINUX_DEFAULT=\"$new\"|" && did=1
   cfg=$(ls /boot/grub/grub.cfg /boot/efi/EFI/*/grub.cfg /boot/grub2/grub.cfg 2>/dev/null | head -1)

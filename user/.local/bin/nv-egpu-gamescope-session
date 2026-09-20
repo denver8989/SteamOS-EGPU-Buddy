@@ -14,8 +14,30 @@ detect_nvidia_gpu_bdf() {
   done | sort -V | head -n 1
 }
 
+# The fallback address is the development handheld's slot. Take it only when it
+# really holds an NVIDIA GPU: every "is this connector the eGPU's?" test compares
+# against this address, so a wrong value would attribute someone else's external
+# display (a USB-C monitor, XR glasses) to an eGPU that is not there.
+# Vendor-neutral eGPU test (the definition egpu-detect uses): a display-class PCI
+# device that does not drive the built-in panel. NOT an "is it NVIDIA" test — an
+# AMD or Intel eGPU must still pass. What it excludes is everything that is not a
+# GPU at all, and the built-in GPU, whose connectors carry USB-C monitors and XR
+# glasses and must never be handed to the eGPU path.
+_is_display_class() { case "$(cat "/sys/bus/pci/devices/${1:-none}/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) return 0 ;; esac; return 1; }
+_internal_gpu_bdf() { local c dev
+  for c in /sys/class/drm/card*-eDP-*; do
+    [ -e "$c" ] || continue
+    dev=$(readlink -f "${c%-eDP-*}/device" 2>/dev/null) && { basename "$dev"; return 0; }
+  done; return 1; }
+is_egpu_bdf() {
+  [ -n "${1:-}" ] || return 1
+  _is_display_class "$1" || return 1
+  [ "$1" != "$(_internal_gpu_bdf || true)" ]
+}
+nvidia_at_bdf() { [ "$(cat "/sys/bus/pci/devices/$1/vendor" 2>/dev/null)" = "0x10de" ]; }   # only for the NVIDIA-specific fallback address below
+FALLBACK_GPU=${EGPU_FALLBACK_BDF:-0000:62:00.0}
 EGPU_PCI=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
-[ -n "$EGPU_PCI" ] || EGPU_PCI=0000:62:00.0
+if [ -z "$EGPU_PCI" ] && nvidia_at_bdf "$FALLBACK_GPU"; then EGPU_PCI=$FALLBACK_GPU; fi
 IGPU_PCI=${IGPU_PCI:-0000:c2:00.0}
 PANEL=${EGPU_PANEL_CONNECTOR:-eDP-1}
 STOCK_GAMESCOPE_SESSION=${STOCK_GAMESCOPE_SESSION:-/usr/lib/steamos/gamescope-session}
@@ -35,18 +57,48 @@ log() {
   printf 'nv-egpu-gamescope-session: %s\n' "$*" >&2
 }
 
+# A Game Mode reload is the moment to finish an update that was staged because the eGPU was in use:
+# the previous session is gone and this one has not taken the display yet. Requiring a detach — or a
+# reboot — to update the software that manages the eGPU is absurd, so it happens here instead.
+# Refused automatically (and silently left for later) if the eGPU is actually presenting.
+apply_staged_update() {
+  local out
+  [ -x /usr/local/sbin/nv-egpu-buddy-privileged ] || return 0
+  [ "$(cat /etc/nv-egpu-buddy/version 2>/dev/null)" \
+    != "$(cat /home/deck/.local/share/steamos-egpu-buddy/VERSION 2>/dev/null)" ] || return 0
+  out=$(timeout 300 sudo -n /usr/local/sbin/nv-egpu-buddy-privileged apply-staged-update 2>&1) || true
+  [ -n "$out" ] && log "staged update: $(printf '%s' "$out" | tr '\n' ' ')"
+  return 0
+}
+apply_staged_update
+
 card_for_pci() {
-  local pci=$1 card
+  local pci=$1 card fallback=
+  # A GPU can carry MORE THAN ONE DRM card: a stale card survives a driver reload or a
+  # remove/rescan cycle, and it has NO connectors. Taking the first one aimed gamescope at
+  # the dead card, which exited instantly and crash-looped the whole session into a black
+  # screen (Legion Go 1, card1 and card2 both on 0000:65:00.0, only card2 had outputs).
+  # So: pick the card that has connectors.
   for card in /sys/bus/pci/devices/"$pci"/drm/card*; do
     [ -e "$card" ] || continue
-    printf '/dev/dri/%s\n' "${card##*/}"
-    return 0
+    case "${card##*/}" in card[0-9]*) ;; *) continue ;; esac
+    [ -n "$fallback" ] || fallback=${card##*/}
+    if compgen -G "/sys/class/drm/${card##*/}-*" >/dev/null 2>&1; then
+      printf '/dev/dri/%s\n' "${card##*/}"
+      return 0
+    fi
   done
-  return 1
+  [ -n "$fallback" ] || return 1
+  printf '/dev/dri/%s\n' "$fallback"
 }
 
 connected_egpu_outputs() {
   local node base output device
+  # A display belongs to an eGPU only if the card driving it really is an eGPU.
+  # Checked here, not just where the address is resolved: a wrong address must
+  # never be able to hand an ordinary external display (USB-C monitor, XR
+  # glasses, dock) to the eGPU path.
+  is_egpu_bdf "$EGPU_PCI" || return 0
   for node in /sys/class/drm/card*-*; do
     [ -e "$node/status" ] || continue
     [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue
@@ -79,6 +131,19 @@ bar1_size_bytes() {
 
 bar1_full() {
   [ "$(bar1_size_bytes)" -ge 17179869184 ]
+}
+
+# A small BAR1 is a PERFORMANCE limit, not a reason to refuse the eGPU. It used to be part of
+# the readiness gate, which meant that on any boot where the BAR could not be resized — and it
+# cannot be resized at all once the driver is bound, or when the platform's hotplug window has
+# no room for it — Game Mode silently stayed on the built-in screen with a working eGPU sitting
+# right there. The CachyOS machine this project was developed on runs with ReBAR off entirely
+# and is fine. What actually proves the GPU is healthy is NVML responding, which the attach
+# hook already gates on: a wedged init cannot answer it.
+bar1_note() {
+  bar1_full && return 0
+  log "BAR1 is $(( $(bar1_size_bytes) / 1048576 ))MiB, not resized (lower performance over Thunderbolt, but the eGPU is used anyway)"
+  return 0
 }
 
 connector_order() {
@@ -152,7 +217,9 @@ clear_session_env() {
 refresh_egpu_target() {
   local detected
   detected=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
-  [ -n "$detected" ] || detected=${EGPU_PCI:-0000:62:00.0}
+  # Keep the previously resolved address (a surprise unplug takes the device off
+  # the bus mid-session), but never invent one that was never verified as NVIDIA.
+  [ -n "$detected" ] || detected=${EGPU_PCI:-}
   EGPU_PCI=$detected
 }
 
@@ -172,7 +239,11 @@ egpu_requested_by_env_file() {
 
 egpu_pci_present() {
   refresh_egpu_target
-  [ -e "/sys/bus/pci/devices/$EGPU_PCI" ]
+  [ -n "$EGPU_PCI" ] || return 1
+  # Vendor-checked: the fallback address is only correct on the development
+  # handheld. On any other machine that slot may hold an unrelated device
+  # (a USB-C display controller, a storage bridge) and must not read as an eGPU.
+  [ "$(cat "/sys/bus/pci/devices/$EGPU_PCI/vendor" 2>/dev/null)" = "0x10de" ]
 }
 
 egpu_native_ready() {
@@ -180,7 +251,6 @@ egpu_native_ready() {
   [ -n "$egpu_card" ] &&
     [ -n "$igpu_card" ] &&
     [ -n "$outputs" ] &&
-    bar1_full &&
     [ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]
 }
 
@@ -205,7 +275,14 @@ wait_for_egpu_native_ready() {
     fi
 
     if [ "$announced" -eq 0 ]; then
-      log "waiting up to ${EGPU_WAIT_SECONDS}s for NVIDIA-native Game Mode routing"
+      # Say which of the two waits this is. The old message always claimed the full eGPU
+      # wait, even when no eGPU was on the bus and it was about to give up after
+      # EGPU_PROBE_SECONDS — which reads in the logs like a 25s stall that never happened.
+      if [ "$requested" -eq 1 ]; then
+        log "waiting up to ${EGPU_WAIT_SECONDS}s for NVIDIA-native Game Mode routing"
+      else
+        log "checking for an eGPU (up to ${EGPU_PROBE_SECONDS}s); handheld routing if none appears"
+      fi
       announced=1
     fi
     if [ "$requested" -eq 1 ] && ! egpu_pci_present; then
@@ -450,14 +527,42 @@ outputs=
 bar1_bytes=0
 stock_session="$STOCK_GAMESCOPE_SESSION"
 
+# SAFETY NET: a Vulkan driver pin that names a file which no longer exists makes the loader report "Found no drivers",
+# and then NOTHING that uses Vulkan starts — not a game, not the compositor. That state can be left behind by any detach
+# (the NVIDIA ICD is hidden while the card is away) or by an older version of this software. Repair it at session start.
+for _v in VK_DRIVER_FILES VK_ICD_FILENAMES; do
+  eval "_p=\${$_v:-}"
+  if [ -n "${_p:-}" ] && [ ! -r "${_p%%:*}" ]; then
+    unset "$_v"; systemctl --user unset-environment "$_v" >/dev/null 2>&1 || true
+    logger -t egpu-buddy "repaired stale $_v (pointed at ${_p%%:*}, which does not exist)" 2>/dev/null || true
+  fi
+done
+unset _v _p
+
 # which session type is running: read by egpu-surprise-recover (gamescope itself dies with the card, so it cannot be asked)
-printf gamemode > "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-session-type" 2>/dev/null || true
-wait_for_egpu_native_ready || refresh_egpu_state
+# Only claim the session marker if a desktop is NOT on screen. SteamOS keeps this session's target
+# active (and relaunches it) behind a running desktop, and each relaunch used to overwrite the
+# marker with "gamemode" — so a cable pull on the desktop was recovered as Game Mode.
+pgrep -x kwin_wayland >/dev/null 2>&1 ||
+  printf gamemode > "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-session-type" 2>/dev/null || true
+  # Keep the login manager's fallback pointing at the session actually in use, so that if this
+  # session dies the machine comes back to Game Mode rather than somewhere else. The desktop attach
+  # path sets the same knob to "desktop" for the mirror-image reason. DETECTION-GATED: steamosctl
+  # exists only on SteamOS; CachyOS is untouched.
+  # A real Game Mode session removes the desktop fallback pin, so Game Mode is the default again.
+  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged session-fallback game >/dev/null 2>&1 || true
+# A Safe Detach restarts this session ON PURPOSE for the handheld screen, with the NVIDIA userspace already hidden: the eGPU
+# can never become "ready" then, and the result is ignored below anyway. Waiting cost ~30 s of dark screen per detach.
+if [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-detach-mode" ] || [ -e /run/nvegpu/gm-detach-pending ]; then
+  log "Safe Detach in progress: handheld routing without waiting for the eGPU"; refresh_egpu_state
+else
+  wait_for_egpu_native_ready || refresh_egpu_state
+fi
 
 # NV-EGPU-Buddy safe detach (Game Mode): while the marker exists the relaunched session must NOT take the eGPU
 # even though it is still on the bus (the detach helper removes it once this session is up on the panel).
 detach_mode=0; { [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-detach-mode" ] || [ -e /run/nvegpu/gm-detach-pending ]; } && detach_mode=1
-if [ "$detach_mode" = 0 ] && [ -n "$egpu_card" ] && [ -n "$igpu_card" ] && [ -n "$outputs" ] && bar1_full && [ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
+if [ "$detach_mode" = 0 ] && [ -n "$egpu_card" ] && [ -n "$igpu_card" ] && [ -n "$outputs" ] && bar1_note && [ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
   clear_session_env
   export PATH="$SHIM_DIR:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin"
   export OUTPUT_CONNECTOR
@@ -605,6 +710,22 @@ fi
 
 # diagnostics: NV_EGPU_DIAG=1 in /run/nvegpu/diag turns on Proton + Vulkan loader logging for every game of this session
 if [ -e /run/nvegpu/diag ]; then export PROTON_LOG=1 VK_LOADER_DEBUG=error,warn WINEDEBUG=-all,+vulkan; fi   # NV_EGPU_DIAG_PROTON_LOG
+# Boot straight onto the eGPU left the handheld panel LIT: turning it off only ever happened on
+# the hot-plug switch path (egpu-gamemode-switch), never when the session started on the eGPU in
+# the first place. Same rule in both: if the picture is on an eGPU output, the panel goes dark.
+# egpu-panel refuses to darken it when no eGPU is mounted, so this cannot leave a screenless machine.
+(
+  sleep 8
+  case "${OUTPUT_CONNECTOR:-}" in ""|"*"|eDP-1|eDP-1,*|"*",*) exit 0 ;; esac
+  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged panel-off >/dev/null 2>&1 &&
+    log "handheld panel off (Game Mode is on ${OUTPUT_CONNECTOR%%,*})"
+  # Sound follows the picture here as well. Booting WITH the eGPU attached never runs the attach
+  # hook's session step, so without this the picture moved to the monitor and the sound stayed on
+  # the handheld's speakers — which is exactly what happened on a real boot.
+  [ -x "$HOME/.local/bin/egpu-audio.sh" ] &&
+    log "audio: $("$HOME/.local/bin/egpu-audio.sh" follow 2>&1 | tr '\n' ' ')"
+) &
+
 # panel watchdog: after a relogin gamescope can start with an inactive libseat seat (no modeset, handheld stays dark).
 # If the panel is still disabled 12s in and no eGPU is on the bus (on the eGPU the panel is meant to be off), bounce the VT once.
 (

@@ -26,6 +26,39 @@ for arg in "$@"; do
   esac
 done
 
+# Native Steam canvas on the eGPU display: the inner (Steam UI / game) size must follow the staged OUTPUT size. gamescope
+# does that by itself when no -w/-h is given, which is what the CachyOS session script does. Valve's SteamOS script always
+# passes "-w 1280 -h 800", and Steam then settles on 1920x1080 on a 5120x1440 monitor (seen on a real device). So in this
+# mode the session's inner size is dropped; nothing here depends on the distro, only on what was passed.
+if [ "${NV_EGPU_GAMESCOPE_NATIVE_STEAM_CANVAS:-0}" = 1 ] && [ -n "${NV_EGPU_GAMESCOPE_OUTPUT_WIDTH:-}" ] && [ -z "${NV_EGPU_GAMESCOPE_NESTED_WIDTH:-}" ]; then
+  _keep=(); _skip=0
+  for arg in "$@"; do
+    if [ "$_skip" = 1 ]; then _skip=0; continue; fi
+    case "$arg" in -w|-h|--nested-width|--nested-height) _skip=1; continue ;; esac
+    _keep+=("$arg")
+  done
+  set -- "${_keep[@]}"
+fi
+
+# HDR must be enabled when gamescope STARTS. Steam's toggle only flips the output to BT.2020 + ST2084 metadata at runtime
+# (verified on the connector: Colorspace=BT2020_RGB, HDR_OUTPUT_METADATA eotf=2), while the colour pipeline was built for
+# SDR -- so sRGB-encoded pixels get sent inside a PQ-signalled frame and the display stretches them: washed out, grey,
+# raised blacks. Passing --hdr-enabled up front is what the Steam Deck session does too. For reference, KWin drives this
+# same monitor in HDR with SDR content at 400 nits and gamut wideness 0, i.e. gamescope's own defaults.
+if [ "${NV_EGPU_GAMESCOPE_HDR:-0}" = 1 ] && [[ " $* " != *" --hdr-enabled "* ]]; then
+  prefix_hdr=(--hdr-enabled)
+else
+  prefix_hdr=()
+fi
+
+# HDR output: gamescope maps SDR content (the whole Steam UI) at its default 400 nits, which on a real HDR monitor looks
+# washed out and grey (seen on the Legion Go 1; the user could only fix it by switching HDR off). 203 nits is the reference
+# SDR white for HDR signals. Opt in with NV_EGPU_GAMESCOPE_HDR_SDR_NITS=<n>; unset keeps gamescope's own default, so no
+# machine changes behaviour by upgrading.
+if [ -n "${NV_EGPU_GAMESCOPE_HDR_SDR_NITS:-}" ] && [[ " $* " != *" --hdr-sdr-content-nits "* ]]; then
+  set -- --hdr-sdr-content-nits "$NV_EGPU_GAMESCOPE_HDR_SDR_NITS" "$@"
+fi
+
 prefix=()
 [ "$add_disable_layers" -eq 0 ] || prefix+=(--disable-layers)
 [ "$add_force_composition" -eq 0 ] || prefix+=(--force-composition)
@@ -70,4 +103,15 @@ if [ "$gamescope_bin" != /usr/bin/gamescope ] && { [ ! -x "$gamescope_bin" ] || 
   gamescope_bin=/usr/bin/gamescope
   unset gamescope_drm_gbm_scanout
 fi
-exec "$gamescope_bin" "${prefix[@]}" "$@"
+# A gamescope with file capabilities (the distro's: cap_sys_nice) runs the Vulkan loader in "secure" mode, which IGNORES
+# VK_DRIVER_FILES / VK_ICD_FILENAMES: the session's NVIDIA-only routing never reaches it and it composites on the built-in
+# GPU and opens ITS display node (seen on SteamOS, where the private build cannot run). A command-line option cannot be
+# stripped: name the eGPU explicitly; gamescope opens the KMS node that belongs to the Vulkan device it chose.
+case "${VK_DRIVER_FILES:-}${VK_ICD_FILENAMES:-}" in *nvidia*)
+  if [ -n "$(getcap "$gamescope_bin" 2>/dev/null)" ] && [[ " $* " != *" --prefer-vk-device "* ]]; then
+    read -r _bdf _ < <(/usr/local/sbin/egpu-detect 2>/dev/null) || _bdf=""
+    if [ -n "$_bdf" ]; then _v=$(cat "/sys/bus/pci/devices/$_bdf/vendor" 2>/dev/null); _d=$(cat "/sys/bus/pci/devices/$_bdf/device" 2>/dev/null)
+      [ -n "$_v" ] && [ -n "$_d" ] && prefix+=(--prefer-vk-device "${_v#0x}:${_d#0x}"); fi
+  fi ;;
+esac
+exec "$gamescope_bin" "${prefix_hdr[@]}" "${prefix[@]}" "$@"

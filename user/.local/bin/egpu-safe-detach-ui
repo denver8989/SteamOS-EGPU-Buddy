@@ -21,6 +21,16 @@ speaker_card(){
   return 1
 }
 SPEAKER_CARD=$(speaker_card || true)
+# Device profile: the audio route above (Realtek on c2:00.6, Pro Audio profile) and the dock name below are the Legion Go 2
+# set-up this was proven on. On any other machine they are not requirements: there, audio is left to PipeWire's own
+# fallback and "unplugged" means "no Thunderbolt/USB4 device attached any more". (Found on a Legion Go 1: the audio
+# pre-check aborted Safe Detach before it started.)
+DEVICE=$(/usr/local/sbin/egpu-detect --device 2>/dev/null || echo generic)
+dock_attached(){
+  if [ "$DEVICE" = legion-go-2 ]; then find /sys/bus/thunderbolt/devices -maxdepth 2 -name device_name -exec grep -Flqx 'AORUS RTX506T AI BOX' {} + 2>/dev/null | grep -q .
+  else local d n   # any router below a host port: "D-R" with R != 0 ("D-0" is the host itself, "D-R:x.y" are retimers)
+    for d in /sys/bus/thunderbolt/devices/*-*; do n=${d##*/}; case "$n" in *:*|*-0) continue ;; esac; [ -e "$d" ] && return 0; done; return 1; fi
+}
 mkdir -p "$STATE_DIR"
 trap 'rm -f "$RUN/egpu-detach-mode" "$HANDOFF_LOCK"' EXIT
 status(){
@@ -91,7 +101,7 @@ kwin_session_ready(){
 recover_after_unplug(){
   local i
   for i in $(seq 1 180); do
-    if ! find /sys/bus/thunderbolt/devices -maxdepth 2 -name device_name -exec grep -Flqx 'AORUS RTX506T AI BOX' {} + 2>/dev/null | grep -q .; then
+    if ! dock_attached; then
       "$RECOVERY" recover || { status INTERNAL_AUDIO_RECOVERY_INCOMPLETE 'eGPU was unplugged, but internal audio recovery needs attention.'; exit; }
       "$RECOVERY" steam || { status STEAM_RECOVERY_INCOMPLETE 'eGPU was unplugged and audio recovered, but Steam did not return.'; exit; }
       exit
@@ -100,12 +110,14 @@ recover_after_unplug(){
   done
 }
 # Preserve the real-call-validated Pro Audio microphone; never substitute HiFi Mic1.
+if [ "$DEVICE" = legion-go-2 ]; then
 [ -n "$SPEAKER_CARD" ] || fail 'Internal Realtek audio card is unavailable.'
 [ "$(pactl get-default-source 2>/dev/null || true)" = "$SOURCE" ] || fail 'Internal Pro Audio microphone is not selected.'
 # While docked, HDMI/DisplayPort is the correct default playback route.  The
 # internal speaker becomes the default only after the physical unplug.
 pactl list short sinks 2>/dev/null | awk -v sink="$SINK" '$2 == sink { found=1 } END { exit !found }' || fail 'Internal Pro Audio speaker route is unavailable.'
 prepare_internal_audio || fail 'Internal speaker hardware could not be prepared.'
+fi
 pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && fail 'Desktop Safe Detach is not available in Game Mode.'
 IGPU_CARD=$(drm_card_for 0x1002 || true)
 GPU_CARD=$(drm_card_for 0x10de || true)
@@ -118,6 +130,7 @@ status PREFLIGHT_PASS 'Moving the Desktop to the internal iGPU. Do not unplug ye
 touch "$HANDOFF_LOCK"
 touch "$RUN/egpu-detach-mode"
 IGPU_RENDER=$(ls /sys/class/drm/$IGPU_CARD/device/drm 2>/dev/null | grep -m1 renderD)
+systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES >/dev/null 2>&1   # the NVIDIA ICD is about to be hidden
 systemctl --user set-environment \
   "KWIN_DRM_DEVICES=/dev/dri/$IGPU_CARD" \
   "KWIN_RENDER_NODES=/dev/dri/${IGPU_RENDER:-renderD128}" \

@@ -35,8 +35,28 @@ detect_nvidia_gpu_bdf() {
   done | sort -V | head -n 1
 }
 
+# Vendor-neutral eGPU test (the definition egpu-detect uses): a display-class PCI
+# device that does not drive the built-in panel. NOT an "is it NVIDIA" test — an
+# AMD or Intel eGPU must still pass. What it excludes is everything that is not a
+# GPU at all, and the built-in GPU, whose connectors carry USB-C monitors and XR
+# glasses and must never be handed to the eGPU path.
+_is_display_class() { case "$(cat "/sys/bus/pci/devices/${1:-none}/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) return 0 ;; esac; return 1; }
+_internal_gpu_bdf() { local c dev
+  for c in /sys/class/drm/card*-eDP-*; do
+    [ -e "$c" ] || continue
+    dev=$(readlink -f "${c%-eDP-*}/device" 2>/dev/null) && { basename "$dev"; return 0; }
+  done; return 1; }
+is_egpu_bdf() {
+  [ -n "${1:-}" ] || return 1
+  _is_display_class "$1" || return 1
+  [ "$1" != "$(_internal_gpu_bdf || true)" ]
+}
+nvidia_at_bdf() { [ "$(cat "/sys/bus/pci/devices/${1:-}/vendor" 2>/dev/null)" = "0x10de" ]; }   # only for the NVIDIA-specific fallback address below
 EGPU_PCI=${EGPU_PCI_BDF:-$(detect_nvidia_gpu_bdf)}
-[ -n "$EGPU_PCI" ] || EGPU_PCI=0000:62:00.0
+# The fallback address is the development handheld's slot. Take it only when it
+# really holds an NVIDIA GPU — elsewhere that slot may be an unrelated device
+# and must not be mistaken for an eGPU.
+if [ -z "$EGPU_PCI" ] && nvidia_at_bdf 0000:62:00.0; then EGPU_PCI=0000:62:00.0; fi
 KSCREEN=${KSCREEN_DOCTOR:-kscreen-doctor}
 
 strip_ansi() {
@@ -106,6 +126,10 @@ is_hdmi_output() {
 
 connected_egpu_connectors() {
   local node base output device
+  # A display belongs to an eGPU only if the card driving it really is an eGPU.
+  # Enforced here as well as at resolution time, so a wrong address can never
+  # hand an ordinary external display (USB-C monitor, XR glasses) to the eGPU.
+  is_egpu_bdf "$EGPU_PCI" || return 0
   for node in /sys/class/drm/card*-*; do
     [ -e "$node/status" ] || continue
     [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue
@@ -266,12 +290,18 @@ sysfs_output_node() {
 
 find_card_node() {
   local pci=$1 card
-  for card in /sys/bus/pci/devices/"$pci"/drm/card*; do
+  local fallback=
+  # a stale DRM card (driver reload / remove-rescan leftover) has no connectors: take one that has
+  for card in /sys/bus/pci/devices/"$pci"/drm/card[0-9]*; do
     [ -e "$card" ] || continue
-    printf '/dev/dri/%s\n' "${card##*/}"
-    return 0
+    [ -n "$fallback" ] || fallback=${card##*/}
+    if compgen -G "/sys/class/drm/${card##*/}-*" >/dev/null 2>&1; then
+      printf '/dev/dri/%s\n' "${card##*/}"
+      return 0
+    fi
   done
-  return 1
+  [ -n "$fallback" ] || return 1
+  printf '/dev/dri/%s\n' "$fallback"
 }
 
 unique_existing_files() {
@@ -384,18 +414,20 @@ stage_gamescope_env() {
 # poison Desktop sessions, or re-enable NVIDIA Gamescope HDR corruption.
 EOF
   chown -R deck:deck "$conf_dir" 2>/dev/null || true
-  systemctl --user set-environment \
-    OUTPUT_CONNECTOR= \
-    KWIN_DRM_DEVICES= \
-    VK_DRIVER_FILES= \
-    VK_ICD_FILENAMES= \
-    __EGL_VENDOR_LIBRARY_FILENAMES= \
-    __GLX_VENDOR_LIBRARY_NAME= \
-    PROTON_ENABLE_NVAPI= \
-    DXVK_ENABLE_NVAPI= \
-    PROTON_HIDE_NVIDIA_GPU= \
-    DXVK_HDR= \
-    STEAM_DISPLAY_REFRESH_LIMITS= >/dev/null 2>&1 || true
+  # UNSET, never "set to empty": an exported but empty VK_DRIVER_FILES is a driver list with no entries, and the Vulkan
+  # loader then reports "Found no drivers" — every Vulkan game fails to start. Verified on the development machine.
+  systemctl --user unset-environment \
+    OUTPUT_CONNECTOR \
+    KWIN_DRM_DEVICES \
+    VK_DRIVER_FILES \
+    VK_ICD_FILENAMES \
+    __EGL_VENDOR_LIBRARY_FILENAMES \
+    __GLX_VENDOR_LIBRARY_NAME \
+    PROTON_ENABLE_NVAPI \
+    DXVK_ENABLE_NVAPI \
+    PROTON_HIDE_NVIDIA_GPU \
+    DXVK_HDR \
+    STEAM_DISPLAY_REFRESH_LIMITS >/dev/null 2>&1 || true
   systemctl --user unset-environment \
     OUTPUT_CONNECTOR \
     KWIN_DRM_DEVICES \
@@ -410,18 +442,20 @@ EOF
     STEAM_DISPLAY_REFRESH_LIMITS \
     STEAM_GAMESCOPE_FORCE_HDR_DEFAULT \
     STEAM_GAMESCOPE_FORCE_OUTPUT_TO_HDR10PQ_DEFAULT >/dev/null 2>&1 || true
-  systemctl --user set-environment \
-    OUTPUT_CONNECTOR= \
-    KWIN_DRM_DEVICES= \
-    VK_DRIVER_FILES= \
-    VK_ICD_FILENAMES= \
-    __EGL_VENDOR_LIBRARY_FILENAMES= \
-    __GLX_VENDOR_LIBRARY_NAME= \
-    PROTON_ENABLE_NVAPI= \
-    DXVK_ENABLE_NVAPI= \
-    PROTON_HIDE_NVIDIA_GPU= \
-    DXVK_HDR= \
-    STEAM_DISPLAY_REFRESH_LIMITS= >/dev/null 2>&1 || true
+  # UNSET, never "set to empty": an exported but empty VK_DRIVER_FILES is a driver list with no entries, and the Vulkan
+  # loader then reports "Found no drivers" — every Vulkan game fails to start. Verified on the development machine.
+  systemctl --user unset-environment \
+    OUTPUT_CONNECTOR \
+    KWIN_DRM_DEVICES \
+    VK_DRIVER_FILES \
+    VK_ICD_FILENAMES \
+    __EGL_VENDOR_LIBRARY_FILENAMES \
+    __GLX_VENDOR_LIBRARY_NAME \
+    PROTON_ENABLE_NVAPI \
+    DXVK_ENABLE_NVAPI \
+    PROTON_HIDE_NVIDIA_GPU \
+    DXVK_HDR \
+    STEAM_DISPLAY_REFRESH_LIMITS >/dev/null 2>&1 || true
   sanitize_steam_gamescope_display_settings
 }
 

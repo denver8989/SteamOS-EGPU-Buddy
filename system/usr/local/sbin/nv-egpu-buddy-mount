@@ -49,16 +49,29 @@ refresh_gpu_target() {
   else
     detected=$(detect_nvidia_gpu_bdf || true)
     [ -z "$detected" ] || GPU=$detected
-    [ -n "$GPU" ] || GPU=$DEFAULT_GPU
+    # The fallback is the development handheld's slot. Take it only when it really
+    # holds an NVIDIA GPU: connector ownership is decided by comparing against this
+    # address, so a wrong value hands an unrelated external display to the eGPU.
+    [ -n "$GPU" ] ||
+      [ "$(cat "$PCI_DEVICES/$DEFAULT_GPU/vendor" 2>/dev/null)" != "0x10de" ] ||
+      GPU=$DEFAULT_GPU
   fi
-  GDEV=$PCI_DEVICES/$GPU
+  # Empty stays empty: "$PCI_DEVICES/" is a directory that always exists and would
+  # read as an eGPU that is present.
+  GDEV=${GPU:+$PCI_DEVICES/$GPU}
 }
 
 find_card_node() {
   local pci_addr=$1
   if [ -d "/sys/bus/pci/devices/$pci_addr/drm" ]; then
     local card
-    card=$(ls -d "/sys/bus/pci/devices/$pci_addr/drm"/card[0-9]* 2>/dev/null | head -n 1)
+    # a stale DRM card (driver reload / remove-rescan leftover) has no connectors: prefer one that has
+    card=""
+    for _c in "/sys/bus/pci/devices/$pci_addr/drm"/card[0-9]*; do
+      [ -e "$_c" ] || continue
+      [ -n "$card" ] || card=$_c
+      compgen -G "/sys/class/drm/$(basename "$_c")-*" >/dev/null 2>&1 && { card=$_c; break; }
+    done
     if [ -n "$card" ]; then
       echo "/dev/dri/$(basename "$card")"
       return 0
@@ -107,6 +120,14 @@ detect_empty_sibling_ports() {
 connected_egpu_connectors() {
   local node base output device
   refresh_gpu_target
+  # A display belongs to an eGPU only if the card driving it really is an eGPU:
+  # display-class, and not the built-in GPU whose connectors carry USB-C monitors
+  # and XR glasses. Vendor-neutral on purpose — see nv-egpu-buddy-privileged.
+  case "$(cat "$GDEV/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) ;; *) return 0 ;; esac
+  for _igc in /sys/class/drm/card*-eDP-*; do
+    [ -e "$_igc" ] || continue
+    [ "$(basename "$(readlink -f "${_igc%-eDP-*}/device" 2>/dev/null)")" != "$GPU" ] || return 0
+  done
   for node in /sys/class/drm/card*-*; do
     [ -e "$node/status" ] || continue
     [ "$(cat "$node/status" 2>/dev/null)" = "connected" ] || continue
@@ -278,10 +299,9 @@ free_siblings() {
 resize_bar1() {
   refresh_gpu_target
   [ -e "$GDEV/resource1_resize" ] || return 0
-  priv resize 14 >/dev/null 2>&1 ||
-    priv resize 13 >/dev/null 2>&1 ||
-    priv resize 12 >/dev/null 2>&1 ||
-    true
+  # the card's own largest bar; the fixed 14/13/12 ladder was the development GPU's sizes
+  local want; want=$(priv resize-max 2>/dev/null)
+  [ -n "$want" ] && priv resize "$want" >/dev/null 2>&1 || true
 }
 
 compute_attach_once() {

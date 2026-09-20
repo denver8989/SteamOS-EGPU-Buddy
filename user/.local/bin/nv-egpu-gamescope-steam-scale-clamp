@@ -7,6 +7,15 @@ set -uo pipefail
 
 [ "${NV_EGPU_GAMESCOPE_STEAM_SCALE_CLAMP:-1}" != "0" ] || exit 0
 
+# Two modes. "fixed" = the three numbers below, tuned on the Legion Go 2 with its 49" panel (kept there unchanged).
+# "lowest" = every other machine: automatic scaling OFF and the slider at its LOWEST position, i.e. ScaleFactor := the
+# MinScaleFactor that Steam itself computed for that display. No number is invented, so it fits any monitor.
+mode=${NV_EGPU_STEAM_UI_SCALE_MODE:-}
+# The tuned numbers belong to the 5120x1440 49" panel, not to the handheld: they are used wherever that output is staged
+# (the session wrapper exports the detected output size), and always on the Legion Go 2 as before. Anything else: lowest.
+if [ -z "$mode" ]; then
+  if [ "$(/usr/local/sbin/egpu-detect --device 2>/dev/null)" = legion-go-2 ] || [ "${NV_EGPU_GAMESCOPE_OUTPUT_WIDTH:-}x${NV_EGPU_GAMESCOPE_OUTPUT_HEIGHT:-}" = 5120x1440 ]; then mode=fixed; else mode=lowest; fi
+fi
 scale=${NV_EGPU_STEAM_UI_SCALE:-1.27981042861938477}
 min_scale=${NV_EGPU_STEAM_UI_MIN_SCALE:-0.711512446403503418}
 max_scale=${NV_EGPU_STEAM_UI_MAX_SCALE:-3.40971922874450684}
@@ -44,10 +53,11 @@ sanitize_config() {
   local config tmp backup
   while IFS= read -r config; do
     [ -n "$config" ] || continue
-    grep -qE 'External: [^"]*\|\|\|Windowed' "$config" || continue
+    grep -qF 'External: ' "$config" || continue
 
     tmp=$(mktemp)
     cp "$config" "$tmp"
+    NV_EGPU_STEAM_UI_MODE="$mode" \
     NV_EGPU_STEAM_UI_MIN_SCALE="$min_scale" \
     NV_EGPU_STEAM_UI_MAX_SCALE="$max_scale" \
     NV_EGPU_STEAM_UI_SCALE="$scale" \
@@ -55,6 +65,13 @@ sanitize_config() {
       my $min = $ENV{"NV_EGPU_STEAM_UI_MIN_SCALE"};
       my $max = $ENV{"NV_EGPU_STEAM_UI_MAX_SCALE"};
       my $scale = $ENV{"NV_EGPU_STEAM_UI_SCALE"};
+      my $mode = $ENV{"NV_EGPU_STEAM_UI_MODE"};
+      # "lowest": slider at the minimum Steam computed for this display; leave Min/Max/Auto alone
+      sub lowest {
+        my ($body, $indent) = @_;
+        return $body unless $body =~ /"MinScaleFactor"[ \t]*"([0-9.]+)"/;
+        return set_key($body, "ScaleFactor", $1, $indent);
+      }
 
       sub set_key {
         my ($body, $key, $value, $indent) = @_;
@@ -68,10 +85,12 @@ sanitize_config() {
         my ($open, $indent, $body, $close) = ($1, $2, $3, $4);
         if ($body =~ /"name"[ \t]*"External: .*?\|\|\|Windowed"/s) {
           my $key_indent = $indent . "\t";
+          if ($mode eq "lowest") { $body = lowest($body, $key_indent); } else {
           $body = set_key($body, "MinScaleFactor", $min, $key_indent);
           $body = set_key($body, "MaxScaleFactor", $max, $key_indent);
           $body = set_key($body, "AutoScaleFactor", $scale, $key_indent);
           $body = set_key($body, "ScaleFactor", $scale, $key_indent);
+          }
         }
         $open . $body . $close;
       }egs;
@@ -79,10 +98,12 @@ sanitize_config() {
       s{(\n([ \t]*)"External: [^\n]*?\|\|\|Windowed"[ \t]*\n\2\{)(.*?)(\n\2\})}{
         my ($open, $indent, $body, $close) = ($1, $2, $3, $4);
         my $key_indent = $indent . "\t";
+        if ($mode eq "lowest") { $body = lowest($body, $key_indent); } else {
         $body = set_key($body, "MinScaleFactor", $min, $key_indent);
         $body = set_key($body, "MaxScaleFactor", $max, $key_indent);
         $body = set_key($body, "AutoScaleFactor", $scale, $key_indent);
         $body = set_key($body, "ScaleFactor", $scale, $key_indent);
+        }
         $open . $body . $close;
       }egs;
     ' "$tmp"
@@ -91,14 +112,13 @@ sanitize_config() {
       backup="$config.bak-nv-egpu-steam-scale-clamp-$timestamp"
       [ -e "$backup" ] || cp -a "$config" "$backup"
       cat "$tmp" > "$config"
-      chown deck:deck "$config" 2>/dev/null || true
-      log "clamped $config to Steam UI scale $scale"
+      log "set the Steam UI scale in $config (mode $mode)"
     fi
     rm -f "$tmp"
   done <<EOF
 $(unique_existing_files \
-  /home/deck/.local/share/Steam/config/config.vdf \
-  /home/deck/.steam/steam/config/config.vdf)
+  $HOME/.local/share/Steam/config/config.vdf \
+  $HOME/.steam/steam/config/config.vdf)
 EOF
 }
 
@@ -109,8 +129,8 @@ config_signature() {
     stat -Lc '%n:%Y:%s' "$config" 2>/dev/null || true
   done <<EOF | paste -sd ';' -
 $(unique_existing_files \
-  /home/deck/.local/share/Steam/config/config.vdf \
-  /home/deck/.steam/steam/config/config.vdf)
+  $HOME/.local/share/Steam/config/config.vdf \
+  $HOME/.steam/steam/config/config.vdf)
 EOF
 }
 

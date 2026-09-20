@@ -16,8 +16,44 @@ PRIV=/usr/local/sbin/nv-egpu-buddy-privileged
 say(){ printf '  %s\n' "$*"; }
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo $0"; exit 1; }
 
-GPU=0000:62:00.0
-BRIDGE=0000:61:00.0   # Barlow-Ridge bridge directly above the GPU
+# THE RULE: never operate on hardware that is not an eGPU. Find the GPU by vendor
+# and class; the configured address is only a fallback for a card that has not
+# enumerated yet, and is refused outright if something else is sitting there.
+# Vendor-neutral, the same definition egpu-detect uses: the eGPU is a display-class
+# PCI device that does not drive the built-in panel.
+_is_display_class(){ case "$(cat "$1/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*) return 0 ;; esac; return 1; }
+_internal_gpu_bdf(){ local c d
+  for c in /sys/class/drm/card*-eDP-*; do [ -e "$c" ] || continue
+    d=$(readlink -f "${c%-eDP-*}/device" 2>/dev/null) && { basename "$d"; return 0; }
+  done; return 1; }
+detect_egpu_bdf(){ local d igpu; igpu=$(_internal_gpu_bdf || true)
+  for d in /sys/bus/pci/devices/*; do
+    _is_display_class "$d" || continue
+    [ "$(basename "$d")" != "$igpu" ] || continue
+    basename "$d"; return 0
+  done; return 1; }
+GPU=${EGPU_GPU_BDF:-$(detect_egpu_bdf || true)}
+GPU=${GPU:-0000:62:00.0}
+if [ -e "/sys/bus/pci/devices/$GPU" ]; then
+  _is_display_class "/sys/bus/pci/devices/$GPU" || { echo "$GPU is not a GPU — refusing to touch it"; exit 2; }
+  [ "$GPU" != "$(_internal_gpu_bdf || true)" ] || { echo "$GPU is the built-in GPU — refusing to touch it"; exit 2; }
+fi
+# The bridge to reset is the GPU's own parent when the card is on the bus.
+if [ -e "/sys/bus/pci/devices/$GPU" ]; then
+  BRIDGE=$(basename "$(dirname "$(readlink -f "/sys/bus/pci/devices/$GPU")")")
+else
+  BRIDGE=${EGPU_BRIDGE_BDF:-0000:61:00.0}
+fi
+# A Secondary Bus Reset resets EVERYTHING behind the bridge. Only ever do that to a
+# bridge whose children are the eGPU (or nothing yet) — never one holding a dock,
+# a drive or someone's display controller.
+bridge_is_egpu_only(){ local c
+  for c in "/sys/bus/pci/devices/$BRIDGE"/0000:*; do
+    [ -e "$c/class" ] || continue
+    # the GPU itself, its own audio/other functions, and the enclosure's bridges are ours
+    case "$(cat "$c/class" 2>/dev/null)" in 0x0300*|0x0302*|0x0380*|0x0403*|0x0604*) continue ;; esac
+    [ "$(basename "$c")" = "${GPU%.*}.${c##*.}" ] || return 1
+  done; return 0; }
 
 say "[1/6] unloading nvidia stack (ignore-install aware)…"
 "$PRIV" unload-nvidia 2>/dev/null || modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null || true
@@ -25,7 +61,9 @@ say "[1/6] unloading nvidia stack (ignore-install aware)…"
 say "[2/6] clearing DPC on BOTH USB4 root ports…"
 "$PRIV" dpc-off 2>/dev/null | sed 's/^/      /'
 
-if [ -e "/sys/bus/pci/devices/$BRIDGE" ]; then
+if [ -e "/sys/bus/pci/devices/$BRIDGE" ] && ! bridge_is_egpu_only; then
+  say "[3/6] bridge $BRIDGE has non-eGPU devices behind it — skipping SBR (it is not ours to reset)"
+elif [ -e "/sys/bus/pci/devices/$BRIDGE" ]; then
   say "[3/6] Secondary Bus Reset on the upstream bridge $BRIDGE…"
   # BRIDGE_CONTROL is at config offset 0x3e; bit 6 (0x40) = Secondary Bus Reset.
   setpci -s "$BRIDGE" BRIDGE_CONTROL.w=0040:0040 2>/dev/null

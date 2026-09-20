@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/banner.png" alt="SteamOS EGPU Buddy — connect, switch, optimise, play" width="100%">
+</p>
+
 # SteamOS EGPU Buddy
 
 Hot-pluggable NVIDIA eGPU on a Linux gaming handheld, in **Game Mode**, on par with Windows: plug in and Game Mode
@@ -5,64 +9,49 @@ moves to the monitor, unplug (safely or by yanking the cable) and it falls back 
 it comes back. Includes the fixes for the three things that made this unusable before: the NVIDIA scan-out
 corruption in gamescope, the driver hang on surprise removal, and games freezing at the loading screen.
 
-**Status: works on exactly one machine (mine). Claude (Anthropic) and Codex (OpenAI) were used as development assistants
-throughout; every change was tested on that machine as recorded in TESTED.md, and nothing is claimed beyond that. Everything else is untested. Read [TESTED.md](TESTED.md) before you
+**Status: works on two machines (both mine): a Legion Go 2 on CachyOS with an RTX 5060 Ti, and a Legion Go 1 on SteamOS with an RTX 3080. Claude (Anthropic) and Codex (OpenAI) were used as development assistants
+throughout; every change was tested on those machines as recorded in TESTED.md, and nothing is claimed beyond that. Everything else is untested. Read [TESTED.md](TESTED.md) before you
 run anything. This touches the kernel driver, boot configuration, udev, sudoers and your Game Mode session. Use at
 your own risk, keep a way to boot without the eGPU, and read the scripts before running them.**
 
 ## Tested hardware and software
 
-| Part | Tested configuration |
-|---|---|
-| Handheld | Lenovo Legion Go 2 (AMD Strix Halo, USB4/Thunderbolt 5) |
-| eGPU | Gigabyte AORUS AI Box, NVIDIA RTX 5060 Ti 16 GB (Blackwell) |
-| Display | Acer Predator X49 V, 5120×1440 super-ultrawide, DisplayPort |
-| Distro | CachyOS (Deckify), kernel `linux-cachyos-deckify` 7.1.8 |
-| Driver | `nvidia-open` 610.57.04 with the patches in `packaging/nvidia-open-egpu` |
-| gamescope | 3.16.23 (distro) for the handheld; 3.16.25 + GBM-scanout branch for the eGPU (built by the installer) |
-| Steam | Game Mode via `gamescope-session` + plasmalogin autologin; Decky Loader for the plugin |
+Two machines, two GPU families, two distros. Everything below was measured on real hardware; anything
+not listed here has not been tried.
 
-An RTX 3080 (Ampere) on driver 580 was used during earlier development; that combination is not covered by the
-current scripts.
-
-### AMD (and Intel) eGPUs — experimental, untested (0.8.0 beta)
-
-From 0.8.0-beta1 the project detects the eGPU's vendor by itself; nothing asks you which one you have. **The AMD path
-was written without any AMD eGPU to test on. It has never run on real hardware. Treat it as a starting point for
-testers, not as a working feature.** If you have an AMD eGPU and are willing to try it, please open an issue with
-`/var/log/egpu-generic.log`.
-
-How detection works: the eGPU is the display-class PCI device that does not drive the built-in panel and sits behind a
-bridge chain (`egpu-detect`; it has a self-test, `egpu-detect --selftest`). NVIDIA eGPUs take the tested path, unchanged.
-Any other vendor takes `egpu-generic`, which leaves out everything that only exists because of the NVIDIA driver:
-
-| | NVIDIA path (tested) | AMD / Mesa path (experimental) |
+| Part | Rig A — the reference | Rig B — second family |
 |---|---|---|
-| Kernel driver | patched `nvidia-open`, loaded on attach, unloaded on detach | the in-kernel driver, shared with the built-in GPU: never loaded or unloaded |
-| Attach | BAR resize, link-speed pin, FLR, DPC handling, NVML health gate | none of that: wait for the DRM card, move the session |
-| Game Mode | GBM-scanout gamescope build, format filter, NVIDIA Vulkan ICD | stock gamescope pointed at the eGPU card (`WLR_DRM_DEVICES`), games follow with `DRI_PRIME` |
-| Desktop | KWin restricted to the NVIDIA card | eGPU made primary (`boot_vga`), built-in GPU kept so the panel can be switched off normally |
-| Safe detach | hide NVIDIA userspace, unload modules, remove from the bus | move the session to the panel, wait until nothing holds the eGPU's nodes, remove only the eGPU from the bus |
-| Cable yank | needs the patched driver | relies on amdgpu's own hot-unplug support; the session is moved back to the panel |
-| Telemetry, power limit | `nvidia-smi` | amdgpu sysfs / hwmon (`power1_cap`); no clock offsets |
-| Installer | installs NVIDIA packages, pins them, builds driver + gamescope | skips all of those when a non-NVIDIA eGPU is on the bus (or `EGPU_VENDOR=amd`) |
+| Handheld | Lenovo Legion Go 2 (AMD Strix Halo, USB4/TB5) | Lenovo Legion Go 1 (AMD Phoenix, USB4) |
+| eGPU | Gigabyte AORUS AI Box | AOOSTAR AG03 (Intel JHL9480 TB5) |
+| GPU | NVIDIA RTX 5060 Ti 16 GB — Blackwell, GB206 | NVIDIA RTX 3080 10 GB — Ampere, GA102 |
+| Display | Acer Predator X49 V, 5120×1440 ultrawide, DisplayPort | same panel, DisplayPort |
+| Distro | CachyOS (Deckify), kernel 7.1.8 | SteamOS 3.8, kernel 6.16.12-valve24.5 |
+| Driver | `nvidia-open` 610.57.04 + the patches in `packaging/nvidia-open-egpu` | identical — same driver, no per-card build |
+| gamescope | 3.16.23 handheld; 3.16.25 + GBM-scanout branch for the eGPU | as shipped by SteamOS |
+| Session | `gamescope-session` + plasmalogin autologin | `gamescope-session` + sddm autologin |
 
-**Untested hardware notice.** Every install path (plugin, `.run`, curl) compares the machine with the one tested
-configuration (Legion Go 2, RTX 5060 Ti, CachyOS). When anything differs it says exactly what, states that the
-project has not been tested there and that you install and test at your own risk, and installs nothing until you
-accept. The plugin keeps a one-line reminder on its first page afterwards. `egpu-detect --untested` prints the
-differences.
+**GPU support.** Ampere (RTX 30) and Blackwell (RTX 50) both work on the same open driver, with no
+separate build and no per-card configuration by the user. The Ampere-specific bring-up is selected by
+PCI device id (`0x22xx`–`0x25xx`, the GA10x desktop line), so the mechanism covers the family — but one
+card from each family has actually been tested, the RTX 3080 and the RTX 5060 Ti. Ada (RTX 40) has never
+been on the bench; it falls through to the default path, which may or may not suit it.
 
-With no eGPU connected at install time the installer cannot know the vendor and installs NVIDIA support, because an
-NVIDIA eGPU's first connection without it is the dangerous case and an unused package is not.
+### What has been tested, per rig
 
-`egpu-detect --device` names the device profile: `legion-go-2` for the tested handheld, `generic` for everything else.
-Fixes that only make sense on one machine (such as the Legion Go 2 standby wake fix) are gated on it.
+| Behaviour | RTX 5060 Ti | RTX 3080 |
+|---|---|---|
+| Boot with the eGPU attached | yes | yes |
+| Hot-plug attach in Game Mode | yes | yes |
+| Hot-plug attach on the Desktop | yes | yes |
+| Full 16 GiB BAR1 (ReBAR) | yes | yes — at boot and on hot-plug |
+| Safe detach, Game Mode | yes | yes |
+| Safe detach, Desktop | yes | yes |
+| Cable pull in Game Mode → stays in Game Mode | yes | yes |
+| Cable pull on the Desktop → returns to the Desktop | yes | yes |
+| Audio follows the eGPU output and returns on detach | yes | yes |
 
-The new code detects the GPUs, DRM cards, panel connector and desktop user instead of assuming this handheld's, so it
-is meant to carry over to other handhelds and laptops with an AMD built-in GPU. The older NVIDIA scripts still contain
-Legion Go 2 specifics (user `deck`, PCI addresses, the Strix Halo USB4 root-port ID); they are deliberately left alone
-until other hardware is available for testing.
+No benchmarks or performance figures are published for any card here. This project is about whether the eGPU
+attaches, renders, survives a cable pull and comes back — not about how fast it is.
 
 ## What you get
 
@@ -145,16 +134,41 @@ not the default.
 - If a new kernel refuses to build the pinned 610.57.04 modules, hold the kernel (`IgnorePkg`) until a release
   with a newer driver exists; `dkms status` and the system journal (`egpu-buddy-post-upgrade`) tell you.
 
-**SteamOS (experimental, self-healing).** SteamOS A/B updates replace `/usr` wholesale, which takes `/usr/local`
-and every pacman-installed package with it, while `/etc` and `/home` persist. So the install keeps a complete copy of
-the release under `~/.local/share/steamos-egpu-buddy`, together with a cache of the pacman packages it installed and
-of the patched kernel modules for the running kernel, and enables `egpu-buddy-selfheal.service`: a unit in `/etc`
-whose script lives in that home directory. At every boot it checks the root-side integration and, after an update
-has wiped it, re-applies it from the copy, restores the cached packages, rebuilds the driver with DKMS if the new
-kernel's headers exist or restores the cached modules if the kernel is unchanged, re-applies the kernel parameters,
-and logs what it could not do (a new kernel without headers means no eGPU until a release with modules for it). The
-plugin's first page shows **Repair system integration** for the same job on demand. None of this has been exercised
-on a real SteamOS update yet.
+**SteamOS (experimental, self-healing).** The facts this is built on were read from Valve's own SteamOS 3.8.14
+image: the system partition is a fixed 5 GB with about 870 MB free, `/var` is a 256 MB partition, there is no compiler,
+an OS update replaces `/usr` wholesale, `/usr/local` and `/home` persist, and of `/etc` an update keeps the systemd
+units plus whatever `/etc/atomic-update.conf.d/*.conf` lists. The tested NVIDIA driver needs 1.5-2.1 GB, so on SteamOS
+**nothing is installed into the system partition**:
+
+- The driver is the same patched 610.57.04 as everywhere else. It is built inside a small SteamOS build environment
+  on `/home` (Valve's own repositories and keyring), against the headers of the *exact* running kernel (fetched from
+  Valve's mirror by version, because the repository database moves on while devices stay on older builds).
+- The NVIDIA userspace, the few EGL packages SteamOS lacks and the built modules are collected into a **systemd system
+  extension** on `/home` (`/home/.egpu-buddy`), which systemd merges into `/usr` (SteamOS enables `systemd-sysext` by
+  default). The extension is one squashfs **image file** (about 520 MB): SteamOS formats `/home` as ext4 with
+  case-folding, and its kernel's overlayfs refuses directories on such a filesystem, so a directory extension cannot
+  work there (found on a real device). Module dependency data is generated into the extension, so `modprobe` works
+  as usual.
+- The kernel parameters go into `/etc/default/grub.d/egpu-buddy.cfg` (Valve's `grub-mkconfig` reads that directory)
+  rather than into `/etc/default/grub`, which an update replaces.
+- The integration's `/etc` files are registered in `/etc/atomic-update.conf.d/egpu-buddy.conf` so an update carries
+  them over.
+- `egpu-buddy-selfheal.service` (kept by updates) re-activates the extension at every boot and, when an update
+  brought a **new kernel**, rebuilds the modules for it in the background. Until that is done the attach script
+  **refuses to bring the eGPU up** (no driver, or kernel parameters not active) and says so in the plugin, instead of
+  risking the unprotected first connection. This gate exists on SteamOS only.
+- None of the above is applied on other systems: CachyOS and Arch keep their own NVIDIA packages and behave as before.
+- Safe Detach hides the NVIDIA userspace with bind mounts where `/usr` cannot be written.
+- From the Decky plugin all of this runs as root without a password, in its own systemd unit (a Steam or Decky
+  restart does not interrupt the first build: 10-20 minutes, mostly downloads; the compile uses all CPU cores). **Uninstall** removes the extension, the build
+  environment, the keep-list and the GRUB drop-in.
+
+How far this is verified: the complete install, the boot-time re-activation, a simulated kernel change, Safe Detach's
+hide/restore and the uninstall were run inside a container made from Valve's 3.8.14 image with a read-only system,
+a separate small `/var` and `/home` (see `TESTED.md`). On a real device (Legion Go, SteamOS 3.8) the build
+environment, the exact-kernel headers and the driver compile have run; the first attempt then failed at the
+case-folding `/home` described above, which is what 0.7.21 fixes. **Still unconfirmed on a real device**: the merged
+extension, real boot ordering, the GRUB regeneration, an actual OS update and loading the modules on a real eGPU. The plugin's first page shows **Repair system integration** for the self-heal job on demand.
 
 **Bazzite (rpm-ostree): untested.** `/usr/local` and `/etc` persist there, kernel parameters go through
 `rpm-ostree kargs` (handled), but the patched driver is an Arch package and cannot be layered, so a cable yank may
@@ -197,16 +211,11 @@ the plugin's automatic updates follow the newest release only.
 When everything is installed and current that page shows only the eGPU controls; **Setup** (two presses of the
 top button) reinstalls or uninstalls.
 
-**Updates are your choice.** The plugin checks this repository's releases every hour and announces a new one on its
-first page with an *Update now* button; nothing installs by itself unless you switch *Automatic updates* on in Setup
-(off by default from 0.8.0). An update installs the system integration through the same verified installer, then the
-plugin's own files, then Decky reloads and the first page asks for a restart. It never performs a first install on
-its own.
-
-**Going back.** Every release stays published. *Setup → Install another version* lists them (betas are marked) and
-installs the one you pick, system files and plugin together. A version you picked is held: automatic updates are
-switched off and nothing moves you off it until you press *Update now* or pick another version. If an update breaks
-something for you, that is the way back to the build that worked.
+**Updates are your choice.** The plugin checks this repository's releases (hourly, and whenever you open it after a
+while) and announces a new one on its first page with an *Update now* button; **Check for updates** sits at the bottom
+of that page. Nothing installs by itself unless you switch *Automatic updates* on in Setup; it is **off by default**.
+An update installs the system integration through the same verified installer, then the plugin's own files, then Decky
+reloads and the first page asks for a restart. It never performs a first install on its own.
 
 ### Method 2 — from the Desktop, with the graphical installer
 
@@ -274,10 +283,7 @@ user name.
   order, kernel parameters, boot policy, session restart, panel handling, safe detach, the plugin. NVIDIA-only: the
   patched driver, the GBM-scanout gamescope, the NVIDIA userspace pinning, nvidia-smi telemetry and power controls, the
   DPC/link-pin details that exist because of the GSP lockdown. The goal is a layout where an AMD eGPU can use the
-  generic path with the NVIDIA layer left out. First step in 0.8.0-beta1: vendor detection and a separate, experimental
-  path for non-NVIDIA eGPUs (see above). Needs testers with AMD eGPUs.
-- **Other handhelds and laptops.** New code detects hardware instead of assuming the Legion Go 2. The tested NVIDIA
-  scripts still carry device specifics and will be generalised only with hardware to verify each change on.
+  generic path with the NVIDIA layer left out. Not started.
 
 ## Reporting problems
 
@@ -346,11 +352,11 @@ say where it came from. The same list is kept in [CREDITS.md](CREDITS.md) and sh
   around the same approach (udev-driven attach, setpci ASPM/link control, boltctl authorization, P0 lock) for Blackwell
   eGPUs; not used here, listed because the approach is the same lineage.
 - **ewagner12 — [all-ways-egpu](https://github.com/ewagner12/all-ways-egpu)** (MIT) — the `boot_vga` bind-mount
-  technique (its "Method 2") is reimplemented in the experimental `egpu-generic` path so that compositors pick a Mesa
-  eGPU as primary; no code was copied, the idea and the file layout (a `0`/`1` file bind-mounted over the sysfs flag, a
-  list of mounted paths for cleanup) are his. Correction (0.8.0): the NVIDIA path was documented as using it too, but
-  its copy of the step had never actually executed (a scripting error); the NVIDIA-only session rests on the KWin /
-  gamescope device pinning alone, and the dead step was removed.
+  technique (its "Method 2") is reimplemented in the experimental non-NVIDIA path of the 0.8.0 betas so that
+  compositors pick a Mesa eGPU as primary; no code was copied, the idea and the file layout (a `0`/`1` file
+  bind-mounted over the sysfs flag, a list of mounted paths for cleanup) are his. Correction (0.7.14): this release
+  was documented as using it too, but its copy of the step had never actually executed (a scripting error); the
+  NVIDIA-only session rests on the KWin / gamescope device pinning alone, and the dead step was removed.
 - The PCIe DPC handling (clearing the containment trigger so the second USB4 port forms its tunnel, re-arming it before
   the driver loads), freeing the enclosure's empty Thunderbolt sibling ports so the 16 GB BAR fits, and the flood lockout
   that breaks a reboot loop were worked out on this machine.

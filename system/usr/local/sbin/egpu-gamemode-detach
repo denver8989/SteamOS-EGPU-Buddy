@@ -11,7 +11,11 @@ MARK=/run/user/$U/egpu-detach-mode; HELPER=/usr/local/sbin/egpu-safe-detach
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 as_deck(){ runuser -u deck -- env $RUNENV "$@"; }
 gs(){ pgrep -n -x 'gamescope(-wl)?'; }
-gs_on_panel(){ local g; g=$(gs); [ -n "$g" ] || return 1; tr '\0' '\n' </proc/$g/environ 2>/dev/null | grep -q '^OUTPUT_CONNECTOR=\*,' || return 1; ls -l /proc/$g/fd 2>/dev/null | grep -qE 'card0|renderD129|nvidia' && return 1; return 0; }
+# the eGPU's own DRM nodes, looked up while it is still on the bus (card0/renderD129 on the Legion Go 2; card1/... where the
+# built-in GPU registered first, e.g. a Legion Go 1: there gamescope on the PANEL holds card0, and the old literal never passed)
+EGPU_NODES=$(read -r _b _ _ < <(/usr/local/sbin/egpu-detect 2>/dev/null) && ls "/sys/bus/pci/devices/$_b/drm" 2>/dev/null | grep -E '^(card|renderD)[0-9]+$' | tr '\n' '|' || true)
+EGPU_NODES=${EGPU_NODES:-card0|renderD129|}
+gs_on_panel(){ local g; g=$(gs); [ -n "$g" ] || return 1; tr '\0' '\n' </proc/$g/environ 2>/dev/null | grep -q '^OUTPUT_CONNECTOR=\*,' || return 1; ls -l /proc/$g/fd 2>/dev/null | grep -qE "/dev/dri/(${EGPU_NODES%|})\$|nvidia" && return 1; return 0; }
 # whatever happens (error, kill, timeout), the user must not be left without audio
 trap 'as_deck systemctl --user start wireplumber >/dev/null 2>&1; rm -f /run/user/$U/egpu-detach-mode' EXIT
 finish_fail(){ log "FAILED: $1"; status DO_NOT_UNPLUG "$1"; $HELPER --restore >/dev/null 2>&1; as_deck systemctl --user start gamescope-mangoapp.service >/dev/null 2>&1; rm -f "$MARK" $ST/gm-detach-pending; as_deck systemctl --user start wireplumber >/dev/null 2>&1; exit "${2:-5}"; }

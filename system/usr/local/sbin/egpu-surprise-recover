@@ -6,19 +6,75 @@
 # stack once free (else standby fails), clear DPC containment on the tunnel port so a replug can link.
 set -u; U=1000; RUNENV="XDG_RUNTIME_DIR=/run/user/$U DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus"
 LOG=/var/log/egpu-surprise-recover.log; log(){ printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+
+# --steam-watch: the delayed Steam repair, run as its own transient unit (see where it is armed).
+if [ "${1:-}" = --steam-watch ]; then
+  # Order matters. Steam is NOT relaunched in the main run any more, because doing it while the
+  # session is still settling is exactly what produced the "Unable to open a connection to X"
+  # dialog. So: let the session settle, start Steam once, and only then watch for a stray dialog.
+  sleep 25
+  if ! runuser -u deck -- pgrep -x steam >/dev/null 2>&1; then
+    runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-settled-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
+    sleep 20
+    log "steam-watch: session settled, started Steam (now $(runuser -u deck -- pgrep -xc steam 2>/dev/null || echo 0))"
+  else
+    log "steam-watch: Steam already running after the disconnect"
+  fi
+  # Belt and braces: if SteamOS's own autostart still managed to raise the dialog, clear it and
+  # restart once. The pattern is bracketed so it cannot match this command line.
+  for _i in $(seq 1 18); do
+    sleep 5
+    runuser -u deck -- pgrep -f "steam_[m]sg.sh" >/dev/null 2>&1 || continue
+    runuser -u deck -- pkill -f "steam_[m]sg.sh" 2>/dev/null
+    runuser -u deck -- pkill -x zenity 2>/dev/null
+    runuser -u deck -- pkill -x steam 2>/dev/null
+    runuser -u deck -- pkill -x steamwebhelper 2>/dev/null
+    sleep 3
+    runuser -u deck -- env $RUNENV bash -c 'mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-steam-late-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1
+    log "steam-watch: a dialog still appeared after ${_i}x5s - cleared it and restarted Steam"
+    break
+  done
+  exit 0
+fi
 [ "$(id -u)" = 0 ] || exit 1
 # safe detach / reattach own their PCI-remove -> not a surprise
 [ -e /run/user/$U/nv-egpu-buddy/detach-handoff-active ] && { log "skip: safe-detach in progress"; exit 0; }
 pgrep -f '/usr/local/sbin/egpu-safe-detach' >/dev/null && { log "skip: safe-detach helper running"; exit 0; }
 [ -e /run/nvegpu/gm-detach-pending ] && { log "skip: Game Mode safe-detach in progress"; exit 0; }
+# the boot-time tunnel re-enumeration removes a bridge on purpose; that is not a cable pull
+[ -e /run/nvegpu/deliberate-removal ] && { log "skip: deliberate re-enumeration in progress"; exit 0; }
 lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { log "skip: GPU still on the bus"; exit 0; }
 exec 9>/run/egpu-surprise-recover.lock; flock -n 9 || { log "skip: already running"; exit 0; }
 log "SURPRISE removal detected (GPU gone from bus)"
+# the UI must not keep saying "Game Mode is on DP-9" after the cable is gone (it did, seen on a real device)
+mkdir -p /run/nvegpu; printf '{"state":"DETACHED","message":"The eGPU was unplugged. The session is back on the handheld screen."}\n' > /run/nvegpu/gm-status.json 2>/dev/null
 T0=$(date +%s); SELF_START=$(awk '{print $22}' /proc/self/stat); mkdir -p /run/nvegpu; date +%s > /run/nvegpu/surprise-pending   # hotplug-mount: stale modules -> unbind+FLR+rebind on next attach
 # gamescope dies with the card within a second, so it cannot be asked; the session wrapper / desktop login script record the type
-GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1; runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
-[ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1
-[ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = desktop ] && pgrep -x kwin_wayland >/dev/null 2>&1 && GM=0
+# A LIVE gamescope means Game Mode. The gamescope-session TARGET does not: on SteamOS it stays
+# active (and relaunches itself) while the desktop is on screen, so treating it as proof put a
+# desktop user into Game Mode after a cable pull — the desktop's compositor had already died with
+# the card, so nothing contradicted it. Desktop evidence now wins, and the target is a last resort.
+GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1
+DESK=0
+pgrep -x kwin_wayland >/dev/null 2>&1 && DESK=1
+runuser -u deck -- env $RUNENV systemctl --user is-active plasma-workspace.target >/dev/null 2>&1 && DESK=1
+[ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = desktop ] && DESK=1
+if [ "$GM" = 0 ] && [ "$DESK" = 0 ]; then
+  runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
+fi
+# A compositor that is ALIVE decides. The marker is only for the case where neither is left (gamescope gone with the card):
+# it is written at the start of BOTH session types, so it names the latest one. (Until 0.7.22 only Game Mode wrote it: after
+# one Game Mode session an unplug in the Desktop was treated as Game Mode and the desktop was replaced by Game Mode.)
+if [ "$GM" = 0 ] && [ "$DESK" = 0 ] && ! pgrep -x kwin_wayland >/dev/null 2>&1; then [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1; fi
+# The marker WINS over a live gamescope. A cable pull kills KWin first, so by the time this runs the
+# display manager has already fallen back to Game Mode and a gamescope IS running - that is a
+# consequence of the removal, not evidence of what the user was doing. The gamescope wrapper refuses
+# to claim the marker in exactly this case, so a marker still reading "desktop" is trustworthy.
+if [ "$DESK" = 1 ] && [ "$GM" = 1 ]; then
+  log "gamescope is live but the marker says desktop - treating it as the fallback it is"
+  GM=0
+fi
+log "session evidence: gamescope=$GM desktop=$DESK marker=$(cat /run/user/$U/egpu-session-type 2>/dev/null)"
 log "game-mode=$GM"
 # 1. user-manager env -> iGPU immediately (the relaunching session must not point at the dead card)
 if [ "$GM" = 1 ]; then
@@ -29,12 +85,23 @@ if [ "$GM" = 1 ]; then
   log "Game Mode: desktop routing not applied; stray display variables cleared"
 else
 igpu=$(for c in /sys/class/drm/card[0-9]; do [ "$(cat $c/device/vendor 2>/dev/null)" = 0x1002 ] && basename $c && break; done)
+# same as the planned detach: the NVIDIA Vulkan ICD is gone with the card, so the pin to it must go too
+runuser -u deck -- env $RUNENV systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES >/dev/null 2>&1
+# Build the iGPU Vulkan ICD list from what is ACTUALLY on disk. This used to be the hardcoded path
+# /usr/share/vulkan/icd.d/radeon_icd.json, which does not exist on SteamOS - it ships
+# radeon_icd.x86_64.json and radeon_icd.i686.json - so every disconnect pointed Steam at a missing
+# driver and it failed with
+#   W: Failed to load Vulkan ICD #0 from .../radeon_icd.json: No such file or directory
+#   steam: Exit code: -2
+# Both architectures are listed, because 32-bit titles need the i686 one.
+_icd=$(ls -1 /usr/share/vulkan/icd.d/radeon_icd.*.json /usr/share/vulkan/icd.d/radeon_icd.json 2>/dev/null | paste -sd: -)
+[ -n "$_icd" ] || _icd=$(ls -1 /usr/share/vulkan/icd.d/*.json 2>/dev/null | grep -v nvidia | paste -sd: -)
 runuser -u deck -- env $RUNENV systemctl --user set-environment \
   "KWIN_DRM_DEVICES=/dev/dri/${igpu:-card1}" \
   "KWIN_RENDER_NODES=/dev/dri/$(ls /sys/class/drm/${igpu:-card1}/device/drm 2>/dev/null | grep -m1 renderD)" \
   "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json" \
   "__GLX_VENDOR_LIBRARY_NAME=mesa" \
-  "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.json" "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json" >/dev/null 2>&1
+  "VK_DRIVER_FILES=$_icd" "VK_ICD_FILENAMES=$_icd" >/dev/null 2>&1
 runuser -u deck -- env $RUNENV systemctl --user unset-environment PROTON_ENABLE_NVAPI DXVK_ENABLE_NVAPI PROTON_HIDE_NVIDIA_GPU >/dev/null 2>&1
 log "user env -> iGPU (${igpu:-card1})"
 fi
@@ -83,17 +150,70 @@ for _ in $(seq 1 20); do
   sleep 3
 done
 log "nvidia modules left: $(lsmod | grep '^nvidia' | awk '{print $1"="$3}' | tr '\n' ' ')"
+# same as the planned detach: Decky's backend holds /dev/nvidia* and is killed with the other holders
+systemctl is-active plugin_loader.service >/dev/null 2>&1 || { systemctl start plugin_loader.service >/dev/null 2>&1 && log "Decky plugin loader restarted"; }
 [ "$GM" = 1 ] && /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1   # userspace back for the next attach
 # 4. DPC containment on the USB4 root ports would block the next link-up -> clear (hotplug-mount's lever)
 eval "$(sed -n '/^clear_dpc(){/,/^}/p' /usr/local/sbin/egpu-hotplug-mount.sh)"; clear_dpc 2>/dev/null; log "DPC cleared"
 # 4b. the relaunched session has a new Xwayland: republish DISPLAY/XAUTHORITY (else "Unable to open a connection to X")
 if [ "$GM" = 1 ]; then for _ in $(seq 1 30); do pgrep -x 'gamescope(-wl)?' >/dev/null && pgrep -x steam >/dev/null && break; sleep 2; done
 else for _ in $(seq 1 30); do pgrep -x Xwayland >/dev/null && pgrep -x plasmashell >/dev/null && break; sleep 2; done; sleep 3; fi
-[ "$GM" = 1 ] || /usr/local/sbin/egpu-republish-display >/dev/null 2>&1 || true   # Desktop only: there is no KWin display to publish in Game Mode
+# Desktop only: publish the NEW session's display env, and do not move on until an X client can actually connect.
+# The relogin brings up a fresh Xwayland with a fresh xauth file; anything started before that (SteamOS's own session
+# autostart starts Steam immediately) dies with "Unable to open a connection to X" and leaves an error dialog and a
+# screen-sharing prompt on screen (seen on a real device). Waiting here also makes the Steam restart below the ONLY one.
+if [ "$GM" = 0 ]; then
+  for _ in $(seq 1 30); do
+    /usr/local/sbin/egpu-republish-display >/dev/null 2>&1 || true
+    _d=$(runuser -u deck -- env $RUNENV systemctl --user show-environment 2>/dev/null | sed -n 's/^DISPLAY=//p')
+    _x=$(runuser -u deck -- env $RUNENV systemctl --user show-environment 2>/dev/null | sed -n 's/^XAUTHORITY=//p')
+    if [ -n "$_d" ] && [ -s "$_x" ] && runuser -u deck -- env $RUNENV DISPLAY="$_d" XAUTHORITY="$_x" timeout 3 xrandr --current >/dev/null 2>&1; then
+      log "display ready: DISPLAY=$_d XAUTHORITY=$_x"; break
+    fi
+    sleep 2
+  done
+fi
 # 5. internal panel back on + failover watcher promotes eDP-1; audio to internal
 /usr/local/sbin/egpu-panel on >/dev/null 2>&1 || true
-runuser -u deck -- env $RUNENV bash -c 'pactl set-default-sink alsa_output.pci-0000_c2_00.6.pro-output-0' >/dev/null 2>&1
+# ...and RE-ENABLE it as an output, not just power the backlight. The attach path disables eDP-1
+# deliberately (external-only, so KWin never composites across two GPUs over the tunnel), and
+# nothing put it back when the external display vanished with the cable. Measured on a real device:
+# backlight lit, connector "enabled=disabled", dpms Off - a blank screen on the only display left.
+# kscreen-doctor needs a display or Qt aborts, so the socket is discovered and the call is skipped
+# rather than crashed when no session is up yet.
+if [ "$GM" = 0 ]; then
+  _wd=$(basename "$(ls -1 /run/user/$U/wayland-[0-9] 2>/dev/null | head -1)" 2>/dev/null)
+  if [ -n "$_wd" ]; then
+    for _ in 1 2 3 4 5; do
+      runuser -u deck -- env $RUNENV WAYLAND_DISPLAY="$_wd" DISPLAY=:0 \
+        kscreen-doctor output.eDP-1.enable output.eDP-1.priority.1 >/dev/null 2>&1 && break
+      sleep 2
+    done
+    runuser -u deck -- env $RUNENV WAYLAND_DISPLAY="$_wd" DISPLAY=:0 kscreen-doctor --dpms on >/dev/null 2>&1 || true
+    log "eDP-1 re-enabled: enabled=$(cat /sys/class/drm/card*-eDP-1/enabled 2>/dev/null | head -1) dpms=$(cat /sys/class/drm/card*-eDP-1/dpms 2>/dev/null | head -1)"
+  else
+    log "no Wayland socket yet - leaving eDP-1 to the session that comes up"
+  fi
+fi
+# that sink name is the Legion Go 2's internal speaker route; elsewhere PipeWire falls back to the internal device by itself
+[ "$(/usr/local/sbin/egpu-detect --device 2>/dev/null)" = legion-go-2 ] && runuser -u deck -- env $RUNENV bash -c 'pactl set-default-sink alsa_output.pci-0000_c2_00.6.pro-output-0' >/dev/null 2>&1
 runuser -u deck -- env $RUNENV bash -c 'for h in /etc/nv-egpu-buddy/hooks.d/post-detach/*; do [ -x "$h" ] && systemd-run --user --collect --quiet --unit=egpu-hook-$(basename "$h")-$(date +%s) "$h" >/dev/null 2>&1; done' >/dev/null 2>&1   # user hooks (none shipped)
-[ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null; systemd-run --user --collect --quiet --unit=egpu-surprise-steam-$(date +%s) /usr/bin/steam -silent' >/dev/null 2>&1   # plain steam on the iGPU session (old instance is dead/zombie)
+# kill the whole broken Steam (its X-error dialog and Xalia helper are children, and they linger on screen) and start once
+# Kill the broken Steam, but do NOT relaunch it here. Relaunching immediately is what CREATES the
+# "Unable to open a connection to X" dialog: the session is still settling, Xwayland is about to be
+# replaced, and that instance dies against a display that is going away. The --steam-watch unit
+# starts Steam once, after the session has settled, so the dialog never appears in the first place
+# instead of being cleaned up afterwards.
+[ "$GM" = 0 ] && runuser -u deck -- env $RUNENV bash -c 'pkill -x steam; pkill -x steamwebhelper; pkill -f "steam.*Xalia" 2>/dev/null; pkill -x zenity 2>/dev/null; pkill -f "steam_[m]sg.sh" 2>/dev/null; sleep 2; mv -f ~/.steam/steam.pid ~/.steam/steam.pid.old 2>/dev/null' >/dev/null 2>&1
 [ "$GM" = 1 ] || runuser -u deck -- env $RUNENV DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 notify-send -a NV-EGPU-Buddy "eGPU disconnected" "Desktop moved to the internal screen." >/dev/null 2>&1 || true
+/usr/local/sbin/nv-egpu-buddy-privileged pin-tunnel-ports auto >/dev/null 2>&1 || true
+# The delayed Steam repair runs as its OWN transient unit. It CANNOT be a background subshell:
+# udev starts this script with "systemd-run --no-block /usr/local/sbin/egpu-surprise-recover", so
+# when this process exits systemd kills the whole cgroup and takes any "( ... ) &" with it.
+# Measured twice on a real disconnect: the sweep never ran and Steam was left dead with no trace.
+if [ "$GM" = 0 ]; then
+  systemd-run --no-block --collect --quiet --unit="egpu-steam-watch-$(date +%s)" \
+    /usr/local/sbin/egpu-surprise-recover --steam-watch >/dev/null 2>&1 &&
+    log "steam-watch armed (separate unit, survives this run)"
+fi
 log "DONE"

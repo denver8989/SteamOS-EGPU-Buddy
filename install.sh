@@ -41,9 +41,14 @@ if [ "${ID:-}" = steamos ] && [ "$MODE" = install ]; then
   echo "      from the copy kept in your home, restores cached packages and kernel modules, and rebuilds the driver if headers exist."
 fi
 for c in systemctl udevadm lspci; do command -v $c >/dev/null || { echo "missing $c"; exit 1; }; done
-# eGPU vendor: detected, never asked. NVIDIA-only pieces (driver packages, patched modules, GBM-scanout gamescope) are
-# skipped only when a non-NVIDIA eGPU is actually on the bus (or EGPU_VENDOR=amd). With nothing connected they are
-# installed: an NVIDIA eGPU's first connection without them is the dangerous case, an unused package is not.
+lspci -Dn | grep -qE '0300: 10de:' || echo "note: no NVIDIA GPU on the bus right now (fine, it is hot-pluggable)"
+# runtime tools the scripts call (package names are Arch/SteamOS; Bazzite equivalents are similar)
+miss=""; for c in setpci:pciutils modetest:libdrm fuser:psmisc jq:jq xxd:vim perl:perl python3:python qdbus6:qt6-tools kscreen-doctor:libkscreen xprop:xorg-xprop boltctl:bolt nvidia-smi:nvidia-utils; do
+  command -v "${c%%:*}" >/dev/null 2>&1 || miss="$miss ${c%%:*}(${c#*:})"; done
+[ -z "$miss" ] || echo "warning: missing tools, some paths will degrade:$miss"
+STOCK=${STOCK_GAMESCOPE_SESSION:-}; [ -n "$STOCK" ] || for s in /usr/lib/steamos/gamescope-session /usr/bin/gamescope-session /usr/bin/gamescope-session-plus; do [ -f "$s" ] && { STOCK=$s; break; }; done
+[ -n "$STOCK" ] || echo "warning: no gamescope-session script found; Game Mode pieces will be inert"
+# NVIDIA userspace + driver packages (the hot-plug path loads nvidia-open; nvidia-smi/NVML drive the controls)
 # ---- untested hardware: say so, and get an explicit acceptance before anything is installed ----
 if [ "$MODE" = install ] && untested=$(bash "$ROOT/system/usr/local/sbin/egpu-detect" --untested 2>/dev/null); then
   echo; echo "*** THIS HARDWARE OR SYSTEM HAS NOT BEEN TESTED WITH SteamOS EGPU Buddy ***"
@@ -56,20 +61,15 @@ if [ "$MODE" = install ] && untested=$(bash "$ROOT/system/usr/local/sbin/egpu-de
   fi
   echo
 fi
-EGPU_VENDOR=${EGPU_VENDOR:-auto}; seen=$(bash "$ROOT/system/usr/local/sbin/egpu-detect" 2>/dev/null | awk '{print $2}' || true)
-NVIDIA_STEPS=1; case "$EGPU_VENDOR:$seen" in amd:*|intel:*|auto:amd|auto:intel|auto:other) NVIDIA_STEPS=0;; esac
-if [ "$NVIDIA_STEPS" = 0 ]; then
-  echo "note: ${seen:-$EGPU_VENDOR} eGPU: EXPERIMENTAL, untested path. Skipping the NVIDIA driver, package pinning and the patched gamescope (Mesa needs none of them)."
-  _c=""; for c in ${COMPONENTS//,/ }; do case "$c" in driver|gamescope) ;; *) _c="$_c${_c:+,}$c";; esac; done; COMPONENTS=$_c
-elif [ -z "$seen" ]; then echo "note: no eGPU on the bus right now (fine, it is hot-pluggable); installing with NVIDIA support"; fi
-# runtime tools the scripts call (package names are Arch/SteamOS; Bazzite equivalents are similar)
-miss=""; for c in setpci:pciutils modetest:libdrm fuser:psmisc jq:jq xxd:vim perl:perl python3:python qdbus6:qt6-tools kscreen-doctor:libkscreen xprop:xorg-xprop boltctl:bolt $([ "$NVIDIA_STEPS" = 1 ] && echo nvidia-smi:nvidia-utils); do
-  command -v "${c%%:*}" >/dev/null 2>&1 || miss="$miss ${c%%:*}(${c#*:})"; done
-[ -z "$miss" ] || echo "warning: missing tools, some paths will degrade:$miss"
-STOCK=${STOCK_GAMESCOPE_SESSION:-}; [ -n "$STOCK" ] || for s in /usr/lib/steamos/gamescope-session /usr/bin/gamescope-session /usr/bin/gamescope-session-plus; do [ -f "$s" ] && { STOCK=$s; break; }; done
-[ -n "$STOCK" ] || echo "warning: no gamescope-session script found; Game Mode pieces will be inert"
-# NVIDIA userspace + driver packages (the hot-plug path loads nvidia-open; nvidia-smi/NVML drive the controls)
-if [ "$NVIDIA_STEPS" = 1 ] && ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
+# stock SteamOS ships pacman without an initialised keyring: every package operation then fails ("keyring is not
+# writable / required key missing"). Initialise and populate it once (seen on a Legion Go, SteamOS, 2026-09-18).
+if [ "$MODE" = install ] && command -v pacman-key >/dev/null 2>&1 && ! sudo pacman-key --list-keys >/dev/null 2>&1; then
+  say "== initialising the pacman keyring (first package operation on this system)"
+  { sudo pacman-key --init && sudo pacman-key --populate; } >/dev/null 2>&1 || echo "warning: could not initialise the pacman keyring; package steps will fail"
+fi
+# SteamOS only: the driver step builds everything in a build root on /home, and the distro packages (3.8: 575.64.05,
+# ~1.4 GB) neither fit the 5 GB system partition nor match the tested driver. Every other distro keeps its own packages.
+if ! { want driver && command -v steamos-readonly >/dev/null 2>&1; } && ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "NVIDIA packages are missing. Install nvidia-open-dkms + nvidia-utils now with pacman? [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== installing nvidia-open-dkms nvidia-utils lib32-nvidia-utils"; sudo pacman -S --needed --noconfirm nvidia-open-dkms nvidia-utils lib32-nvidia-utils || echo "warning: NVIDIA package install failed; install them by hand"; else echo "warning: no nvidia-smi; install nvidia-open-dkms + nvidia-utils before plugging the eGPU in"; fi
 fi
@@ -80,8 +80,13 @@ if [ "$MODE" = install ]; then
   if [ -d /sys/bus/thunderbolt/devices/domain0 ]; then say "== USB4/Thunderbolt controller present ($(cat /sys/bus/thunderbolt/devices/domain0/security 2>/dev/null || echo ?) security level)"
   else echo "WARNING: no USB4/Thunderbolt controller is visible to the kernel. Enable USB4 / Thunderbolt in the firmware (BIOS) settings, then reboot; the eGPU cannot attach without it."; fi
 fi
-if m=$(bash "$ROOT/system/usr/local/sbin/egpu-kernel-cmdline" --check 2>/dev/null); then :; else
-  echo "warning: $m"; echo "         run 'sudo egpu-kernel-cmdline --apply' after this install (edits the bootloader config, backup kept), then reboot BEFORE plugging the eGPU in"
+# What counts is whether the parameters are PERSISTED in the bootloader configuration (the running kernel can have them
+# from hand-edited entries that the next kernel update regenerates without them). Written but not active = just reboot.
+KC="$ROOT/system/usr/local/sbin/egpu-kernel-cmdline"
+if bash "$KC" --written >/dev/null 2>&1; then
+  bash "$KC" --check >/dev/null 2>&1 || echo "note: the kernel parameters are written; they become active with the next reboot (before plugging the eGPU in)"
+else
+  echo "note: the eGPU kernel parameters are not in the bootloader configuration yet; this install writes them (backup kept). Reboot BEFORE plugging the eGPU in."
   CMDLINE_MISSING=1
 fi
 
@@ -106,6 +111,49 @@ if [ "$MODE" = check ]; then
   echo "$n file(s) differ or are missing"; exit 0
 fi
 
+# ---- SteamOS: a merged driver extension makes ALL of /usr read-only ------------------------------
+# On SteamOS /usr/local is part of the system partition (no separate mount), and a merged system extension turns /usr
+# into a read-only overlay: a second install then fails with "Read-only file system" (seen on a real device, 0.7.21).
+# So: unmerge for the duration of the install, and merge again on EVERY way out. Not while the driver is in use.
+SYSEXT_TOOL="$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
+# SteamOS keeps the system partition read-only. The Decky plugin disables that around the install,
+# but running this script directly (from the .run, or by hand) did not — it unmerged the driver
+# extension, started writing, and failed at the first file with "Read-only file system", leaving a
+# half-installed system. Do it here so every route works the same way.
+if command -v steamos-readonly >/dev/null 2>&1 && [ "$(steamos-readonly status 2>/dev/null)" = enabled ]; then
+  say "== SteamOS: making the system partition writable for the install"
+  sudo steamos-readonly disable >/dev/null 2>&1 || true
+  trap 'sudo steamos-readonly enable >/dev/null 2>&1 || true' EXIT
+fi
+if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/mounts 2>/dev/null; then
+  # "the driver is loaded" is not the same as "the eGPU is in use". A machine that booted with the
+  # eGPU attached has the modules loaded with nothing using them, and refusing there meant the only
+  # way to update was to unplug — which on an unprotected port resets the machine. So: if nothing is
+  # actually using the eGPU, unload the modules and carry on. If something is, refuse as before.
+  if [ -d /sys/module/nvidia ]; then
+    _egpu_busy=0
+    for _c in /sys/class/drm/card*-*/enabled; do
+      [ -e "$_c" ] || continue
+      case "${_c#/sys/class/drm/}" in *eDP-*) continue ;; esac
+      _cd=$(basename "$(dirname "$_c")"); _cd=${_cd%%-*}
+      [ "$(basename "$(readlink -f "/sys/class/drm/$_cd/device/driver" 2>/dev/null)")" = nvidia ] || continue
+      [ "$(cat "$_c" 2>/dev/null)" = enabled ] && _egpu_busy=1
+    done
+    fuser /dev/nvidia* >/dev/null 2>&1 && _egpu_busy=1
+    if [ "$_egpu_busy" = 0 ]; then
+      say "== the NVIDIA modules are loaded but nothing is using them: unloading so the system files can be written"
+      sudo modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia >/dev/null 2>&1 || true
+    fi
+  fi
+  if [ -d /sys/module/nvidia ]; then echo "The eGPU is in use, so the system files cannot be written now. The update is STAGED: it installs by itself on the next reboot, before the eGPU is brought up. Nothing to unplug."; exit 21; fi
+  say "== SteamOS: unmerging the driver extension while the system files are written"
+  sudo systemd-sysext unmerge >/dev/null 2>&1 || { echo "could not unmerge the driver extension (files in use?). Reboot with the eGPU unplugged and run the install again. Nothing was changed."; exit 21; }
+  trap 'sudo bash "$SYSEXT_TOOL" --activate >/dev/null 2>&1 || true' EXIT
+fi
+
+# stray copies of the Decky plugin inside homebrew/plugins (update backups of older versions): Decky would run THEM
+for d in "$USER_HOME"/homebrew/plugins/EGPU-Buddy.bak*; do [ -d "$d" ] && { sudo rm -rf "$d"; echo "removed stray plugin copy $d"; }; done
+
 # ---- user files ----------------------------------------------------------------------------------
 say "== installing user files"
 for f in "${FILES[@]}"; do case "$f" in user/*) ;; *) continue;; esac
@@ -127,11 +175,13 @@ if [ "$n" -gt 0 ]; then
 sudo bash -c "
 set -e; TS=$TS
 cd '$SYS_TMP'; find . -type f | while read -r f; do d=\"\${f#.}\"; mkdir -p \"\$(dirname \"\$d\")\"; if [ -e \"\$d\" ] && ! cmp -s \"\$f\" \"\$d\"; then cp -a \"\$d\" \"\$d.bak-egpu-buddy-\$TS\"; fi; install -m \"\$(stat -c %a \"\$f\")\" \"\$f\" \"\$d\"; done
-[ -f /etc/sudoers.d/steamos-egpu-buddy ] && { chmod 0440 /etc/sudoers.d/steamos-egpu-buddy; visudo -cf /etc/sudoers.d/steamos-egpu-buddy >/dev/null; }
+rm -f /etc/sudoers.d/steamos-egpu-buddy   # pre-0.7.23 name: sorted BEFORE /etc/sudoers.d/wheel, which then outranked it
+[ -f /etc/sudoers.d/zz-steamos-egpu-buddy ] && { chmod 0440 /etc/sudoers.d/zz-steamos-egpu-buddy; visudo -cf /etc/sudoers.d/zz-steamos-egpu-buddy >/dev/null; }
 chmod 0755 /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* /usr/local/bin/nv-egpu-offset-helper 2>/dev/null || true
 mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/version
-udevadm control --reload; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
-systemctl daemon-reload
+# reloads are conveniences (a reboot applies everything); they have nothing to talk to in a chroot/container
+udevadm control --reload >/dev/null 2>&1 || true; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
+systemctl daemon-reload >/dev/null 2>&1 || true
 for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal egpu-buddy-resume; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
 if [ -f /etc/pacman.conf ]; then
   # pin the NVIDIA userspace to the patched modules' version: append to an existing IgnorePkg line, never replace it
@@ -144,7 +194,7 @@ true
 "
 fi
 rm -rf "$SYS_TMP"
-userctl daemon-reload
+userctl daemon-reload >/dev/null 2>&1 || true   # no user session bus (install at boot, chroot): the next login picks the units up
 want core && { userctl enable egpu-display-failover.service; userctl enable --now egpu-wake-guard.service; } >/dev/null 2>&1 || true
 
 # ---- gamescope with GBM scan-out (NVIDIA scan-out corruption fix) --------------------------------
@@ -153,25 +203,37 @@ if want gamescope; then
   if [ "$AS_ROOT" = 0 ] && command -v meson >/dev/null && command -v ninja >/dev/null && command -v cc >/dev/null && command -v cmake >/dev/null; then
     say "== building GBM-scanout gamescope from source (a few minutes)"
     HOME="$USER_HOME" "$ROOT/packaging/gamescope-gbm/build.sh" || echo "build failed; the session shim falls back to /usr/bin/gamescope"
-  elif [ -d "$PRE/usr/bin" ]; then
-    say "== no build toolchain; installing the prebuilt GBM-scanout gamescope (falls back to the distro gamescope if it cannot run here)"
-    # atomic swap: a running gamescope keeps the old binary busy (ETXTBSY), so never copy over it in place
-    G="$USER_HOME/.local/gamescope-gbm"; umkdir "$G"; rm -rf "$G/usr.new" "$G/usr.old"; cp -a "$PRE/usr" "$G/usr.new"
-    [ -d "$G/usr" ] && mv "$G/usr" "$G/usr.old"; mv "$G/usr.new" "$G/usr"; rm -rf "$G/usr.old"; uown "$G"
-    ldd "$USER_HOME/.local/gamescope-gbm/usr/bin/gamescope" | grep -q 'not found' && echo "warning: prebuilt gamescope has missing libraries on this distro; the shim will fall back" || true
   else
-    echo "no toolchain and no prebuilt gamescope; skipping (UI corruption stays on NVIDIA)"
+    # By DETECTION, not by distro name: take the first shipped build that actually RUNS here (every library resolves).
+    # gamescope-gbm = built on CachyOS (needs a recent libstdc++); gamescope-gbm-steamos = built in a SteamOS 3.8 build root.
+    # A system neither fits gets a build on the device after the driver step (SteamOS build root), else the distro gamescope.
+    PICK=""; for c in "$PRE" "$ROOT"/prebuilt/gamescope-gbm*; do [ -x "$c/usr/bin/gamescope" ] || continue
+      ldd "$c/usr/bin/gamescope" 2>/dev/null | grep -q 'not found' || { PICK=$c; break; }; done
+    if [ -n "$PICK" ]; then
+      say "== installing the prebuilt GBM-scanout gamescope that runs on this system ($(basename "$PICK"))"
+      # atomic swap: a running gamescope keeps the old binary busy (ETXTBSY), so never copy over it in place
+      G="$USER_HOME/.local/gamescope-gbm"; umkdir "$G"; rm -rf "$G/usr.new" "$G/usr.old"; cp -a "$PICK/usr" "$G/usr.new"
+      [ -d "$G/usr" ] && mv "$G/usr" "$G/usr.old"; mv "$G/usr.new" "$G/usr"; rm -rf "$G/usr.old"; uown "$G"
+    else
+      say "== no shipped gamescope build runs on this system; it is built on the device after the driver step"
+      NEED_GAMESCOPE_BUILD=1
+    fi
   fi
 fi
 
 # ---- desktop app ----------------------------------------------------------------------------------
 if want desktopapp; then
   say "== installing the EGPU Buddy desktop app"
-  D="$USER_HOME/.local/share/egpu-buddy"; umkdir "$D" "$USER_HOME/.local/bin" "$USER_HOME/.local/share/applications"
-  cp "$ROOT"/desktop-app/egpu-buddy "$ROOT"/desktop-app/egpu-buddy-server.py "$ROOT"/desktop-app/egpu-buddy-window.py "$ROOT"/desktop-app/index.html "$ROOT"/desktop-app/egpu-buddy.png "$D/"
+  D="$USER_HOME/.local/share/egpu-buddy"; A="$USER_HOME/.local/share/applications"; umkdir "$D" "$USER_HOME/.local/bin" "$A" "$USER_HOME/.config/autostart"
+  cp "$ROOT"/desktop-app/egpu-buddy "$ROOT"/desktop-app/egpu-buddy-server.py "$ROOT"/desktop-app/egpu-buddy-window.py "$ROOT"/desktop-app/egpu-buddy.qml "$ROOT"/desktop-app/index.html "$ROOT"/desktop-app/egpu-buddy.png "$D/"
   chmod +x "$D/egpu-buddy" "$D"/*.py; ln -sf "$D/egpu-buddy" "$USER_HOME/.local/bin/egpu-buddy"
-  sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/egpu-buddy.desktop" > "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
-  uown "$D" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
+  # menu: the app and "Safely Eject eGPU"; Plasma autostart: the tray icon; desktop folder (when there is one): both launchers
+  for f in egpu-buddy egpu-safe-detach; do sed "s#/home/deck#$USER_HOME#g" "$ROOT/desktop-app/$f.desktop" > "$A/$f.desktop"; uown "$A/$f.desktop"
+    if [ -d "$USER_HOME/Desktop" ]; then cp "$A/$f.desktop" "$USER_HOME/Desktop/$f.desktop"; chmod +x "$USER_HOME/Desktop/$f.desktop"; uown "$USER_HOME/Desktop/$f.desktop"; fi; done
+  # the tray runs as a user service (survives the compositor restarts this project performs); drop the old autostart entry
+  rm -f "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop"
+  userctl enable egpu-buddy-tray.service >/dev/null 2>&1 || true
+  uown "$D" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop"
 fi
 
 # ---- Decky plugin --------------------------------------------------------------------------------
@@ -186,13 +248,57 @@ if want decky; then
   fi
 fi
 
+# ---- SteamOS: tell the OS updater which of our /etc files to carry over ---------------------------------------------
+# An update keeps /etc/systemd/system/*.service (+ wants) and whatever /etc/atomic-update.conf.d/*.conf lists
+# (/usr/lib/rauc/atomic-update-keep.conf on Valve's image). Everything else in /etc is reset.
+if [ "$MODE" = install ] && [ -d /etc/atomic-update.conf.d ]; then
+  say "== SteamOS: registering the integration's /etc files with the OS updater"
+  sudo tee /etc/atomic-update.conf.d/egpu-buddy.conf >/dev/null <<'KEEP'
+/etc/extensions/**
+/etc/default/grub.d/egpu-buddy.cfg
+/etc/udev/rules.d/*egpu*.rules
+/etc/modprobe.d/*egpu*.conf
+/etc/modules-load.d/egpu-thunderbolt.conf
+/etc/sudoers.d/zz-steamos-egpu-buddy
+/etc/nv-egpu-buddy/**
+/etc/pacman.d/gnupg/**
+KEEP
+fi
+
 # ---- patched NVIDIA driver (optional, Arch-based) ------------------------------------------------
 if want driver; then
   PKGV="$(sed -n 's/^pkgver=//p' "$ROOT/packaging/nvidia-open-egpu/PKGBUILD")-$(sed -n 's/^pkgrel=//p' "$ROOT/packaging/nvidia-open-egpu/PKGBUILD")"
   if command -v pacman >/dev/null && [ "${EGPU_DRIVER_FORCE:-0}" != 1 ] && pacman -Q nvidia-open-egpu-dkms 2>/dev/null | grep -q "$PKGV\$"; then say "== patched driver package $PKGV already installed (EGPU_DRIVER_FORCE=1 to rebuild)"
+  elif command -v steamos-readonly >/dev/null 2>&1; then
+    # SteamOS: the system partition has ~870 MB free (measured on Valve's 3.8.14 image) and an update replaces it, so the
+    # driver goes into a system extension on /home, built in a SteamOS build root there. Nothing is written to /usr.
+    say "== SteamOS: building the patched NVIDIA driver into a system extension on /home (10-20 minutes the first time, mostly downloads)"
+    sudo bash "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" || { DRIVER_FAILED=1; echo "warning: the driver extension was not built (see above); the rest is installed. Do NOT connect the eGPU until it is."; }
   elif command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
 else
-  say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
+  # Do not cry wolf: on SteamOS the patched driver is delivered as a system extension, not as a
+  # pacman package, so "no package" says nothing about whether it is installed. The modules
+  # themselves are the proof — they carry strings only this project's patches add, which is the
+  # same test the privileged helper uses before it will load the display stack. Telling a user with
+  # a correctly patched driver that a cable yank might hang their compositor is worse than saying
+  # nothing: they stop trusting what the software reports.
+  if modinfo -n nvidia >/dev/null 2>&1 &&
+     { f=$(modinfo -n nvidia 2>/dev/null); case "$f" in
+         *.zst) zstd -dcq "$f" 2>/dev/null ;; *.xz) xz -dcq "$f" 2>/dev/null ;;
+         *.gz) gzip -dcq "$f" 2>/dev/null ;; *) cat "$f" 2>/dev/null ;; esac; } |
+     grep -qaF 'External GPU disconnected.'; then
+    say "== the installed NVIDIA modules are this project's patched build (surprise unplug is handled)"
+  else
+    say "== patched driver not installed. Without it a cable yank can hang the compositor (safe detach still works)."
+  fi
+fi
+
+# ---- gamescope built on the device (only when no shipped build runs here; needs the SteamOS build root from the driver step)
+if [ "${NEED_GAMESCOPE_BUILD:-0}" = 1 ]; then
+  if [ -x /home/.egpu-buddy/buildroot/usr/bin/makepkg ]; then
+    say "== building the GBM-scanout gamescope on this device (10-15 minutes, one time)"
+    sudo bash "$ROOT/packaging/gamescope-gbm/build-steamos.sh" "$USER_NAME" || echo "warning: gamescope build failed; Game Mode on the eGPU will use the distro gamescope (picture corruption on NVIDIA above ~2560 px wide)"
+  else echo "warning: no gamescope build for this system and no build environment; the distro gamescope is used (picture corruption on NVIDIA above ~2560 px wide)"; fi
 fi
 
 # ---- persistent payload + caches (what the self-heal service repairs from after an OS update) --------------
@@ -206,7 +312,7 @@ fi
 if command -v pacman >/dev/null 2>&1; then
   umkdir "$PERSIST/pkgcache" "$PERSIST/modcache/$(uname -r)"
   # cache the exact installed versions for an offline restore: pacman cache -> our build dir -> Arch Linux Archive
-  for pk in nvidia-utils lib32-nvidia-utils bolt dkms nvidia-open-egpu-dkms; do v=$(pacman -Q "$pk" 2>/dev/null | awk '{print $2}'); [ -n "$v" ] || continue
+  for pk in nvidia-utils lib32-nvidia-utils bolt dkms nvidia-open-egpu-dkms; do v=$(pacman -Q "$pk" 2>/dev/null | awk '{print $2}' || true); [ -n "$v" ] || continue   # not installed (stock SteamOS) must not abort the install
     ls "$PERSIST"/pkgcache/"$pk"-"$v"-*.pkg.tar.* >/dev/null 2>&1 && continue
     f=$( { ls /var/cache/pacman/pkg/"$pk"-"$v"-*.pkg.tar.* "$USER_HOME"/.cache/egpu-buddy/driver-build/"$pk"-"$v"-*.pkg.tar.* 2>/dev/null || true; } | grep -v '\.sig$' | head -1 || true)
     if [ -n "$f" ]; then cp -n "$f" "$PERSIST/pkgcache/" 2>/dev/null || true
@@ -219,4 +325,11 @@ if [ "${CMDLINE_MISSING:-0}" = 1 ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "Write the missing kernel parameters into the bootloader configuration now? (backup kept) [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== writing the kernel parameters"; sudo /usr/local/sbin/egpu-kernel-cmdline --apply || echo "warning: could not write the kernel parameters; see README 'Kernel command line'"; fi
 fi
+# SteamOS has no NVIDIA driver of its own: without the extension the eGPU cannot work at all, so this is not a "done"
+if [ "${DRIVER_FAILED:-0}" = 1 ]; then say "== NOT finished: the NVIDIA driver was not built. Keep the eGPU unplugged and run the install again (needs internet)."; exit 20; fi
+# Flush everything to disk before saying "done". A machine that hard-resets shortly after an install
+# (a fabric flood gives no warning) came back with a ZERO-BYTE privileged helper and boot script: the
+# files had been written but never reached the disk, and an empty script "succeeds" at everything —
+# so no protection was applied and no driver was loaded, with nothing in any log to say why.
+sync
 say "== done. Reboot with the eGPU disconnected, then plug it in. Read TESTED.md before relying on any of this."

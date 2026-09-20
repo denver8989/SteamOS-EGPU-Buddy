@@ -61,6 +61,8 @@ async function refresh(){let s; try{s=await(await fetch("/api/status")).json()}c
   $("pl").min=Math.max(100,mn); $("pl").max=Math.min(320,mx); $("pl").value=cur; S("pl-v",cur+" W");}
  $("pl-apply").disabled=!on; $("a-reset").disabled=!on; $("a-detach").disabled=!s.present; $("a-attach").disabled=!!(s.present&&s.driver_loaded);
  const d=s.detach, gm=s.gm; if(d&&d.state&&d.state!=="IDLE"){$("msg").className="msg"+(/FAIL|DO_NOT|INCOMPLETE/.test(d.state)?" err":""); $("msg").textContent=d.state+": "+(d.message||"")}
- else if(gm&&gm.state&&gm.state!=="ATTACHED"){$("msg").textContent=gm.state+": "+(gm.message||"")}}
+ else if(gm&&gm.state&&gm.state!=="ATTACHED"){$("msg").textContent=gm.state+": "+(gm.message||"")}
+ else if(s.last&&s.last.action){const l=s.last; $("msg").className="msg"+(l.state==="failed"?" err":""); $("msg").style.whiteSpace="pre-wrap";
+  $("msg").textContent=l.state==="running"?(l.action+": working…"):l.state==="ok"?(l.action+": done."+(l.out?"\n"+l.out:"")):(l.action+" failed (rc "+l.rc+")\n"+(l.out||"no output"))}}
 refresh(); setInterval(refresh,2000);
 </script></body></html>

@@ -22,17 +22,29 @@ TEARDOWN_ONLY=0
 HIDE_LIST="/usr/lib/libnvidia-ml.so.1 /usr/lib/libnvidia-ml.so.610.57.04 /usr/lib32/libnvidia-ml.so.1 /usr/lib32/libnvidia-ml.so.610.57.04 /usr/share/glvnd/egl_vendor.d/10_nvidia.json /usr/lib/gbm/nvidia-drm_gbm.so /usr/share/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/implicit_layer.d/nvidia_layers.json /usr/share/egl/egl_external_platform.d/10_nvidia_wayland.json /usr/share/egl/egl_external_platform.d/15_nvidia_gbm.json"
 nv_drm_nodes(){ g=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$g" ] || return 0
   for n in /sys/class/drm/card[0-9]* /sys/class/drm/renderD*; do [ "$(basename "$(readlink -f "$n/device" 2>/dev/null)")" = "$g" ] && echo "/dev/dri/$(basename "$n")"; done; }
-panel_bl(){ for b in /sys/class/backlight/*; do echo "$1" > "$b/bl_power" 2>/dev/null; done; }
-hide_nv(){ panel_bl 0; /usr/local/sbin/egpu-panel on >/dev/null 2>&1; for f in $HIDE_LIST; do [ -e "$f" ] && mv -f "$f" "$f.egpu-off"; done; ldconfig 2>/dev/null
+panel_bl(){ for b in /sys/class/backlight/*; do echo "$1" > "$b/bl_power" 2>/dev/null; done; }   # 0 = on, 4 = FB_BLANK_POWERDOWN
+# Hiding = renaming the file. Where /usr cannot be written (SteamOS: the driver is a read-only system extension merged
+# into /usr) the file is covered with a bind mount of an empty, unreadable file instead: same effect for every loader
+# ("not readable" / "not a library"), nothing on disk changes, and it is undone with umount.
+HID=/run/nvegpu/hidden-file; BINDS=/run/nvegpu/bind-hidden
+hide_one(){ mv -f "$1" "$1.egpu-off" 2>/dev/null && return 0
+  mkdir -p /run/nvegpu; [ -e $HID ] || { : > $HID; chmod 000 $HID; }
+  mount --bind $HID "$1" 2>/dev/null && echo "$1" >> $BINDS; }
+unhide_all(){ [ -r $BINDS ] && { tac $BINDS | while read -r b; do [ -n "$b" ] && umount "$b" 2>/dev/null; done; rm -f $BINDS; }; return 0; }
+# sound was moved to the eGPU on attach; put it back rather than leaving a dead default behind
+audio_restore(){ runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+  /home/deck/.local/bin/egpu-audio.sh restore >/dev/null 2>&1 || true; }
+hide_nv(){ panel_bl 0; /usr/local/sbin/egpu-panel on >/dev/null 2>&1; for f in $HIDE_LIST; do [ -e "$f" ] && hide_one "$f"; done; ldconfig 2>/dev/null
   : ; }
-restore_nv(){ for f in $HIDE_LIST; do [ -e "$f.egpu-off" ] && mv -f "$f.egpu-off" "$f"; done; ldconfig 2>/dev/null
+restore_nv(){ unhide_all; for f in $HIDE_LIST; do [ -e "$f.egpu-off" ] && mv -f "$f.egpu-off" "$f"; done; ldconfig 2>/dev/null
   for d in $(nv_drm_nodes); do case "$d" in */card*) chmod 660 "$d"; chgrp video "$d" ;; *) chmod 666 "$d";; esac; done 2>/dev/null; }
 case "${1:-}" in
   --prep)    [ "$(id -u)" = 0 ] || exit 1; hide_nv; echo "nvidia userspace hidden"; exit 0 ;;
   --restore) [ "$(id -u)" = 0 ] || exit 1; restore_nv; echo "nvidia userspace restored"; exit 0 ;;
   --unload)  [ "$(id -u)" = 0 ] || exit 1; for p in $(fuser /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm /dev/dri/renderD129 2>/dev/null | tr -s " \n" " "); do c=$(tr "\0" " " </proc/$p/cmdline 2>/dev/null); case "$c" in *kwin_wayland*) ;; *) kill "$p" 2>/dev/null;; esac; done; sleep 2; modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem nvidia 2>/dev/null; lsmod | grep -q "^nvidia" && { echo "still loaded: $(lsmod|grep "^nvidia"|awk "{print \$1\"=\"\$3}"|tr "\n" " ") holders: $(fuser -v /dev/nvidia0 /dev/dri/renderD129 2>&1 | awk "NR>1&&NF>=3{print \$NF}" | sort -u | tr "\n" " ")"; exit 5; }; echo "nvidia stack unloaded"; exit 0 ;;
   --republish) [ "$(id -u)" = 0 ] || exit 1; /usr/local/sbin/egpu-republish-display; exit 0 ;;
-  --panel-off) [ "$(id -u)" = 0 ] || exit 1; panel_bl 1; exit 0 ;;
+  --panel-off) [ "$(id -u)" = 0 ] || exit 1; panel_bl 4; exit 0 ;;
   --panel-on)  [ "$(id -u)" = 0 ] || exit 1; panel_bl 0; exit 0 ;;
 esac   # caller already moved the compositor off the eGPU; do electrical teardown only
 U=1000
@@ -59,6 +71,8 @@ for c in /sys/class/drm/card[0-9]*; do
   [ "$(basename "$(readlink -f "$c/device/driver" 2>/dev/null)")" = amdgpu ] && { IGPU_CARD=$(basename "$c"); break; }
 done
 IGPU_CARD=${IGPU_CARD:-card1}
+# the eGPU's own card node (card0 on the Legion Go 2; not where the built-in GPU registered first)
+EGPU_CARD=$(read -r _b _ _c < <(/usr/local/sbin/egpu-detect 2>/dev/null) && echo "${_c:-}" || true); EGPU_CARD=${EGPU_CARD:-card0}
 
 if [ "$TEARDOWN_ONLY" = 1 ]; then
   say "[1/5] teardown-only: compositor already released by caller (egpu-safe-detach-ui)"
@@ -83,6 +97,10 @@ else
     # it at the iGPU + mesa and restart the compositor unit.
     say "[1/5] moving KWin off the eGPU ($IGPU_CARD, mesa render)…"
   touch "$DM"
+  # The attach pins Vulkan to the NVIDIA ICD; the detach then HIDES that file. Leaving the variable behind makes the
+  # loader report "Found no drivers" and EVERY Vulkan game fails to start until the eGPU comes back. Unset it here so the
+  # loader scans the directory again and finds the built-in GPU's driver.
+  runuser -u deck -- env $RUNENV systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES >/dev/null 2>&1
   runuser -u deck -- env $RUNENV systemctl --user set-environment \
     "KWIN_DRM_DEVICES=/dev/dri/$IGPU_CARD" \
     "KWIN_RENDER_NODES=/dev/dri/$(ls /sys/class/drm/$IGPU_CARD/device/drm 2>/dev/null | grep -m1 renderD)" \
@@ -90,8 +108,7 @@ else
     "__GLX_VENDOR_LIBRARY_NAME=mesa" >/dev/null 2>&1
   # 2026-09-14: the restart ends the logind session and plasmalogin re-logs in with the *boot* policy (Game Mode);
   # pin the relogin to the desktop so the eject UI finds KWin. egpu-conditional-session re-arms Game Mode at boot.
-  sed -i "s/^Session=.*/Session=plasma.desktop/" /etc/plasmalogin.conf 2>/dev/null
-  install -d -m 0755 /etc/plasmalogin.conf.d; printf '[Autologin]\nSession=plasma.desktop\n' > /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
+  /usr/local/sbin/egpu-dm-session pin plasma >/dev/null 2>&1 || true
   runuser -u deck -- env $RUNENV systemctl --user restart plasma-kwin_wayland.service >/dev/null 2>&1
     sleep 3; /usr/local/sbin/egpu-republish-display 2>/dev/null || true
   released=0
@@ -99,19 +116,22 @@ else
     sleep 2
     k=$(pgrep -x kwin_wayland | head -1)
     [ -n "$k" ] || continue
-    ls -l /proc/"$k"/fd 2>/dev/null | grep -q 'card0' || { released=1; break; }
+    ls -l /proc/"$k"/fd 2>/dev/null | grep -q "/dev/dri/$EGPU_CARD\$" || { released=1; break; }
   done
   if [ "$released" != 1 ]; then
-    say "      KWin still holds card0 (Mesa/KWin fd) — falling back to full logout…"
+    say "      KWin still holds $EGPU_CARD (Mesa/KWin fd) — falling back to full logout…"
     runuser -u deck -- env $RUNENV qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1 \
       || runuser -u deck -- env $RUNENV qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1
     for _ in $(seq 1 20); do
       sleep 2; k=$(pgrep -x kwin_wayland | head -1); [ -n "$k" ] || continue
-      ls -l /proc/"$k"/fd 2>/dev/null | grep -q 'card0' || { released=1; break; }
+      ls -l /proc/"$k"/fd 2>/dev/null | grep -q "/dev/dri/$EGPU_CARD\$" || { released=1; break; }
     done
   fi
-  [ "$released" = 1 ] || { say "      could not free card0 — ABORTING (safe; eGPU still attached)."; rm -f "$DM"; exit 3; }
-  say "      KWin released the eGPU (card0 free)"
+  [ "$released" = 1 ] || { say "      could not free $EGPU_CARD — ABORTING (safe; eGPU still attached)."; rm -f "$DM"; exit 3; }
+  say "      KWin released the eGPU ($EGPU_CARD free)"
+  # Release the session pin only now, with the desktop session back. Unpinning earlier let the login manager relogin with
+  # the system default, which on SteamOS is Game Mode: gamescope then held the card and the teardown aborted (seen live).
+  pgrep -x kwin_wayland >/dev/null 2>&1 && /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || true
   fi
 
 fi
@@ -147,6 +167,9 @@ say "      audio driver: $([ -L /sys/bus/pci/devices/$HDA/driver ] && echo still
 say "[3/5] releasing NVIDIA users + unloading the driver stack…"
 systemctl stop nvidia-persistenced 2>/dev/null; systemctl stop lactd 2>/dev/null   # LACT, if installed
 for h in /etc/nv-egpu-buddy/hooks.d/pre-unload/*; do [ -x "$h" ] && "$h" >/dev/null 2>&1; done
+# The Decky backend keeps /dev/nvidia* open (it polls nvidia-smi), so the unload step below kills it. Nothing restarted it
+# and Game Mode then came up with no plugins at all (seen on a real device). Remember it here, restart it at the end.
+DECKY_WAS_UP=0; systemctl is-active plugin_loader.service >/dev/null 2>&1 && DECKY_WAS_UP=1
 runuser -u deck -- env $RUNENV systemd-run --user --collect --quiet --wait --unit=egpu-steam-shutdown-$(date +%s) /usr/bin/steam -shutdown >/dev/null 2>&1; for _ in $(seq 1 15); do pgrep -x steam >/dev/null || break; sleep 1; done
 for _ in 1 2 3; do
   held=$(fuser /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm $(nv_drm_nodes) 2>/dev/null | tr -s ' \n' ' ')
@@ -177,6 +200,10 @@ say "      nvidia mods : $(lsmod 2>/dev/null | grep -c '^nvidia')"
 say "      floods      : $(dmesg 2>/dev/null | grep -c 'data fabric sync flood')"
 say "      D-state     : $(ps -eo stat,comm 2>/dev/null | awk '$1 ~ /D/ {print $2}' | tr '\n' ' ')"
 rm -f "$DM"
+# bring Decky back: the unload step kills it because its backend holds /dev/nvidia*
+[ "$DECKY_WAS_UP" = 1 ] && ! systemctl is-active plugin_loader.service >/dev/null 2>&1 && { systemctl start plugin_loader.service >/dev/null 2>&1 || true; say "      Decky plugin loader restarted"; }
 runuser -u deck -- env $RUNENV bash -c 'pgrep -x plasmashell >/dev/null || (setsid plasmashell >/dev/null 2>&1 &)' 2>/dev/null
+audio_restore
+[ "$on_bus" = 0 ] && /usr/local/sbin/nv-egpu-buddy-privileged pin-tunnel-ports auto >/dev/null 2>&1
 [ "$on_bus" = 0 ] && say "DONE — safe to unplug. Re-attach WITHOUT replug: sudo egpu-reattach" \
                   || say "DONE — but GPU still on bus; do NOT unplug."

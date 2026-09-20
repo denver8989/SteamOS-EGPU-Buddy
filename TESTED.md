@@ -1,8 +1,131 @@
 # What is tested, what is not, and what can bite you
 
-Everything below was verified on the single machine described in the README (Legion Go 2 + RTX 5060 Ti eGPU +
-5120×1440 DisplayPort monitor, CachyOS Deckify, nvidia-open 610.57.04). "Verified" means it was exercised
-repeatedly in one session on 2026-09-11/12 and behaved as described. Nothing here has been run on a second machine.
+Everything below was verified on the machines described in the README. "Verified" means it was exercised
+repeatedly and behaved as described.
+
+## 2026-09-20 — second machine, second GPU family (0.7.68)
+
+Legion Go 1 (AMD Phoenix) + **SteamOS 3.8**, kernel 6.16.12-valve24.5, AOOSTAR AG03 enclosure (Intel JHL9480 TB5),
+**NVIDIA RTX 3080 10 GB (Ampere, GA102)**, the same `nvidia-open` 610.57.04 build as the 5060 Ti — no separate driver,
+no per-card configuration.
+
+Verified on that rig in one session:
+
+- boot with the eGPU attached, and hot-plug attach in **both** Game Mode and the Desktop
+- **full 16 GiB BAR1** in all three cases (it was 256 MiB before this release), confirmed by
+  `nvidia-smi -q` reporting `BAR1 Memory Usage Total: 16384 MiB`
+- Safe Detach from the plugin in Game Mode and on the Desktop: card off the bus, driver unloaded, the built-in
+  panel lit, the session back where it started, no AMD data-fabric sync flood
+- re-attach in software afterwards (`egpu-reattach`), with the 16 GiB BAR intact
+- cable pull in Game Mode → stays in Game Mode; cable pull on the Desktop → **returns to the Desktop**, the panel is
+  re-enabled as an output, and Steam comes back on its own
+- audio moves to the eGPU output on attach and back on detach
+
+No benchmarks or performance figures are recorded for any rig: what is tracked here is whether the eGPU attaches,
+renders, survives a cable pull and comes back.
+
+## Earlier: the reference rig
+
+Legion Go 2 + RTX 5060 Ti eGPU + 5120×1440 DisplayPort monitor, CachyOS Deckify, nvidia-open 610.57.04. Exercised
+repeatedly in one session on 2026-09-11/12.
+
+## SteamOS: verified in a container built from Valve's image, not on a device (0.7.17)
+
+Test environment: the root filesystem of Valve's `steamdeck-oobe-repair-20260707.10-3.8.14` image, run with
+`systemd-nspawn`, a writable `/etc` overlay, a separate small `/var` and `/home` on their own (as SteamOS mounts
+them; until 0.7.21 the container also mounted `/usr/local` separately, which SteamOS 3.8 does **not** do: that mistake
+hid the 0.7.21 reinstall failure described below), Valve's real `pacman.conf`, repositories and keyrings, no compiler on the host.
+
+| Verified there | Result |
+|---|---|
+| Full `install.sh` as root with the Decky plugin's component list, no prompts | exit 0, "driver 610.57.04 active ... system partition untouched" |
+| pacman keyring initialisation on a stock image | works (this was the first failure on a real Legion Go, SteamOS) |
+| Kernel headers for the exact running kernel (`valve24.4`, while the repository offers `valve24.5`) | fetched from Valve's mirror by version |
+| Patched 610.57.04 modules compiled against Valve's 6.16.12 kernel | `modinfo`: version 610.57.04, matching vermagic, hot-unplug patch strings present |
+| System extension merged into a read-only `/usr` | libraries visible, 102 NVIDIA entries in the loader cache, `modprobe --show-depends nvidia_drm` resolves |
+| Simulated reboot (extension unmerged) -> self-heal | re-activated offline |
+| Simulated kernel change (modules removed) -> boot path | modules rebuilt, driver active |
+| Safe Detach hide/restore on the read-only merged `/usr` | 10 files covered by bind mounts, unreadable to users, restored, no mounts left |
+| OS-update keep-list, GRUB drop-in (as Valve's `grub-mkconfig` sources it) | written; resulting command line contains the parameters |
+| Uninstall | nothing left: extension, build environment, keep-list, drop-in, units, scripts |
+
+## SteamOS: boot WITH the eGPU attached, end to end (0.7.46)
+
+Same Legion Go (the first one), SteamOS 3.8, kernel 6.16.12-valve24.5, RTX 5060 Ti in a Gigabyte AORUS TB5 box,
+5120x1440@144 ultrawide. 2026-09-20, read from the machine's own logs rather than reported by eye.
+
+| Verified on the device | Result |
+|---|---|
+| Boot with the eGPU attached, on the **second** USB4 port | Game Mode comes up on the monitor, handheld panel dark |
+| BAR1 at boot | `BAR1 resized while driverless -> 16384MiB` — the full bar, on the first path, no re-enumeration |
+| Surprise-removal protection | applied at boot (`uncorrectable errors masked`), not only on attach |
+| A monitor in standby at boot | answers the forced probe; the session lands on it |
+| Quiet boot, no boot menu | `quiet` and `splash` reach the kernel; 13 s from power to network |
+| The session stays up | past 3 minutes, where earlier builds tore it down at ~90 s |
+| Either USB4 port | both reach a full 16 GiB BAR1; the eGPU enumerates behind whichever root port is used |
+| Patched driver detection | read from the installed modules, not from a package SteamOS does not have |
+
+Also verified on 2026-09-20, by swapping the cable on a live session:
+
+| Verified on the device | Result |
+|---|---|
+| DisplayPort -> HDMI while attached, on a TV | `staging Game Mode output 4096x2160@120 on HDMI-A-1` — 4K at 120 Hz |
+| HDMI -> DisplayPort back again | `staging Game Mode output 5120x1440@144 on DP-9` |
+| The handheld panel during the gap with no eGPU output | came back on by itself, and went dark again once the TV had the picture |
+| Audio across both swaps | stayed on the eGPU output; the sink is chosen by port availability, so DP and HDMI behave the same |
+
+Not verified on this machine: a from-scratch install after a full uninstall (the next thing to test), and anything on
+hardware other than the two handhelds named here.
+
+## SteamOS: tested on a real device (0.7.23)
+
+Legion Go (the first one), SteamOS 3.8, kernel 6.16.12-valve24.5, RTX 5060 Ti in a Gigabyte AORUS TB5 box, Acer X49 V
+ultrawide at 5120x1440@144 over DisplayPort. Everything below was done on that machine on 2026-09-19 and watched in its
+own logs.
+
+| Verified on the device | Result |
+|---|---|
+| Install from the release payload, repeatedly, including over a working install | exit 0, ~30 s; the driver extension is unmerged and re-merged around the write |
+| Patched 610.57.04 built on the device and merged as a system extension | driver active, modules and libraries resolve, survives a re-run |
+| Attach in Game Mode (plug in, no button) | ~30 s from plug to Game Mode on the monitor; BAR1 16 GB, link pinned Gen3 x4 |
+| Game Mode picture | clean, no scanout corruption, with the GBM-scanout gamescope built for SteamOS |
+| Steam UI at the display's native mode | 5120x1440@144, UI scale applied |
+| A game in Game Mode | played, "works fine, operates well" |
+| Safe Detach in Game Mode | SAFE_COMPLETE, 51 s (was 98 s before the wait fix) |
+| Replug after a Safe Detach | auto-attached, Game Mode back on the monitor |
+| Surprise unplug in Game Mode | recovered in 8 s, one session relaunch, no reset, driver unloaded |
+| Desktop mode on the eGPU | NVIDIA-only: the compositor holds only the eGPU's nodes, the built-in GPU is held by nobody |
+| Safe Detach from the desktop | SAFE_COMPLETE, compositor back on the built-in GPU, panel and backlight restored |
+| Surprise unplug on the desktop | recovered in 8 s, no reset, Steam and the tray app came back |
+| Kernel parameters, self-heal service, keep-list, GRUB drop-in | written and effective |
+| Uninstall | nothing left behind |
+
+**Not the same machine as the development one:** its USB4 root ports have no Downstream Port Containment, its GPUs
+enumerate the other way round (the eGPU is `card1`), its login manager is `sddm`, and its Game Mode session file has a
+different name. Each of those broke something that had only ever run on the development machine; see the 0.7.23 notes.
+
+**Known limitation there:** HDR must be enabled on the monitor itself as well as in Steam. With the display's own HDR
+mode off, enabling HDR in Steam gives a washed out, grey picture — that is the display, not the software.
+
+**Real device, 2026-09-19 (Legion Go, SteamOS 3.8, kernel 6.16.12-valve24.5):** with 0.7.20 the build environment,
+the headers for the exact kernel and the driver compile all succeeded; assembling the extension then failed with
+`overlay: case-insensitive capable filesystem ... not supported`, because SteamOS formats `/home` as case-folding ext4
+and the test container's `/home` was not. Since 0.7.21 the extension is a squashfs image and no overlay layer is ever
+placed on `/home`; the container's `/home` is now a case-folding ext4 too, and a shim there refuses overlay layers on
+it the way Valve's kernel does (the development kernel is newer and no longer refuses). Re-verified there: full
+install exit 0, image merged (layers: `/run/systemd/sysext/...` and `/usr` only), modules and libraries resolve,
+boot re-activation, from-scratch driver build 2 min 56 s on 16 threads.
+
+**Real device, 0.7.21:** the first install completed and the driver extension merged. A second install then failed
+with `Read-only file system` on `/usr/local/sbin`: on SteamOS `/usr/local` is part of the system partition, and a merged
+extension makes all of `/usr` a read-only overlay. Since 0.7.22 the installer and the uninstaller unmerge the extension
+first (refusing while the NVIDIA driver is loaded) and merge it again on every way out. The container now has one
+writable system partition including `/usr/local`; there, 0.7.21 reproduces the failure and 0.7.22 passes: fresh
+install, install again while merged, uninstall while merged.
+
+**Not yet verified on a real SteamOS device:** the merged extension and everything after it. Unknown until someone runs it there: boot ordering on real hardware,
+GRUB regeneration on the device, a real OS update, loading the modules with an eGPU attached, and everything the
+NVIDIA path does at attach time on a non-Legion-Go-2 machine.
 
 ## Not tested at all: AMD / Intel eGPUs (0.8.0 beta)
 

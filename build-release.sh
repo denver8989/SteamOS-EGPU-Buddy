@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd); cd "$ROOT"
 VER=$(cat VERSION); NAME="SteamOS-EGPU-Buddy-$VER"
 rm -rf dist && mkdir -p dist/stage/"$NAME"
-git ls-files -z | grep -zvE '^(dist/|\.github/|build-release\.sh|decky-plugin/egpu-buddy/(src|node_modules|pnpm-lock|rollup|tsconfig|\.gitignore))' | xargs -0 -I{} cp --parents {} dist/stage/"$NAME"/
+git ls-files -z | grep -zvE '^(dist/|\.github/|build-release\.sh|release-notes-for\.py|decky-plugin/egpu-buddy/(src|node_modules|pnpm-lock|rollup|tsconfig|\.gitignore))' | xargs -0 -I{} cp --parents {} dist/stage/"$NAME"/
 # prebuilt gamescope is not tracked (binary); ship it in the artifacts
 cp -a prebuilt dist/stage/"$NAME"/ 2>/dev/null || true
 chmod +x dist/stage/"$NAME"/install.sh dist/stage/"$NAME"/uninstall.sh dist/stage/"$NAME"/installer/steamos-egpu-buddy
@@ -44,6 +44,7 @@ chmod +x "dist/$NAME.run"
 (cd dist && sha256sum "$NAME.run" "$NAME.tar.gz" "EGPU-Buddy-Decky-$VER.zip" > SHA256SUMS)
 ls -la dist | grep -E 'run|tar|SHA'
 if [ "${1:-}" = --publish ]; then
-  PRE=""; case "$VER" in *-*) PRE="--prerelease --latest=false";; esac   # betas never become "latest": the updater and the curl installer skip them
-  gh release create "v$VER" $PRE --target "$(git branch --show-current)" "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS get-egpu-buddy.sh --title "SteamOS EGPU Buddy $VER" --notes-file RELEASE-NOTES.md
+  # a release page carries ITS OWN changes, not the whole history (RELEASE-NOTES.md stays cumulative in the repository)
+  python3 release-notes-for.py "$VER" RELEASE-NOTES.md > "dist/NOTES-$VER.md"
+  gh release create "v$VER" "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS get-egpu-buddy.sh --title "SteamOS EGPU Buddy $VER" --notes-file "dist/NOTES-$VER.md"
 fi

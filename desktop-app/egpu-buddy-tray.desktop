@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=EGPU Buddy (tray)
+Comment=EGPU Buddy in the system tray: status, Safe Detach, Re-attach
+Exec=/home/deck/.local/bin/egpu-buddy --tray
+Icon=/home/deck/.local/share/egpu-buddy/egpu-buddy.png
+Terminal=false
+NoDisplay=true
+X-KDE-autostart-phase=2

@@ -24,13 +24,13 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.8.0-beta3"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.68"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
 VERSION_FILE = "/etc/nv-egpu-buddy/version"
 SETUP_COMPONENTS = os.environ.get("EGPU_SETUP_COMPONENTS", "core,session,gamescope,bootpolicy,desktopapp")   # no decky (already here); driver added where pacman exists
-_setup = {"busy": False, "step": "", "rc": None, "progress": 0}
+_setup = {"busy": False, "step": "", "rc": None, "progress": 0, "started": 0.0}
 # ---- automatic updates: keep an existing install on the latest GitHub release (system integration + this plugin)
 SETTINGS = f"{USER_HOME}/.config/egpu-buddy/plugin.json"
 PLUGIN_LIVE = f"{USER_HOME}/homebrew/plugins/EGPU-Buddy"
@@ -41,25 +41,43 @@ def _settings():
     except Exception: return {}
 def _save_settings(d):
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True); json.dump(d, open(SETTINGS, "w")); subprocess.run(["chown", "-R", USER, os.path.dirname(SETTINGS)], env=_clean_env())
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?$")
-def _vt(v):
-    """Sortable version: 0.8.0-beta1 < 0.8.0 (a pre-release sorts below its final release)."""
-    v = v or "0"; core, _, pre = v.partition("-")
-    n = [int(x) for x in re.findall(r"\d+", core)[:3]]; n += [0] * (3 - len(n))
-    return tuple(n) + ((0, int((re.findall(r"\d+", pre) or [0])[-1])) if pre else (1, 0))
-def _releases():
-    """Every release kept on GitHub, newest first (betas included): the list the version picker offers."""
-    data = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases?per_page=20", 20).decode())
-    out = [{"version": r.get("tag_name", "").lstrip("v"), "beta": bool(r.get("prerelease"))} for r in data if not r.get("draft")]
-    return [r for r in out if VERSION_RE.match(r["version"])]
+def _vt(v): return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3]) or (0,)
 def _latest_release():
     data = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases/latest", 20).decode())
     return data.get("tag_name", "").lstrip("v")
-STAGES = (("== preflight", 8), ("== installing user files", 20), ("== installing system files", 40),
-          ("== building GBM-scanout gamescope", 55), ("== no build toolchain", 60), ("== installing the EGPU Buddy desktop app", 75),
-          ("== building the patched nvidia-open", 78), ("pinning NVIDIA userspace", 80), ("==> Making package", 82), ("==> Starting build()", 84),
-          ("==> Entering fakeroot", 88), ("==> Finished making", 90), ("installed: nvidia-open-egpu-dkms", 94), ("== patched driver not installed", 94), ("== writing the kernel parameters", 97), ("== done", 100),
-          ("restored ", 50), ("removed  ", 50), ("done. The stock", 100))
+# (line prefix in the installer output, percent when that stage STARTS, short label for the line under the bar).
+# The percentages follow measured time, not the order of the text: on SteamOS the downloads and the compile dominate.
+STAGES = (("== preflight", 3, "Checking the system"), ("== installing user files", 6, "Installing the user files"),
+          ("== installing system files", 10, "Installing the system files"),
+          ("== building GBM-scanout gamescope", 14, "Building gamescope"), ("== no build toolchain", 14, "Installing the prebuilt gamescope"),
+          ("== installing the prebuilt GBM-scanout gamescope", 14, "Installing the gamescope build for this system"),
+          ("== no shipped gamescope build runs", 14, "gamescope will be built after the driver"),
+          ("== building the GBM-scanout gamescope on this device", 96, "Building gamescope on this device (10-15 minutes)"),
+          ("== installing the EGPU Buddy desktop app", 18, "Installing the desktop app"),
+          ("== patched driver package", 90, "NVIDIA driver already installed"),
+          ("== building the patched nvidia-open", 22, "Preparing the NVIDIA driver build"),
+          ("== SteamOS: building the patched NVIDIA driver", 20, "Preparing the NVIDIA driver"),
+          ("== creating the build environment", 22, "Downloading the build tools (1.3 GB, a few minutes)"),
+          ("== kernel headers:", 36, "Kernel headers downloaded"),
+          ("== building the patched NVIDIA", 38, "Downloading the NVIDIA driver files (about 500 MB)"),
+          ("==> Retrieving sources", 46, "Downloading the driver source"), ("==> Extracting sources", 48, "Unpacking the driver source"),
+          ("==> Starting prepare()", 49, "Applying the eGPU patches"), ("==> Starting build()", 50, "Compiling the driver"),
+          ("==> Entering fakeroot", 80, "Packaging the driver"), ("==> Finished making", 82, "Installing the driver package"),
+          ("==> dkms install", 84, "Building the modules for this kernel (1-2 minutes)"), ("installed: nvidia-open-egpu-dkms", 90, "Driver installed"),
+          ("== assembling the system extension", 90, "Collecting the driver files"), ("== packing the extension image", 93, "Packing the driver image"),
+          ("== driver ", 96, "Driver active"), ("== patched driver not installed", 90, "Driver step skipped"),
+          ("== keeping a copy", 97, "Saving the self-heal copy"), ("== writing the kernel parameters", 98, "Writing the kernel parameters"),
+          ("== NOT finished", 99, "The NVIDIA driver was not built"), ("== done", 100, "Finished"),
+          ("restored ", 50, "Restoring the original files"), ("removed  ", 50, "Removing files"), ("done. The stock", 100, "Finished"))
+# the one long stage with countable output: the compile prints ~15,500 lines (measured, same with any -j) until the next marker
+SPAN = {"==> Starting build()": (15500, 80)}
+RC_NO_DRIVER = 20   # install.sh on SteamOS: everything installed except the NVIDIA driver extension
+# install.sh cannot write /usr/local while the driver extension is merged and the eGPU is in use.
+# That is NOT a failed update: the new payload has already been unpacked into the self-heal source,
+# and the boot path installs it when the versions differ — before the eGPU is brought up, with no
+# session to disturb. So the update is STAGED and finishes on the next reboot. Nobody should have
+# to unplug an eGPU to update the software that manages it.
+RC_STAGED = 21
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 ST = "/run/nvegpu"
@@ -70,6 +88,8 @@ PRIV = "/usr/local/sbin/nv-egpu-buddy-privileged"
 SWITCH = "/usr/local/sbin/egpu-gamemode-switch"
 DETACH = "/usr/local/sbin/egpu-gamemode-detach"
 REATTACH = "/usr/local/sbin/egpu-reattach"
+PLUGIN_BACKUP = f"{USER_HOME}/homebrew/egpu-buddy-plugin-backup"
+FLOOD_LOCKOUT = "/var/lib/nvegpu/flood-lockout"; FLOOD_HISTORY = "/var/lib/nvegpu/flood-history"
 GPU_RE = re.compile(r"^(\S+) 0300: 10de:")   # any NVIDIA VGA-class device
 
 
@@ -101,52 +121,13 @@ def _json(path):
         return {}
 
 
-GENERIC = "/usr/local/sbin/egpu-generic"
-DETECT = "/usr/local/sbin/egpu-detect"
-
-
-def _gpu():
-    """(bdf, vendor) of the eGPU. NVIDIA is matched as before; any other vendor comes from egpu-detect (experimental)."""
+def _gpu_bdf():
     _, out, _ = _sh(["lspci", "-Dn"], 5)
     for line in out.splitlines():
         m = GPU_RE.match(line)
         if m:
-            return m.group(1), "nvidia"
-    if os.path.exists(DETECT):
-        rc, out, _ = _sh([DETECT], 5)
-        parts = out.split()
-        if rc == 0 and len(parts) >= 2 and parts[1] != "nvidia":
-            return parts[0], parts[1]
-    return "", ""
-
-
-def _gpu_bdf():
-    return _gpu()[0]
-
-
-def _hwmon(bdf):
-    import glob as _g
-    d = _g.glob(f"/sys/bus/pci/devices/{bdf}/hwmon/hwmon*")
-    return d[0] if d else ""
-
-
-def _sysfs_query(bdf):
-    """Mesa-driver telemetry (amdgpu sysfs), returned under the same keys nvidia-smi uses so the UI is shared."""
-    dev, hw = f"/sys/bus/pci/devices/{bdf}", _hwmon(bdf)
-    def num(path, div, fmt="{:.0f}"):
-        v = _read(path)
-        return fmt.format(int(v) / div) if v.lstrip("-").isdigit() else ""
-    _, name, _ = _sh(["lspci", "-D", "-s", bdf], 5)
-    tel = {
-        "name": name.split(": ", 1)[-1].strip() if name else bdf,
-        "driver_version": os.path.basename(os.path.realpath(f"{dev}/driver")),
-        "temperature.gpu": num(f"{hw}/temp1_input", 1000), "power.draw": num(f"{hw}/power1_average", 1e6) or num(f"{hw}/power1_input", 1e6),
-        "power.limit": num(f"{hw}/power1_cap", 1e6), "power.max_limit": num(f"{hw}/power1_cap_max", 1e6), "power.min_limit": num(f"{hw}/power1_cap_min", 1e6),
-        "clocks.gr": num(f"{hw}/freq1_input", 1e6), "clocks.mem": num(f"{hw}/freq2_input", 1e6),
-        "memory.used": num(f"{dev}/mem_info_vram_used", 1 << 20), "memory.total": num(f"{dev}/mem_info_vram_total", 1 << 20),
-        "utilization.gpu": _read(f"{dev}/gpu_busy_percent"), "fan.speed": num(f"{hw}/pwm1", 2.55),
-    }
-    return {k: v for k, v in tel.items() if v}
+            return m.group(1)
+    return ""
 
 
 def _proc_running(name):
@@ -282,6 +263,26 @@ def _slog(msg, progress=None):
         pass
 
 
+def _notify(text):
+    d = _settings(); d["notice"] = text; _save_settings(d)
+
+
+def _driver_ready():
+    """The NVIDIA kernel module is resolvable for the running kernel (what the attach gate checks as well)."""
+    return not shutil.which("pacman") or _sh(["modinfo", "-n", "nvidia"], 5)[0] == 0
+
+
+def _expect():
+    """Honest duration for the confirm dialog and the progress view."""
+    if not shutil.which("steamos-readonly"):
+        return "several minutes"
+    if _driver_ready():
+        return "about a minute (the driver is already built)"
+    if os.path.exists("/home/.egpu-buddy/buildroot/usr/bin/makepkg"):
+        return "about 5-10 minutes (the build tools are already downloaded)"
+    return "10-20 minutes the first time, mostly downloads (about 2 GB)"
+
+
 def _fetch_payload(version=None):
     """Return the path of the verified release tarball: bundled payload/ if present, else downloaded."""
     version = version or PAYLOAD_VERSION
@@ -305,14 +306,26 @@ def _fetch_payload(version=None):
 
 def _run_logged(cmd, env, cwd):
     """Run the installer, stream its output into the log, and turn its stage lines into progress."""
+    # Run the installer in its OWN transient systemd unit: on SteamOS the driver build takes 10-20 minutes, and as a child
+    # of Decky it would die with any Decky/Steam restart. --pipe keeps the output streaming back for the progress bar.
+    if shutil.which("systemd-run"):
+        keep = [f"--setenv={k}={v}" for k, v in env.items() if k.startswith("EGPU_") or k in ("HOME", "PATH", "STOCK_GAMESCOPE_SESSION")]
+        cmd = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", f"--unit=egpu-buddy-setup-{int(time.time())}",
+               f"--working-directory={cwd}", "--property=TimeoutStartSec=7200", *keep, *cmd]
     with open(SETUP_LOG, "a") as log:
         pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd, text=True)
+        span = None; base = 0; n = 0
         for line in pr.stdout:
             clean = ANSI.sub("", line.rstrip())
             log.write(clean + "\n"); log.flush()
-            for marker, pct in STAGES:
+            for marker, pct, label in STAGES:
                 if clean.startswith(marker):
-                    _setup["step"] = clean.lstrip("= ").strip()[:90]; _setup["progress"] = max(_setup["progress"], pct)
+                    log.write(f"{time.strftime('%H:%M:%S')} [{pct}%] {label}\n")
+                    _setup["step"] = label; _setup["progress"] = max(_setup["progress"], pct); span = SPAN.get(marker); base = pct; n = 0
+                    break
+            else:
+                if span:   # real progress inside the compile: lines seen / lines expected
+                    n += 1; _setup["progress"] = max(_setup["progress"], base + (span[1] - base) * min(n / span[0], 1.0))
         return pr.wait()
 
 
@@ -322,6 +335,13 @@ def _clean_env(**extra):
     for k in ("LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT", "PYTHONPATH", "PYTHONHOME"):
         e.pop(k, None)
     e.update(extra); return e
+
+
+def _cmdline_reboot_needed():
+    """True only when the RUNNING kernel lacks parameters this software needs."""
+    if not os.path.exists("/usr/local/sbin/egpu-kernel-cmdline"):
+        return False
+    return _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--check"], 5)[0] != 0
 
 
 def _setup_worker(action, with_driver=False, version=None):
@@ -352,11 +372,20 @@ def _setup_worker(action, with_driver=False, version=None):
             if ro: subprocess.run([ro, "enable"], env=_clean_env())
         _setup["rc"] = rc
         _slog(f"{action} finished rc={rc}" + ("" if rc == 0 else " (see log)"), 100)
+        if action == "install":
+            _notify(("Installed. Plug the eGPU in when you like." if not _cmdline_reboot_needed()
+                     else "Installed. One reboot activates the kernel parameters — the eGPU can stay plugged in.") if rc == 0 else
+                    "The NVIDIA driver was not built. Keep the eGPU unplugged and open EGPU Buddy." if rc == RC_NO_DRIVER else
+                    "Update staged: it finishes by itself on the next reboot. Nothing to unplug." if rc == RC_STAGED else
+                    f"Install failed (rc {rc}). Open EGPU Buddy for details.")
     except Exception as ex:  # noqa: BLE001
         _setup["rc"] = 1
         _slog(f"{action} failed: {ex}")
     finally:
         _setup["busy"] = False
+
+
+DETECT = "/usr/local/sbin/egpu-detect"
 
 
 def _untested():
@@ -370,8 +399,8 @@ def _untested():
 
 
 def _accepted():
-    """The untested-hardware notice was accepted, or the integration is already installed (accepted at that time)."""
-    return bool(_settings().get("accepted_untested")) or os.path.exists(VERSION_FILE)
+    """The untested-hardware notice was accepted explicitly in the dialog (an old or partial install does not count)."""
+    return bool(_settings().get("accepted_untested"))
 
 
 def _unsupported():
@@ -391,13 +420,22 @@ def _start_setup(action, with_driver=False, version=None):
         return {"ok": False, "message": "This hardware is untested. Read the notice and accept it first."}
     if _setup["busy"]:
         return {"ok": False, "message": "Setup is already running."}
-    _setup.update(busy=True, rc=None, step="starting", progress=0)
+    _setup.update(busy=True, rc=None, step="starting", progress=0, started=time.time())
     try:
-        os.remove(SETUP_LOG)
+        os.replace(SETUP_LOG, SETUP_LOG + ".prev")   # the previous run stays readable: a retry must not erase the first failure
     except OSError:
         pass
     threading.Thread(target=_setup_worker, args=(action, with_driver, version), daemon=True).start()
     return {"ok": True, "message": f"{action} started"}
+
+
+def _drop_stray_plugin_copies():
+    """Remove copies of this plugin that older versions left inside homebrew/plugins (Decky would load them as plugins)."""
+    import glob
+    n = 0
+    for d in glob.glob(PLUGIN_LIVE + ".bak*"):
+        shutil.rmtree(d, ignore_errors=True); n += 1
+    return n
 
 
 def _update_plugin_files(version):
@@ -409,8 +447,9 @@ def _update_plugin_files(version):
     if not want or want != hashlib.sha256(open(dst, "rb").read()).hexdigest(): raise RuntimeError("checksum mismatch on the plugin zip")
     import zipfile
     tmp = f"/tmp/egpu-buddy-plugin-{version}"; shutil.rmtree(tmp, ignore_errors=True); zipfile.ZipFile(dst).extractall(tmp)
-    src = os.path.join(tmp, "EGPU-Buddy"); bak = f"{USER_HOME}/homebrew/egpu-buddy-backups/EGPU-Buddy.bak"   # outside plugins/: Decky loads every directory in there
-    os.makedirs(os.path.dirname(bak), exist_ok=True)
+    # The backup must NOT live inside homebrew/plugins: Decky loads every folder there as a plugin, found two "EGPU Buddy",
+    # and kept running the BACKUP (the old version) after every update. Seen on a real device: "plugin stayed 0.7.20".
+    src = os.path.join(tmp, "EGPU-Buddy"); bak = PLUGIN_BACKUP; _drop_stray_plugin_copies()
     shutil.rmtree(bak, ignore_errors=True); shutil.copytree(PLUGIN_LIVE, bak)
     for entry in os.listdir(PLUGIN_LIVE):
         pth = os.path.join(PLUGIN_LIVE, entry); shutil.rmtree(pth, ignore_errors=True) if os.path.isdir(pth) else os.remove(pth)
@@ -422,24 +461,45 @@ def _update_plugin_files(version):
         subprocess.Popen(["systemd-run", "--on-active=5", "--collect", "--quiet", "systemctl", "try-restart", "plugin_loader.service"], env=_clean_env())
 
 
-def _update_worker(version, hold=False):
-    """Install exactly `version` (newer or older). hold=True is a user-chosen version: automatic updates are switched
-    off first, so neither this plugin nor the older one being installed moves away from it on its own."""
+def _update_worker(version):
+    """An update is two separate jobs, PLUGIN FIRST: (1) swap the plugin files (seconds) and let Decky restart; (2) the NEW
+    plugin then installs its own bundled system files with its own code and progress view (_continue_update). Old plugin
+    code never drives a newer installer."""
     try:
-        _update["state"] = f"installing {version}"
-        if hold:
-            d = _settings(); d["auto_update"] = False; d["held_version"] = version; _save_settings(d)
+        if _vt(version) > _vt(PAYLOAD_VERSION):
+            d = _settings(); d["continue_update"] = version; _save_settings(d)
+            _update["state"] = f"updating the plugin to {version}"; _slog(f"updating the plugin to {version}; the system files follow after the restart", 50)
+            _update_plugin_files(version)
+            _update["state"] = f"plugin {version} installed; restarting"; return
+        _update["state"] = f"installing the system files {version}"
         _setup_worker("install", False, version)
-        if _setup["rc"] != 0: raise RuntimeError(f"system integration install failed rc={_setup['rc']}")
-        if version != PAYLOAD_VERSION:
-            _update["state"] = f"switching plugin to {version}"; _update_plugin_files(version)
-        _update["state"] = f"now on {version}"; _update["available"] = ""
+        if _setup["rc"] not in (0, RC_NO_DRIVER, RC_STAGED): raise RuntimeError(f"system files install failed rc={_setup['rc']}")
+        _update["state"] = (f"updated to {version}; finishes on the next reboot" if _setup["rc"] == RC_STAGED
+                            else f"updated to {version}" + ("; the NVIDIA driver was not built" if _setup["rc"] == RC_NO_DRIVER else "")); _update["available"] = ""
         d = _settings(); d["last_update"] = version; _save_settings(d)
     except Exception as ex:  # noqa: BLE001
+        d = _settings(); d.pop("continue_update", None); _save_settings(d)
         _update["state"] = f"update failed: {ex}"; _update["last_error"] = str(ex); decky.logger.error(f"update failed: {ex}")
+    finally:
+        _setup["busy"] = False
 
 
-def _check_update(install=False):
+def _continue_update():
+    """Second half of an update, run by the freshly installed plugin after the Decky restart."""
+    d = _settings()
+    if d.pop("continue_update", None) != PAYLOAD_VERSION: return
+    _save_settings(d)
+    if _read(VERSION_FILE) == PAYLOAD_VERSION and os.path.exists(PRIV):
+        _notify(f"EGPU Buddy updated to {PAYLOAD_VERSION}."); return
+    if _setup["busy"] or _game_running():
+        _notify(f"EGPU Buddy plugin {PAYLOAD_VERSION} installed. Open it and press Update system integration."); return
+    _setup.update(busy=True, rc=None, step="update", progress=0, started=time.time())
+    try: os.replace(SETUP_LOG, SETUP_LOG + ".prev")
+    except OSError: pass
+    _update_worker(PAYLOAD_VERSION)
+
+
+def _check_update(install=False, manual=False):
     """Compare the installed integration with the latest release; optionally install it (never a first install)."""
     try:
         latest = _latest_release(); _update["checked"] = time.time(); _update["last_error"] = ""
@@ -448,51 +508,31 @@ def _check_update(install=False):
     installed = _read(VERSION_FILE)
     # target = the newest of GitHub's latest release and the payload this plugin carries; the integration follows it
     target = latest if _vt(latest) > _vt(PAYLOAD_VERSION) else PAYLOAD_VERSION
-    newer = bool(installed) and _vt(target) > _vt(installed)
+    # an update exists when the system files OR this plugin are behind the target (a plugin left behind by an interrupted
+    # update is brought level without reinstalling the system files); never before a first install
+    newer = bool(installed) and (_vt(target) > _vt(installed) or _vt(target) > _vt(PAYLOAD_VERSION))
     _update["available"] = target if newer else ""
-    if newer and install and not _operation_in_progress() and time.time() - _started > 300:
-        _start_update(target)
-
-
-def _start_update(version, hold=False):
-    _setup.update(busy=True, rc=None, step="update", progress=0)
-    try: os.remove(SETUP_LOG)
-    except OSError: pass
-    threading.Thread(target=_update_worker, args=(version, hold), daemon=True).start()
+    if newer and install and _untested() and not _accepted():
+        return   # untested hardware: only the button (with its dialog) installs, never the background check
+    # the 5-minute settle time after a Decky start is for the BACKGROUND install only; a button press acts at once
+    if newer and install and not _operation_in_progress() and (manual or time.time() - _started > 300):
+        _setup.update(busy=True, rc=None, step="update", progress=0, started=time.time())
+        try: os.replace(SETUP_LOG, SETUP_LOG + ".prev")
+        except OSError: pass
+        threading.Thread(target=_update_worker, args=(target,), daemon=True).start()
 
 
 class Plugin:
     async def get_update_status(self):
         d = _settings()
-        held = d.get("held_version", "")
-        if held and held != _read(VERSION_FILE): held = ""   # installed by other means since: the hold no longer describes this machine
-        return {"auto_update": d.get("auto_update", False), "held_version": held, "available": _update["available"], "state": _update["state"],
+        return {"auto_update": d.get("auto_update", False), "available": _update["available"], "state": _update["state"],
                 "checked": _update["checked"], "last_error": _update["last_error"], "installed": _read(VERSION_FILE)}
 
     async def set_auto_update(self, enabled: bool):
-        d = _settings(); d["auto_update"] = bool(enabled)
-        if enabled: d.pop("held_version", None)
-        _save_settings(d); return {"ok": True, "message": "saved"}
-
-    async def list_versions(self):
-        try:
-            return {"ok": True, "current": _read(VERSION_FILE), "versions": _releases()}
-        except Exception as ex:  # noqa: BLE001
-            return {"ok": False, "message": f"could not reach GitHub: {ex}", "versions": []}
-
-    async def install_version(self, version: str):
-        """Install a version the user picked (rollback or beta) and hold it."""
-        if not VERSION_RE.match(version or "") or version not in [r["version"] for r in _releases()]:
-            return {"ok": False, "message": "That version is not a published release."}
-        if _setup["busy"] or _operation_in_progress() or _game_running():
-            return {"ok": False, "message": "Busy: close the running game or wait for the current operation, then try again."}
-        _start_update(version, hold=True)
-        return {"ok": True, "message": f"Installing {version}. Automatic updates are now off so this version stays."}
+        d = _settings(); d["auto_update"] = bool(enabled); _save_settings(d); return {"ok": True, "message": "saved"}
 
     async def check_update(self, install: bool = False):
-        if install:
-            d = _settings(); d.pop("held_version", None); _save_settings(d)
-        threading.Thread(target=_check_update, args=(bool(install),), daemon=True).start(); return {"ok": True, "message": "checking"}
+        threading.Thread(target=_check_update, args=(bool(install), True), daemon=True).start(); return {"ok": True, "message": "checking"}
 
     async def get_setup_status(self):
         tail = ""
@@ -502,18 +542,26 @@ class Plugin:
         except OSError:
             pass
         rc, out, _ = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--check"], 5) if os.path.exists("/usr/local/sbin/egpu-kernel-cmdline") else (0, "", "")
-        needs_reboot = False
-        try:
-            body = open(SETUP_LOG).read()
-            needs_reboot = any(k in body for k in ("building the patched nvidia-open", "pinning NVIDIA userspace", "installed: nvidia-open-egpu-dkms", "writing the kernel parameters"))
-        except OSError:
-            pass
+        # A reboot is needed for exactly one reason: the RUNNING kernel is missing parameters this
+        # software needs. Everything else an install does takes effect immediately — the driver
+        # extension merges live, the units start, the session picks its pieces up on the next Game
+        # Mode start. The old test looked for phrases in the install log, and install.sh prints
+        # "writing the kernel parameters" every single run, so it asked for a reboot after every
+        # install whether or not anything had changed. `--check` already answers this properly.
+        needs_reboot = rc != 0
         return {"installed_version": _read(VERSION_FILE), "payload_version": PAYLOAD_VERSION, "needs_reboot": needs_reboot,
                 "unsupported": _unsupported(), "untested": _untested(), "accepted_untested": _accepted(),
                 "cmdline_missing": out.replace("missing kernel parameters: ", "") if rc != 0 else "",
+                "cmdline_pending": rc != 0 and _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--pending"], 5)[0] == 0,
                 "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
                 "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "progress": _setup["progress"],
-                "can_build_driver": bool(shutil.which("pacman")), "log": tail}
+                "started": _setup["started"], "expect": _expect(), "driver_ready": _driver_ready(),
+                "can_build_driver": bool(shutil.which("pacman")), "slow_build": bool(shutil.which("steamos-readonly")), "log": tail}
+
+    async def pop_notice(self):
+        d = _settings(); text = d.pop("notice", "")
+        if text: _save_settings(d)
+        return text
 
     async def apply_kernel_cmdline(self):
         rc, out, err = _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--apply"], 120)
@@ -542,22 +590,27 @@ class Plugin:
 
     async def get_status(self):
         _settle_detach_status(); _heal_audio()
-        bdf, vendor = _gpu()
+        bdf = _gpu_bdf()
         game_mode = _gamescope_running()
-        driver = os.path.exists("/sys/module/nvidia_drm") if vendor in ("", "nvidia") else os.path.exists(f"/sys/bus/pci/devices/{bdf}/driver")
+        driver = os.path.exists("/sys/module/nvidia_drm")
         output = _gamescope_env("OUTPUT_CONNECTOR").split(",")[0] if game_mode else ""
         status = {
-            "present": bool(bdf), "bdf": bdf, "vendor": vendor, "driver_loaded": driver,
+            "present": bool(bdf), "bdf": bdf, "driver_loaded": driver,
             "game_mode": game_mode, "game_running": _game_running() if game_mode else False,
             "attach_pending": os.path.exists(GM_PENDING), "dock_present": _dock_present(),
             "on_egpu": bool(bdf) and game_mode and output not in ("", "*", "eDP-1"),
             "output": output,
             "gm_status": _json(GM_STATUS), "desktop_status": _json(DESKTOP_STATUS),
+            # Strip NULs and control characters: a hardware reset can leave this file NUL-padded
+            # (data written but never flushed), and the raw bytes rendered as a row of boxes in the
+            # interface — "last: {}{}{}{}..." instead of a date.
+            "resets": (lambda h: {"count": len(h), "last": h[-1] if h else ""})(
+                [c for c in ("".join(ch for ch in _read(FLOOD_HISTORY) if ch == "\n" or " " <= ch <= "~")).splitlines() if c.strip()]),
             "link": {"speed": _read(f"/sys/bus/pci/devices/{bdf}/current_link_speed") if bdf else "",
                      "width": _read(f"/sys/bus/pci/devices/{bdf}/current_link_width") if bdf else ""},
             "displays": _displays(bdf) if bdf else [],
             "audio_sink": _audio_sink(),
-            "telemetry": ({} if not (bdf and driver) else _nvidia_query(bdf) if vendor == "nvidia" else _sysfs_query(bdf)),
+            "telemetry": _nvidia_query(bdf) if (bdf and driver) else {},
             "ts": time.time(),
         }
         return status
@@ -568,6 +621,12 @@ class Plugin:
             return {"ok": False, "message": "Not in Game Mode. Use the Attach eGPU desktop icon."}
         if _game_running() and not force:
             return {"ok": False, "message": "Close the running game first, then Attach."}
+        if os.path.exists(FLOOD_LOCKOUT):   # left over from a version that paused attach after a hardware reset
+            _sh(["/usr/local/sbin/egpu-rearm"], 10)
+        if _gpu_bdf() and not os.path.exists("/sys/module/nvidia_drm"):
+            # on the bus but never brought up (lockout, or an attach that stopped early): the full attach, not just a session switch
+            _spawn_root_job("attach", ["/usr/local/sbin/egpu-hotplug-mount.sh", "--manual"])
+            return {"ok": True, "message": "Attaching: driver load, then Game Mode restarts on the eGPU display (about 30 seconds). Reopen this menu afterwards."}
         if _gpu_bdf():
             out = _gamescope_env("OUTPUT_CONNECTOR").split(",")[0]
             if out not in ("", "*", "eDP-1"):
@@ -586,35 +645,27 @@ class Plugin:
             return {"ok": False, "message": "Not in Game Mode. Use the Safely Eject desktop icon."}
         if _game_running():
             return {"ok": False, "message": "Close the running game first, then Safe Detach."}
-        _spawn_root_job("detach", [DETACH] if _gpu()[1] == "nvidia" else [GENERIC, "detach"])
+        _spawn_root_job("detach", [DETACH])
         return {"ok": True, "message": "Detaching: the screen goes dark for a moment while Game Mode moves to the handheld screen. Reopen this menu afterwards; it says when it is safe to unplug."}
 
     async def set_power_limit(self, watts: int):
-        bdf, vendor = _gpu()
-        if vendor not in ("", "nvidia"):
-            try:
-                with open(f"{_hwmon(bdf)}/power1_cap", "w") as f:
-                    f.write(str(int(watts) * 1000000))
-                return {"ok": True, "message": f"Power limit set to {int(watts)} W."}
-            except OSError as ex:
-                return {"ok": False, "message": f"This GPU does not accept a power limit ({ex.strerror})."}
         rc, out, err = _sh([PRIV, "set-gpu-power-limit", str(int(watts))], 20)
         return {"ok": rc == 0, "message": (err or out)[-200:]}
 
     async def set_core_offset(self, mhz: int):
-        if _gpu()[1] not in ("", "nvidia"):
-            return {"ok": False, "message": "Clock offsets are only available on NVIDIA eGPUs."}
         rc, out, err = _sh([PRIV, "set-gpu-core-offset", str(int(mhz))], 20)
         return {"ok": rc == 0, "message": (err or out)[-200:]}
 
     async def reset_clocks(self):
-        if _gpu()[1] not in ("", "nvidia"):
-            return {"ok": False, "message": "Clock offsets are only available on NVIDIA eGPUs."}
         rc, out, err = _sh([PRIV, "reset-gpu-clocks"], 20)
         return {"ok": rc == 0, "message": (err or out)[-200:]}
 
     async def _main(self):
         decky.logger.info("EGPU Buddy backend loaded")
+        if os.path.realpath(PLUGIN_DIR) == os.path.realpath(PLUGIN_LIVE) and _drop_stray_plugin_copies():
+            decky.logger.info("removed stray plugin copies from homebrew/plugins")
+        await asyncio.sleep(8)
+        threading.Thread(target=_continue_update, daemon=True).start()   # second half of a plugin-first update, if one is pending
         await asyncio.sleep(300)
         while True:  # automatic updates: hourly check; install only if enabled, already installed, and no game running
             try:

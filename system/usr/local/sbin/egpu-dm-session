@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Pin (and unpin) the login manager's autologin session, on whatever login manager this system uses.
+# Why: a Safe Detach / attach restarts the session, and the login manager then re-logs in with its OWN default. CachyOS uses
+# plasmalogin (/etc/plasmalogin.conf.d), SteamOS uses sddm (/etc/sddm.conf.d) and its Game Mode session file is named
+# differently (gamescope-wayland.desktop vs gamescope-session.desktop). Everything here is looked up, nothing is hardcoded:
+# without this, a desktop Safe Detach on SteamOS comes back in Game Mode and the detach cannot finish.
+#   egpu-dm-session pin plasma|gamescope|bigpicture   write our drop-in (sorts last, wins)
+#   egpu-dm-session unpin                             remove it again (system default is back)
+#   egpu-dm-session show                              directory + session currently pinned
+set -u
+[ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
+# Must sort AFTER every file the OS ships, because the last Session= wins. SteamOS ships
+# /etc/sddm.conf.d/zz-steamos-autologin.conf, and "zz-egpu..." sorts BEFORE "zz-steamos...", so the
+# old name was silently outranked and the pin did nothing on SteamOS.
+DROP=zzz-egpu-buddy-session.conf
+
+dm_dir(){
+  local dm d=""
+  dm=$(systemctl show -p Id --value display-manager.service 2>/dev/null || true)
+  case "$dm" in
+    plasmalogin.service) d=/etc/plasmalogin.conf.d ;;
+    sddm.service)        d=/etc/sddm.conf.d ;;
+  esac
+  [ -n "$d" ] || for c in /etc/plasmalogin.conf.d /etc/sddm.conf.d; do [ -d "$c" ] && { d=$c; break; }; done
+  [ -n "$d" ] || return 1
+  install -d -m 0755 "$d"; printf '%s\n' "$d"
+}
+
+session_file(){   # $1 = plasma|gamescope|bigpicture -> the .desktop this system really has
+  local want n c
+  case "$1" in
+    plasma)     want="plasma.desktop plasmawayland.desktop plasmax11.desktop" ;;
+    gamescope)  want="gamescope-session.desktop gamescope-wayland.desktop" ;;
+    bigpicture) want="egpu-bigpicture.desktop gamescope-session.desktop gamescope-wayland.desktop" ;;
+    *) return 1 ;;
+  esac
+  for n in $want; do
+    for c in /usr/local/share/wayland-sessions /usr/share/wayland-sessions /usr/local/share/xsessions /usr/share/xsessions; do
+      [ -f "$c/$n" ] && { printf '%s\n' "$n"; return 0; }
+    done
+  done
+  return 1
+}
+
+case "${1:-show}" in
+  pin)
+    d=$(dm_dir) || { echo "no login manager configuration directory found" >&2; exit 2; }
+    f=$(session_file "${2:?pin needs plasma|gamescope|bigpicture}") || { echo "no session file for '$2' on this system" >&2; exit 3; }
+    printf '[Autologin]\nRelogin=true\nSession=%s\n' "$f" > "$d/$DROP"
+    echo "pinned $f in $d"
+    ;;
+  unpin)
+    d=$(dm_dir) || exit 0
+    rm -f "$d/$DROP"; echo "unpinned (system default restored in $d)"
+    ;;
+  show)
+    d=$(dm_dir) || { echo "none"; exit 0; }
+    echo "$d: $(sed -n 's/^Session=//p' "$d/$DROP" 2>/dev/null || echo 'not pinned')"
+    ;;
+  *) echo "usage: egpu-dm-session pin plasma|gamescope|bigpicture | unpin | show" >&2; exit 64 ;;
+esac

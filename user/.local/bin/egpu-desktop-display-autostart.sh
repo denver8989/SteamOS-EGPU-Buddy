@@ -18,8 +18,15 @@
 # External-only is the normal docked desktop target. Set
 # EGPU_KEEP_PANEL_LIFELINE=1 only for recovery testing.
 # ============================================================================
-printf desktop > "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/egpu-session-type" 2>/dev/null || true   # session type, read by egpu-surprise-recover
+printf desktop > "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/egpu-session-type" 2>/dev/null || true   # session type, read by egpu-surprise
+# Arm the login manager's fallback for THIS session. Doing it here rather than only in the attach
+# hook means switching to the desktop by hand is covered too - mount the eGPU in Game Mode, switch
+# to the desktop, pull the cable, and you still come back to the desktop.
+sudo -n /usr/local/sbin/nv-egpu-buddy-privileged session-fallback desktop >/dev/null 2>&1 || true-recover
 set -u
+# Session-type marker for egpu-surprise-recover: written at EVERY Plasma login, before any early exit below
+# (the Game Mode session wrapper writes "gamemode"; whichever session started last owns the marker).
+printf desktop > "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/egpu-session-type" 2>/dev/null || true
 # eGPU PCI address is NOT fixed — it depends which USB4 port it tunneled through (seen at both
 # 62:00.0 and 03:00.0). Detect the NVIDIA-driven GPU (with a DRM node) dynamically; hardcoding it
 # made this whole autostart no-op as "eGPU absent" whenever it landed on the other address.
@@ -50,7 +57,10 @@ log "=== TEST-MODE autostart start (session=$XDG_SESSION_DESKTOP) ==="
 
 # eGPU must be physically present + healthy, else this is a normal handheld
 # desktop and we touch nothing.
-[ -e "$GDEV" ] || { log "eGPU absent — no-op"; exit 0; }
+# NOTE the empty-variable trap: with no NVIDIA GPU, GPU is "" and $GDEV collapses to /sys/bus/pci/devices/, a directory
+# that always exists — so this guard used to PASS on a machine with no eGPU at all. On a handheld with ordinary USB-C
+# display glasses (which appear as a DisplayPort output on the built-in GPU) this script must do absolutely nothing.
+[ -n "$GPU" ] && [ -e "$GDEV/drm" ] || { log "eGPU absent — no-op"; exit 0; }
 w=$(cat "$GDEV/current_link_width" 2>/dev/null)
 [ "$w" = "63" ] && { log "GPU link width=63 (zombie) — refusing to poke"; exit 0; }
 cfg0=$(xxd -l4 "$GDEV/config" 2>/dev/null | awk '{print $2$3}')
@@ -60,7 +70,13 @@ case "$cfg0" in ffffffff|"") log "GPU config dead/unreadable ($cfg0) — refusin
 # over HDMI-A-1 (the TV, which can report 'connected' while powered off). Replaces the
 # old hardcoded TV=HDMI-A-1 that wrongly made an OFF TV primary over the ultrawide.
 # Falls back to HDMI only when no DP is connected. Mirrors egpu-display-profile.sh.
-NVCARD=$(basename "$(ls -d "$GDEV"/drm/card* 2>/dev/null | head -1)" 2>/dev/null)
+# a stale DRM card (driver reload / remove-rescan leftover) has no connectors: take one that has
+NVCARD=""
+for _cd in "$GDEV"/drm/card[0-9]*; do
+  [ -e "$_cd" ] || continue
+  [ -n "$NVCARD" ] || NVCARD=${_cd##*/}
+  compgen -G "/sys/class/drm/${_cd##*/}-*" >/dev/null 2>&1 && { NVCARD=${_cd##*/}; break; }
+done
 # Enable EVERY usable eGPU external (BOTH DP and HDMI), DP first = primary. "Usable" =
 # status connected AND the connector exposes EDID modes (sysfs `modes` non-empty). That EDID
 # gate is the "TV is on its HDMI input" check the user asked for: a TV that's powered but NOT
@@ -118,6 +134,12 @@ if [ "${EGPU_KEEP_PANEL_LIFELINE:-0}" = "1" ]; then
   kscreen-doctor output.$PANEL.enable output.$PANEL.priority.2 output.$PANEL.scale.1.5 >/dev/null 2>&1
 else
   kscreen-doctor output.$PANEL.disable >/dev/null 2>&1
+  # kscreen can only switch off outputs the compositor OWNS, and in the NVIDIA-only desktop it does not own the panel's
+  # card at all, so that call is a no-op there. The CRTC is then left on by whoever had it last (the previous session, or
+  # the console) and the panel sits lit and black. Ask the privileged helper, which talks to DRM directly, as well.
+  sudo -n /usr/local/sbin/nv-egpu-buddy-privileged panel-off >/dev/null 2>&1
+  # sound follows the picture onto the eGPU's HDMI/DisplayPort output (default only, not locked)
+  "$(dirname "$0")/egpu-audio.sh" follow 2>&1 | while read -r _l; do log "audio: $_l"; done || true
 fi
 
 # Verify that the TV is active; rescue to the handheld if the handoff failed.

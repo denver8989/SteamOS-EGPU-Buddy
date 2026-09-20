@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Safely Eject eGPU
+GenericName=eGPU safe detach
+Comment=Move the session back to the handheld screen and remove the eGPU from the bus; unplug only when it says so
+Exec=/home/deck/.local/bin/egpu-buddy --detach
+Icon=/home/deck/.local/share/egpu-buddy/egpu-buddy.png
+Terminal=false
+Categories=Settings;System;
+Keywords=egpu;nvidia;thunderbolt;detach;eject;unplug;

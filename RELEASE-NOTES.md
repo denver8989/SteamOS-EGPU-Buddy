@@ -1,59 +1,968 @@
-0.8.0-beta4 — PRE-RELEASE. Cable-yank recovery rebuilt and verified, faster safe detach, untested-hardware notice.
+0.7.67 — the RTX 3080 mounts. Same driver as the 5060 Ti, fully automatic, in a different enclosure.
 
-- **Cable yank in Game Mode: 1.5 s to the handheld screen, one relaunch** (was ~20 s and, as found today, up to three
-  relaunches: the recovery could not tell it was Game Mode once gamescope had died with the card, took the Desktop
-  route, killed the relaunched session and restarted Steam). The session now records its type for the recovery, the
-  session wrapper stops waiting the moment the eGPU leaves the bus, the recovery hides the NVIDIA userspace first,
-  never touches the relaunched session's processes, and does not restart a session systemd is already relaunching.
-  Verified with four real yanks and replugs on the Legion Go 2.
-- Includes the 0.7.15 fixes (games black after a re-attach; yank recovery without the environment leak).
-- Withdrawn from this beta: the "skip the second Steam shutdown" detach speed-up. One GPU lock-up occurred on a re-attach
-  that followed it; it has not been shown to be the cause, and it stays out until it is shown not to be.
-- **Untested hardware notice.** Plugin, `.run` and curl installs compare the machine with the tested configuration
-  and require an explicit acceptance ("at your own risk") when it differs; the plugin keeps a reminder line.
-- Verified today on the Legion Go 2: physical unplug after Safe Detach (status retires itself), physical replug into
-  Game Mode (22–31 s), replug after a yank.
+Verified on a Legion Go (SteamOS 3.8) with an RTX 3080 in an **Aoostar AG03**: plug in, and Game Mode comes up on the
+monitor at 5120x1440@144 with HDR, handheld panel dark, sound on the eGPU — on the same open 610.57.04 driver the
+RTX 5060 Ti uses. No second driver stack. From the machine's own log:
 
-0.8.0-beta3 — PRE-RELEASE. Two more attach fixes found while testing beta2 on the NVIDIA eGPU.
+    LINK-PIN (corrected): Speed 8GT/s, Width x4
+    mounted 0000:65:00.0 + display stack ready (DRM card: card1)
+    HEALTH GATE OK: NVML responds        ->  NVIDIA GeForce RTX 3080, 10240 MiB, Gen 3, x4
 
-- **Panel stayed on next to the eGPU display after an automatic hot-plug (Desktop).** The attach script's panel-off
-  step ran as a background job; the script is a transient systemd service, and when its main process exited systemd
-  killed the job. It had only ever completed when the script was run by hand. The script now waits for it.
-- **The boot_vga step in the NVIDIA attach never ran.** Its functions were defined after the script's `exit`, so the
-  call failed silently every time since August. The NVIDIA-only session works on the compositor device pinning alone,
-  so the dead step was removed rather than switched on; README and credits corrected (all-ways-egpu's technique is
-  used only by the experimental non-NVIDIA path).
-- A version hold is only shown while the held version is the installed one.
+Getting there took finding five separate faults, every one of them in this project rather than in the card:
 
-0.8.0-beta2 — PRE-RELEASE. Same as beta1 plus two fixes, and this time run on the NVIDIA eGPU.
+- **The link pin set the wrong bit.** It wrote `0x003N` to Link Control 2; bit 4 of that register is *Enter
+  Compliance*, set by mistake (the intent was bit 5 alone, `0x002N`). A card whose speed change does not finish inside
+  Recovery falls back through Polling, sees the bit and enters compliance test mode — link dead, width 63. "This card
+  cannot take a link pin" was never true. The corrected pin (masked writes, compliance cleared) holds Gen3 x4.
+- **A link bounce wipes the card's BARs and nobody told the kernel.** The hardware BAR0 register read `00000000` while
+  the kernel still believed `0x60000000`; every MMIO read failed and the driver reported the GPU had "fallen off the
+  bus". The attach now compares the two and re-enumerates the GPU when they differ.
+- **The hook unbound a healthy GPU.** A marker left by an earlier unplug never expires, and nvidia-drm coming up fires
+  the hook again through udev — which then "recovered" a working card 0.3 seconds after it initialised. A GPU with a
+  DRM card is never treated as stale now. This one is not specific to any card.
+- **The AMD USB4 tunnel ports were asleep** (`control=auto, suspended`) — a documented fault on exactly this pairing,
+  AMD Phoenix `1022:14ef` + Intel JHL9480 (CachyOS/linux-cachyos#1057). They are pinned awake while an eGPU is in use
+  and released afterwards, and the host ports are masked against fatal errors *before* the card arrives, not after.
+- **Re-authorizing the enclosure was the first resort** when a cold card was slow to appear — a software cable pull, on
+  a root port whose fatal bits cannot be masked. It now waits with gentle rescans first.
 
-- Includes the 0.7.13 fix (hot-plug after a Desktop safe-detach restores the hidden NVIDIA userspace).
-- The updater's pre-update backup now lives outside Decky's plugins directory (Decky loaded it as a second plugin).
-- Verified on the Legion Go 2 + RTX 5060 Ti: Desktop hot-plug to NVIDIA-only, Game Mode on the eGPU display, Safe
-  Detach from the plugin (78 s to "safe to unplug"), Attach without a replug (21 s), and the version picker installing
-  0.7.13 and holding it. The AMD path remains untested.
+Also: the installer now flushes to disk before it says done. A machine that hard-reset 40 seconds after an install
+came back with a zero-byte privileged helper — and an empty script succeeds at everything, silently.
 
-0.8.0-beta1 — PRE-RELEASE. AMD eGPU path (experimental, untested), updates become your choice, going back to an
-older build. Not offered by the updater unless you pick it yourself.
+**Scoped on purpose.** The lean bring-up and the corrected pin apply to Ampere consumer ids only (`0x22xx`-`0x25xx`).
+The RTX 5060 Ti path is byte-for-byte what was tested — including the legacy pin value, which works there only because
+that card's speed change completes before the bad bit is ever evaluated. It should be corrected too, after a test.
 
-- **Nothing in the NVIDIA path was rewritten.** The tested scripts are the 0.7.12 ones; the only edits inside them are
-  small vendor checks that do nothing when the eGPU is NVIDIA. This beta has still not been run on the NVIDIA eGPU.
-- **AMD / Intel eGPUs (experimental, never run on real hardware).** The vendor is detected (`egpu-detect`), never
-  asked. Non-NVIDIA eGPUs use a separate `egpu-generic attach|detach|surprise`: no driver load/unload, no BAR or link
-  tricks, stock gamescope pointed at the eGPU card, games follow with `DRI_PRIME`, safe detach removes only the eGPU
-  from the bus. Plugin and desktop app show amdgpu telemetry from sysfs and set the hwmon power cap. The installer skips
-  the NVIDIA packages, the driver build and the patched gamescope when a non-NVIDIA eGPU is on the bus.
-- **Updates are opt-in.** Automatic updates are now off by default; a new release is announced with an Update button.
-- **Going back.** Setup → "Install another version" lists every published release (betas marked) and installs the one
-  you pick, system files and plugin together, then holds it: nothing updates it until you say so.
-- New code detects GPUs, DRM cards, the panel connector and the desktop user instead of assuming the Legion Go 2.
-- **Device profile.** `egpu-detect --device` reports `legion-go-2` (the tested machine) or `generic`. Device-specific
-  fixes are gated on it; other hardware only gets detected, generic behaviour.
-- **Legion Go 2: standby that ended by itself.** The detachable controllers re-enumerate on the internal USB controller
-  as the machine suspends and woke it seconds later (it then stayed awake until the battery was empty). Wake from that
-  one controller is now disabled, on the Legion Go 2 only (DMI match). The power button still wakes it; the controller
-  buttons no longer do. Not yet confirmed over a real standby.
-- The panel-off helper resolves the panel's own DRM card when two GPUs share a driver.
+0.7.66 — a card that resets the machine no longer causes a boot loop.
+
+A GPU that floods the data fabric during bring-up takes the machine down again the moment the next boot touches it. The
+result is a boot loop whose only exit is unplugging the eGPU — which is what happened on an RTX 3080, three failed
+boots deep, with SteamOS's own recovery menu counting them.
+
+0.7.36 removed the persistent flood lockout, and that was right: it refused attaches silently, stalled boot for
+two and a half minutes, and needed a command to clear. What it should have left behind is this:
+
+**If the previous boot ended in a sync flood, the eGPU is left alone for ONE boot.** It says so on screen, clears
+itself, and the next boot tries again with no intervention and nothing to run. Pressing Attach brings it up
+immediately if you want it anyway.
+
+That breaks the loop without any of the costs that got the old lockout removed.
+
+0.7.65 — flood protection covers the whole path, and the RTX 30 series gets a lean bring-up.
+
+**Surprise-removal protection was only masking the root port.** The hardware accepts just some of the
+mask bits there (we write ffffffff, the port keeps 035dd010) and leaves errors in UESvrt fatal — and the Thunderbolt
+switch ports between the root port and the GPU were never touched at all, so an error raised on the path still reached
+the fabric as fatal. A machine took a data-fabric sync flood — an instant hard reset — while the root port was
+"protected".
+
+Every bridge from the GPU up to the root port is masked now, plus the GPU itself. On a real machine the two switch
+ports come back with **UESvrt=00000000**: nothing raised there can escalate to fatal.
+
+**RTX 30 series (GA10x) gets a lean bring-up**, in both the attach hook and the boot path: no FLR, no BAR resize, no
+link pin. Each of those was measured killing an RTX 3080 attach — the link pin dropped the link outright, and the FLR
+left the card answering config space while every MMIO read failed, which the driver reports as "fallen off the bus".
+
+**Scoped by PCI id (0x22xx-0x25xx) on purpose.** Blackwell — including the RTX 5060 Ti this project was built and
+tested with — Ada and Turing do not match and keep exactly the behaviour they were verified with. Same driver for every
+card; no second driver stack.
+
+0.7.64 — BAR1 size comes from the card, not from the one this was developed on.
+
+The boot path asked for a 16 GiB BAR1 and accepted nothing else — correct for the 16 GB card it was written against,
+and wrong for every other GPU. A 10 GB card does not advertise a 16 GiB bar at all, so every attempt would have failed
+and it would have run at the stock 256 MiB with no explanation.
+
+The card is now asked what it supports. `resource1_resize` is a bitmask of available sizes; the largest one it
+advertises is what gets requested, and "full bar or stock" means full *for that card*. Checked against three shapes:
+a 16 GB card picks 16384 MB, a card whose largest is 8 GB picks 8192 MB, and one offering only 64 MB picks that.
+
+This is the same rule as everywhere else in this project: read the hardware, never assume the development machine's
+values.
+
+0.7.63 — a cable pull on the desktop no longer dumps you into Game Mode.
+
+Unplugging the eGPU while using the **desktop** recovered into **Game Mode**. From the machine's own log:
+
+    SURPRISE removal detected (GPU gone from bus)
+    game-mode=1
+    kwin= on            <- the desktop's compositor was already dead
+
+The recovery decides which session to bring back. A live gamescope means Game Mode — but it also treated
+`gamescope-session.target` being *active* as proof, and on SteamOS that target stays active, and relaunches itself,
+while the desktop is on screen. The desktop's own compositor dies instantly with the card, so by the time the recovery
+runs there is nothing left to contradict it.
+
+The session marker should have caught it, and could not: each background relaunch of the Game Mode session had
+overwritten it with "gamemode" while the desktop was running.
+
+Both ends fixed:
+
+- **Desktop evidence now outranks the target.** A running Plasma session, or a marker that says desktop, decides;
+  the target is consulted only when neither session can be identified at all.
+- **The Game Mode session no longer claims the marker while a desktop compositor is running**, so it stays truthful.
+
+The recovery also logs what it saw — "session evidence: gamescope=0 desktop=1 marker=desktop" — so a wrong choice can
+be read rather than guessed at.
+
+0.7.62 — audio actually follows the eGPU, on the paths people use.
+
+0.7.49 moved sound to the eGPU on attach. On a real machine it did not: the picture went to the monitor and the sound
+stayed on the handheld's speakers. The attach hook ran twenty-nine times on that boot and called the audio step
+**zero** times — it had been wired into the desktop relogin branch only, which a Game Mode attach never reaches.
+
+Now it runs where attaches actually happen:
+
+- **Game Mode attach**, right after the session switches to the eGPU
+- **Booting with the eGPU attached**, where the session wrapper brings Game Mode up and the attach hook's session step
+  never runs at all — this path had no audio handling whatsoever
+
+Unchanged: it sets the default output and does not own it. Change it afterwards and it stays changed.
+
+0.7.61 — an uninstall that cannot remove a file no longer reports success.
+
+Confirmed on the device what 0.7.59 was written against. The uninstall log from a real run:
+
+    restored /home/deck/.local/bin/egpu-display-failover.sh
+    restored /home/deck/.local/bin/nv-egpu-gamescope-session
+    restored /home/deck/.config/plasma-workspace/env/00-egpu-free-nvidia-modeset.sh
+    uninstall finished rc=0
+
+Nothing was missed and nothing failed: each of those was **restored from a backup of an older copy of itself**, because
+every reinstall backs up what it replaces. 0.7.59 stopped that. This release adds the other half — the part that let it
+pass unnoticed:
+
+- a removal that fails now says so ("COULD NOT REMOVE <file>") instead of printing "removed"
+- and the uninstall exits non-zero, telling you to run `--verify`, rather than finishing rc=0 with the machine still
+  full of files
+
+A "successful" uninstall that leaves thirteen scripts behind is worse than one that fails honestly, because only one of
+them prompts anyone to look.
+
+0.7.60 — correction: the main-page result from 0.7.59 was not actually in it.
+
+0.7.59's notes said progress and the result now show on the main page. That edit failed and I published the notes
+regardless — the second time today I have done that. The uninstall fixes in 0.7.59 are real and were verified; the
+interface change was not in the build.
+
+It is in this one: progress appears on the main page while install or uninstall runs, and finishes with "Uninstalled.
+The machine is back to how it was." — where the button is, not two pages away.
+
+0.7.59 — uninstall now removes this project's own files, and says so where you pressed the button.
+
+Two faults found by actually uninstalling on a device.
+
+**Thirteen of this project's scripts survived a successful uninstall**, along with thirty-five backup files. Every
+install backs up the file it replaces, so after a few updates the newest backup of a file is simply an older copy of
+*our own*, and the uninstaller dutifully restored it. "Uninstall finished rc=0" and `/usr/local/sbin` still full of
+`egpu-*`. A backup is now only restored when it is genuinely something that predates this project; anything of ours is
+removed, and our backups are removed with it. Checked both directions: a foreign file's original is still restored.
+
+**The result appeared three pages away.** The main page said "uninstall started" and never changed — no completion, no
+failure, nothing — while the finished message sat in the setup panel behind two navigation steps. Progress and result
+now show on the main page, where the button is, ending with "Uninstalled. The machine is back to how it was."
+
+`uninstall.sh --verify` now also fails on any surviving `egpu-*` or backup file, so this class of leftover cannot pass
+as clean again.
+
+0.7.58 — stop asking for a reboot that is not needed, and stop telling people to unplug for it.
+
+After every install the panel said "Installed. Reboot with the eGPU unplugged." Both halves were wrong.
+
+It asked for a reboot **after every install**, changed or not: the test looked for phrases in the install log, and
+`install.sh` prints "writing the kernel parameters" on every single run. It never consulted
+`egpu-kernel-cmdline --check`, which already answers the question properly. On the machine this was found on, that check
+returns "kernel command line: ok" — nothing was missing, and no reboot was needed at all.
+
+A reboot is now asked for in exactly one case: the **running** kernel is missing a parameter this software needs.
+Everything else an install does takes effect immediately — the driver extension merges live, the units start, and the
+session picks up its pieces at the next Game Mode start.
+
+And the eGPU no longer has to be unplugged for it. That advice dates from when booting with the eGPU attached was
+unreliable; it now boots straight into Game Mode on the monitor with a full BAR1, so the message says the eGPU can stay
+plugged in.
+
+0.7.57 — uninstall now really does put the machine back.
+
+The intended result of uninstalling is the machine exactly as it was before this was ever installed — desktop and Game
+Mode both — with nothing left but the Decky plugin itself. Checking the installer line by line against the uninstaller
+found two things that would not have come back.
+
+**The boot configuration.** Installing regenerates the GRUB config, and uninstalling regenerated it again on the way
+out — and a regenerated config on SteamOS comes out without the steamenv header. Without it the bootloader strips the
+verbosity parameters and puts none back, and there is no timeout: a wall of console text, stopping at a menu, on a
+handheld with no keyboard. Uninstalling would have left exactly the two faults that cost the most time today. The
+header and the timeout are now restored on the way out, and `--verify` fails if a config is left that would stop at a
+menu.
+
+**`/etc/pacman.conf`.** Installing adds the NVIDIA userspace packages to `IgnorePkg` to pin them to the patched
+modules. Nothing removed them, so the package manager would keep holding packages back for software that is no longer
+installed. Uninstall now removes only those entries, never the rest of the line, and drops the line if it was empty
+before. Checked against every shape that line takes, including a commented-out one, which stays untouched.
+
+`uninstall.sh --verify` reports both, so "clean" means clean rather than "the files are gone".
+
+0.7.56 — correction to 0.7.55, and the setup panel now matches the main page.
+
+0.7.55's notes said the "Safe Detach first" reason also appeared in the setup panel. It did not: that edit failed and I
+published the notes anyway. The main-page button described there is real and works; the setup panel still let you press
+Uninstall with the driver loaded and watch it fail.
+
+Fixed here: the setup panel's Uninstall is disabled with the same reason, so both places behave identically.
+
+0.7.55 — Uninstall is on the main page, and says why when it cannot run.
+
+0.7.54 moved uninstall one press closer; that was still one press too many. Asking someone to press a button that
+cycles through pages to find how to remove the software is not a design, it is a scavenger hunt.
+
+**Uninstall is now on the main page**, next to everything else, whenever something is installed.
+
+While the eGPU is mounted it is **greyed out with the reason** — "Safe Detach the eGPU first: the system files cannot
+be removed while its driver is running" — rather than hidden or silently failing. Hiding a control makes it look
+missing; disabling it without saying why makes it look broken. The same reason now appears in the setup panel, which
+previously let you press Uninstall with the driver loaded and simply fail.
+
+0.7.54 — uninstall is reachable with the eGPU unplugged.
+
+There was no way to uninstall without the eGPU connected. The uninstall button lives in the setup panel, which was two
+presses deep behind a button that cycles main -> details -> setup — and the details page in between rendered **nothing
+at all** when there was no eGPU status to show. So with the eGPU unplugged, the trail went: main page with no uninstall,
+then an apparently empty page, and most people stop there.
+
+Unplugged is precisely the state you are told to uninstall in.
+
+- The main page now has **"Setup, updates & uninstall"**, one press, always present, whatever the eGPU is doing.
+- The details page no longer comes up blank without an eGPU: it says so, and points at where setup lives.
+
+The uninstall button itself was never gated on the eGPU — only on something being installed — so nothing else had to
+change. It simply could not be found.
+
+0.7.53 — one clean restart to finish an update, not a sequence of them.
+
+0.7.52 stopped demanding a detach, but left the update to land "on the next reboot" — which in practice meant a plugin
+reload, then a reboot, then the install. That is not one restart; it is several, and it looks like something went
+wrong.
+
+Now a staged update finishes inside **a single Game Mode restart**. The session wrapper installs it before the new
+session takes the display, so the work happens in the black gap of that one restart — the session goes down once and
+comes back updated. The panel says "Update ready — one Game Mode restart finishes it" with a button that does exactly
+that, and it is refused while a game is running, because interrupting a game is not a clean restart either.
+
+If the restart never comes, the boot path still installs it, as before. Nothing is ever left half-applied and nothing
+needs unplugging.
+
+The duplicate code path this first grew has been removed: one restart action, used by both places that need it.
+
+0.7.52 — updating never requires unplugging the eGPU again.
+
+Until now, updating while the eGPU was in use was reported as a failure: "Not installed: the eGPU is in use. Safe
+Detach, unplug it, then install again." Being told to unplug an eGPU in order to update the software that manages the
+eGPU is absurd, and it was never even true — the new payload had already been unpacked, and the boot path installs it
+whenever the versions differ.
+
+So it is now what it always was: **staged**, and it finishes by itself. Two chances to land, neither needing anything
+from you:
+
+- **On a Game Mode reload** — the previous session is gone and the new one has not taken the display yet, which is a
+  real window to unload the modules, unmerge the extension, write the files and put it back.
+- **At the next boot**, as before, before the eGPU is brought up.
+
+It refuses only while the eGPU is genuinely presenting a picture, and then simply waits for the next opportunity
+instead of failing. The message says what is happening: "Update staged: it finishes by itself on the next reboot.
+Nothing to unplug."
+
+0.7.51 — one version, not two.
+
+The interface showed "EGPU Buddy 0.7.45 (system files 0.7.46, update pending)" — two version numbers, and a state the
+user is expected to reason about. There is only one version of this software. If the system files need updating, the
+plugin updates them; that is what the Install button is for, and it already says so.
+
+The footer now shows a single version. Where the system files really are behind the plugin, it says what to do —
+"Press Install to finish updating" — instead of printing two numbers and leaving you to work out which matters.
+
+0.7.50 — HDMI proven on the device: 4K at 120 Hz, and the cable can be swapped live.
+
+Swapping the display cable on a running session, on the machine rather than in theory:
+
+    staging Game Mode output 4096x2160@120 on HDMI-A-1     (DisplayPort pulled, HDMI into a TV)
+    staging Game Mode output 5120x1440@144 on DP-9         (swapped back)
+
+The handheld panel came back on by itself during the moment when the eGPU had no output at all, and went dark again
+once the TV had the picture — the protection added in 0.7.29 doing its job on a real transition rather than a
+contrived one. Audio stayed on the eGPU output across both swaps, which is what choosing the sink by port
+availability rather than by port name buys: DisplayPort and HDMI behave identically.
+
+No code changes; this release records what is now verified.
+
+0.7.49 — sound follows the eGPU, and lets go when you tell it to.
+
+Attaching the eGPU now moves audio to the monitor on the end of the cable, in Game Mode and on the desktop, and a Safe
+Detach puts it back where it was rather than leaving a dead output as the default.
+
+**It sets the default; it does not own it.** Nothing is written to any configuration file, no sink is removed or
+suspended, and a change made afterwards — Steam's audio menu, KDE's sound settings, anywhere — simply wins and stays.
+Checked on a real machine: after the eGPU took the default, switching back to the speakers held at 12 and 24 seconds
+with both outputs still present and usable. Software that insists on owning your audio is worse than software that
+leaves it alone.
+
+The output is found by the PCI address of the eGPU's own audio function and by its port being **available** — not by
+the port's name. NVIDIA calls DisplayPort audio `hdmi-output-N` as well, so matching the name would work on one cable
+and fail on the other; this works on both, and picks nothing at all rather than a dead output when the eGPU has no
+available one.
+
+0.7.48 — the first build proven end to end on SteamOS, booting with the eGPU attached.
+
+This is the release to use. Everything before it has at least one of the faults fixed in the last few versions, and
+several of them are the kind that leave a handheld with no screen.
+
+Read from a Legion Go (the first one) on SteamOS 3.8, from the machine's own logs:
+
+    root port 0000:00:03.1: uncorrectable errors masked      (unplug protection, at boot)
+    BAR1 resized while driverless -> 16384MiB                (the full bar, first attempt)
+    eGPU output card1-DP-9 answered the probe
+    [surprise recovery] skip                                 (triggered, and correctly stood down)
+
+- boots with the eGPU attached, on either USB4 port, straight into Game Mode on the monitor at 5120x1440@144 with HDR
+- full 16 GiB BAR1 at boot, not 256 MiB
+- handheld panel dark while the picture is on the monitor
+- quiet boot, no boot menu, 13 seconds from power to network
+- the session stays up, where earlier builds tore it down about ninety seconds in
+- a monitor left in standby is found and driven
+
+What is still not verified, and is the next thing to test: a from-scratch install after a full uninstall.
+
+0.7.47 — stop telling SteamOS users their driver is unpatched when it is not.
+
+The installer ended with "patched driver not installed. Without it a cable yank can hang the compositor" on machines
+where the patched driver **was** installed and working. The check looked for a pacman package — and on SteamOS the
+patched driver is delivered as a system extension, not a package, so it found nothing and assumed the worst. A user who
+had already tested surprise unplug successfully on that very machine was told it was unsafe.
+
+It now asks the modules themselves, which is the same test the privileged helper uses before it will load the display
+stack: the build carries strings only this project's patches add. Verified against a real installation — the check finds
+them, and the installer now says so instead.
+
+A warning that fires when nothing is wrong is worse than no warning. People stop believing the ones that matter.
+
+0.7.46 — the real cause of the verbose boot AND the boot menu: one missing block.
+
+Regenerating the GRUB configuration on SteamOS drops the **steamenv header block** that SteamOS's own bootloader depends
+on. Comparing a regenerated configuration against the untouched one on the other slot showed exactly what was missing:
+
+    ## start header steamenv sub block
+    insmod steamenv
+    steamenv_quiet="loglevel=3 splash quiet plymouth.ignore-serial-consoles fbcon=vc:4-6"
+    steamenv_noisy="loglevel=5 sysrq_always_enabled splash=verbose fbcon=nodefer"
+    steamenv_verbosity=""
+    timeout=0
+    timeout_style=menu
+    steamenv_init
+
+SteamOS's bootloader **strips the verbosity parameters out of the kernel line** and puts back either `$steamenv_quiet`
+or `$steamenv_noisy`, chosen by `$steamenv_verbosity`. Without the header those variables do not exist: it strips them
+and adds nothing, so every boot is a wall of console text — no matter where the parameters are written into the
+configuration. That is why putting them before, after, and in both halves of the kernel line all failed.
+
+**The same block sets `timeout=0`.** Its absence is also what left a handheld sitting at a boot menu, needing a keyboard.
+One missing block, both faults, three failed attempts at the wrong explanation.
+
+The header is now restored after any regeneration that comes out without it, checked before the change is kept.
+
+0.7.45 — the tray icon no longer crashes in a loop in Game Mode.
+
+A system tray needs a desktop session to live in. Started in Game Mode there is no display it can use: Qt cannot load a
+platform plugin, aborts, and with `Restart=always` that is a crash every three seconds — each one writing a core dump —
+for as long as Game Mode is running. A real device had fifteen restarts and climbing, with core dumps piling up in the
+journal.
+
+It now checks first and exits cleanly when there is nowhere to put an icon, and that exit is treated as the correct
+outcome rather than a failure to retry. Restarts are also capped, so any other failure can no longer become a loop.
+
+Nothing about the eGPU path changes.
+
+0.7.44 — 16 GiB at boot, and the eGPU session no longer tears itself down a minute after boot.
+
+Two faults, both introduced by the boot-time BAR1 work in 0.7.38.
+
+**The boot re-enumeration read as a cable pull.** Removing the bridge to re-size the windows fires a PCI remove event
+for the GPU, and the udev rule that handles surprise removal acted on it: about ninety seconds into boot it killed
+gamescope and Steam, unloaded the driver, and put the session back on the built-in screen — with the eGPU still
+plugged in. That is what "the screens went black and Game Mode came back on the handheld" was. The re-enumeration now
+marks the removal as deliberate, and the recovery skips it, the same way it already skips a Safe Detach.
+
+**256 MiB was never normal, and reporting it as such was wrong.** The resize was asked for once, three seconds after the
+rescan, and refused — while the very same request succeeded on the very same machine and port a minute later, straight
+to 16384 MiB. The kernel simply had not finished assigning the re-enumerated bridge windows yet. It now retries for
+twenty seconds after re-enumeration, and briefly before it, instead of taking the first refusal as the answer.
+
+A full BAR is what this is for. A machine that can reach 16 GiB should not be left at 256 MiB because the question was
+asked too early.
+
+0.7.43 — the quiet boot stays fixed this time, because it repairs itself.
+
+The verbose boot has now been "fixed" three times and come back twice. The reason is not the fix — it is that **every
+install regenerates the boot configuration and undid it**. Each time, the generated file was correct when checked and
+wrong again after the next update.
+
+SteamOS's `steamenv_boot` drops `loglevel=3 quiet splash plymouth.ignore-serial-consoles` from the part of the kernel
+line that `grub-mkconfig` writes them into. They have to also appear in the part it leaves alone. That is now
+**verified and repaired after every regeneration**, the same way the boot-menu timeout already is: if the generated
+configuration would boot verbosely, the parameters are put back into the surviving part of the line before anything
+else happens. No install can quietly undo it again.
+
+Both self-repairs are checked against the real file format, not assumed.
+
+0.7.42 — unplugging after a boot-with-eGPU could reset the machine. Update.
+
+**This is the one that has been resetting machines.** Root ports without Downstream Port Containment answer a cable pull
+with an uncorrectable error, and the platform answers that with a data-fabric sync flood — the machine powers off and
+reboots on the spot. This project masks those errors to make an unplug survivable, but the masking only ever ran inside
+the **attach hook**. A machine that BOOTED with the eGPU already attached never ran that hook, so it was never
+protected: the eGPU worked, and then unplugging it reset the whole system.
+
+That is exactly what a user hit — eGPU connected at boot, unplugged it, instant shutdown and reboot — and it explains
+the earlier resets recorded on the same machine.
+
+The masking is now a first-class action applied by **every** path that brings an eGPU up, including boot, as soon as the
+card is known to be there. Still by capability, never by device id, and ports that have DPC are still left untouched.
+
+**Updating no longer demands that you unplug.** The installer refused whenever the NVIDIA modules were loaded, calling
+it "eGPU in use" — but a machine that booted with the eGPU attached has them loaded with nothing using them. The only
+way forward was to unplug, which on an unprotected port reset the machine: the two bugs fed each other. It now checks
+whether the eGPU is actually in use — driving a display, or opened by a process — and if it is not, unloads the idle
+modules and carries on. If it really is in use, it refuses as before.
+
+0.7.41 — a partial BAR1 resize could leave you with no eGPU at all. Update if you run 0.7.38–0.7.40.
+
+**Regression, found on a real boot.** 0.7.38 resized BAR1 at boot and accepted whatever size the kernel allowed: on a
+Legion Go 1, 16 GiB and 8 GiB were refused but **4 GiB was accepted — and the driver then would not create a DRM card
+at all**. A boot that would have worked at the stock 256 MiB ended with the eGPU unusable and the session on the
+built-in screen. The recovery path made it worse by falling back to 4 GiB again, and by reloading the driver without
+clearing the residue the failed initialisation left behind.
+
+Now it is **16 GiB or nothing**. The sizes in between buy little and cost exactly this. If 16 GiB is refused, the
+Thunderbolt tunnel is re-enumerated so the kernel sizes the bridge windows the way it does for a hot-plug, and 16 GiB is
+asked for once more. If that still fails, the BAR is left at its stock size and the eGPU is used as it always was. A BAR
+that somehow ends up between the two is put back down deliberately. The recovery path now clears the failed
+initialisation before reloading, which is what it should have done.
+
+**Quiet boot, for real this time.** SteamOS's `steamenv_boot` strips `loglevel=3 quiet splash
+plymouth.ignore-serial-consoles` from the line it boots — measured in both orders: after our parameters they were
+dropped, before them they were dropped again, while everything in `GRUB_CMDLINE_LINUX` survived untouched. They are now
+restored through that variable instead. The previous release's reordering was based on the wrong conclusion and did not
+fix it.
+
+0.7.40 — attach finishes by itself after a driver build, and the reset notice is readable again.
+
+**Plugging the eGPU in while the driver was still building did nothing.** The attach hook refuses to bring an eGPU up
+against a driver that is mid-build — correctly — but nothing happened afterwards either, so the only way forward was to
+unplug and plug in again, or press Attach. The build now finishes the job: if an eGPU is connected when it completes,
+it attaches.
+
+**The reset notice showed a row of boxes instead of a date** ("This device was reset by its hardware 2 times (last:
+□□□□□□□□)"). The file recording those resets had been NUL-padded — data written but never flushed, which is exactly what
+a hardware reset leaves behind — and the raw bytes went straight to the interface. Control characters are now stripped
+before the text is used, and a damaged file is repaired in place.
+
+Tested on a Legion Go 1 with the eGPU moved to the **second USB4 port**: it enumerates behind the other root port and
+reaches a full 16 GiB BAR1 there, the same as the first.
+
+0.7.39 — the second USB4 port works on any machine, not just the one it was written on.
+
+Clearing PCIe Downstream Port Containment is what lets a USB4 port build a PCIe tunnel after the link has been
+contained — on the development handheld, the **second** USB4 port would not form a tunnel at all without it. That fix
+was gated to a single device ID (`1022:150a`, Strix Halo), so on every other machine it silently did nothing. A Legion
+Go 1 is AMD Phoenix: the gate matched nothing there, and the clear never ran on either of its two USB4 ports.
+
+It is now found by what the port *is*: a host root port that is a USB4/Thunderbolt tunnel bridge, with a DPC capability
+discovered by walking its capability list. No device IDs.
+
+Restricted to **host** root ports on purpose. Matching any tunnel bridge also caught the eGPU enclosure's own
+Thunderbolt switch, which is not ours to write to. Verified on a real machine: it now finds exactly the two USB4 root
+ports and nothing else.
+
+0.7.38 — booting with the eGPU attached now gets the full 16 GiB BAR1, not 256 MiB.
+
+Hot-plugging an eGPU has always produced a 16 GiB BAR1. Booting with it attached produced 256 MiB, and the resize was
+refused with `write error: No space left on device`. The difference is not the card and not the driver: it is *when* the
+device appears. A device that arrives after boot is placed in bridge windows sized with the reserve from
+`pci=hpmemprefsize`; a device that is already there at boot keeps the windows firmware assigned for the BARs it had —
+and a 16 GiB window, which must also be 16 GiB-aligned, does not fit in them.
+
+So boot now makes itself look like a hot-plug: when the resize is refused, the eGPU's Thunderbolt subtree is taken down
+and enumerated again, the kernel sizes the bridge windows afresh, and the resize is retried. Nothing is displaying at
+that point in boot, so there is no session to disturb. Removing only the GPU is not enough — its parent bridge keeps its
+window — so the bridge below the root port is what goes and comes back.
+
+**It will not do this to hardware that is not yours.** The re-enumeration is refused unless every PCI function behind
+that bridge is either part of the tunnel or the eGPU itself. A dock, a drive or a display controller sharing the path
+stops it, by design: taking a bridge down takes everything under it with it. Checked against a real machine's topology,
+where the tree also contains bus directories and PCIe port services that are not devices at all.
+
+If the resize still cannot be done, the eGPU is used anyway at the smaller BAR — that has not changed since 0.7.34, and
+the log now says what actually happened at each step instead of failing silently.
+
+0.7.37 — quiet boot restored, and the handheld panel goes dark when the session starts on the eGPU.
+
+**Every boot had become a wall of console text.** This project appends its kernel parameters after the distribution's,
+and SteamOS's `steamenv_boot` rewrites the tail of that line — with anything appended behind them, it dropped
+`loglevel=3 quiet splash plymouth.ignore-serial-consoles` entirely. The stock configuration keeps those four last, so
+ours now go **before** them instead of after. Verified by comparing against the untouched configuration on the other
+SteamOS slot, which is where the correct layout came from.
+
+**The handheld panel stayed lit when the machine booted straight onto the eGPU.** Turning it off only ever happened on
+the hot-plug switch path, never when the session started on the eGPU in the first place — so a boot with the eGPU
+attached left the panel glowing behind a picture on the monitor. The session now applies the same rule: if the picture
+is on an eGPU output, the panel goes dark. It cannot strand you, because the panel is only ever darkened when an eGPU is
+actually mounted.
+
+Also: the boot-time BAR1 message no longer claims Game Mode will fall back to the built-in screen. It says what is
+actually true — the eGPU is used anyway, at lower bandwidth over Thunderbolt.
+
+0.7.36 — the flood lockout is gone.
+
+When the platform reset itself while the eGPU was connected (an AMD "data fabric sync flood"), this software set a
+persistent lockout and refused every later attach until the user ran `egpu-rearm`. The intent was to break a reboot
+loop. In practice it cost far more than it prevented:
+
+- plugging the eGPU in did nothing, with no obvious reason why
+- boot stalled for two and a half minutes waiting for a GPU it had already decided not to bring up
+- and the way out was a command, on a device that may have no keyboard
+
+The loop it guarded against is escaped by unplugging the eGPU — one action, obvious to anyone holding the device. So
+the lockout is removed: an attach is never refused because of a past reset, and boot never waits on one.
+
+**The reset is still recorded.** `flood-history` is what tells the interface that this machine resets when the eGPU link
+drops, which is why it keeps a standing "always Safe Detach before unplugging" note. That record costs nothing and is
+worth keeping; the refusal was not. Leftover lockout state from an older version is cleared automatically.
+
+0.7.35 — this software could leave a handheld sitting at a boot menu. Update.
+
+**A SteamOS machine could be left needing a keyboard to boot.** Applying the kernel parameters regenerates the GRUB
+configuration with `grub-mkconfig` — and on SteamOS the result comes out with **no timeout directive at all**, so GRUB
+waits at a menu forever. SteamOS's own configuration is not produced by `grub-mkconfig`, so it never had this problem
+until this project regenerated it. On a handheld with no keyboard that is indistinguishable from a dead device; it
+happened to a user, who had to find a keyboard to get the machine to boot, twice.
+
+Fixed in two ways, because this one must not come back:
+
+- The drop-in this project writes now also pins `GRUB_TIMEOUT=0` and `GRUB_TIMEOUT_STYLE=hidden`, so any regeneration —
+  by us, or by anything else — produces a configuration that boots straight through.
+- After regenerating, the generated file is **checked**: if it has no timeout directive, one is written into it. A
+  config that stops and waits is never left behind.
+
+**Boot no longer stalls for two and a half minutes after a hardware reset.** When the flood lockout is set — the guard
+that pauses eGPU attach after the platform resets itself — the boot-time mount still waited 90 seconds for a GPU that
+the lockout had already refused to bring up, while holding the login manager back. A user saw "A start job is running
+for Session-independent eGPU compute mount (2min 39s)" and read it, reasonably, as a failed boot. It now skips
+immediately and says so, and the unit's timeout no longer exceeds what the helper can use.
+
+The hotplug memory window stays at the value that has always been shipped. Raising it was an untested guess at a
+performance setting, and nothing depends on the BAR size any more.
+
+0.7.34 — a small BAR1 no longer costs you the eGPU.
+
+Booting with the eGPU attached still landed on the built-in screen after 0.7.32, and the reason was a requirement that
+should never have been one.
+
+**Game Mode refused the eGPU unless BAR1 had been resized to 16 GiB.** That is a performance limit, not a health check.
+BAR1 can only be resized while the GPU has no driver bound, and on some boots it cannot be resized at all — the kernel
+answered `write error: No space left on device`, because a 16 GiB BAR must be 16 GiB-aligned and shares the hotplug
+window with the GPU's other BARs. So a perfectly healthy eGPU with the monitor connected sat unused while the session
+ran on the handheld screen. The development machine this project was built on runs with ReBAR off entirely and is fine.
+
+The readiness gate now asks what actually proves the GPU is alive — NVML responding, which a wedged initialisation
+cannot do — and treats BAR1 as advisory, logging "BAR1 is 256MiB, not resized (lower performance over Thunderbolt, but
+the eGPU is used anyway)".
+
+Two supporting fixes:
+
+- **The boot-time resize was failing silently.** It ran immediately after the FLR, while the GPU still reads as a zombie,
+  and the helper refused it — but the loop threw the error away, so the log said nothing. It now waits for the device to
+  come back and **logs the refusal reason** if it still will not resize.
+- **The hotplug memory window is requested as 32 GiB instead of 16 GiB**, which gives a 16 GiB BAR room to be placed at
+  boot, and the older copy of these parameters is removed from the base bootloader config so a stale value cannot sit
+  next to the new one. This only affects performance; nothing depends on it any more.
+
+0.7.33 — a stale DRM card no longer black-screens Game Mode.
+
+Found live on a Legion Go 1 that booted to a black screen with the eGPU attached. Game Mode was not merely failing to
+use the eGPU — the session was **crash-looping**, restarting every four seconds, which is why nothing was ever drawn.
+
+A GPU can expose more than one DRM card. A driver reload, or a remove-and-rescan cycle, leaves a stale card behind that
+has **no connectors on it at all**. On the failing machine `card1` and `card2` both belonged to `0000:65:00.0`, and only
+`card2` carried the monitor. Everything in this project picked the *first* card under the GPU, so gamescope was aimed at
+the dead one, exited immediately, took the whole session down with it, and systemd started the cycle again.
+
+The rule is now: **take the card that has connectors**, in all five places that resolve one (the Game Mode session, the
+display profile helper, the desktop autostart, the attach hook and the mount helper). A card with no outputs is never
+chosen while one with outputs exists.
+
+The visible symptom of this bug was every session service failing with "Failed to load environment files" — the stock
+session writes that file only once gamescope reports its displays, and gamescope never got that far.
+
+0.7.32 — booting with the eGPU attached now actually routes Game Mode to it.
+
+Found on a real Legion Go 1 with an RTX 5060 Ti: the machine booted with the eGPU plugged in and the monitor switched
+on, the eGPU mounted correctly, its display was connected — and Game Mode still came up on the built-in screen. The
+session wrapper waited 25 seconds and gave up.
+
+The reason was **BAR1 = 256 MiB**. Game Mode's readiness gate requires the resized BAR, and BAR1 can only be resized
+while the GPU has no driver bound. The boot path deliberately skipped the resize and loaded the driver immediately, so
+by the time anything else ran, the window had closed — and no amount of waiting could change it. A hot-plugged eGPU was
+fine, because there the GPU is driverless when the resize happens. Only the boot-with-eGPU case was broken, which is
+exactly the case nobody had tested.
+
+The boot path now resizes BAR1 while the GPU is still driverless, before loading the driver.
+
+The old rule that produced this ("no ReBAR at boot") came from one platform where a large BAR stops the driver
+initialising. That is now handled by **detection instead of denial**: if the driver does not create a DRM card with the
+resized BAR, the BAR is backed down to its original size and the driver is loaded again, so such a machine ends up
+exactly where it was before rather than with no eGPU at all.
+
+0.7.31 — drive the signal, because on many monitors the signal is what ends standby.
+
+Two corrections, both from a live failure: a machine booted with the eGPU attached and the monitor in standby, and
+nothing ever came up on either screen.
+
+**The eGPU was not pushing a signal out at all.** A monitor in standby does not answer detection, so its connector read
+"disconnected", so no compositor would put a mode on it, so no signal was driven — and the monitor had nothing to wake
+up for. Asking politely in a loop could never break that circle. Now, when the probe gets no answer, the connector is
+**forced on**: the kernel reports it connected, the compositor drives a mode, and that signal is what brings the monitor
+back. The monitor's own reply (its EDID appearing) is taken as proof it really woke; if nothing replies after 20 seconds
+of driven signal the force is released and the session stays on the built-in screen.
+
+**The built-in panel now follows whether the eGPU mounted, not whether a monitor was detected.** Detection is the wrong
+thing to hang it on, for the reason above. If the eGPU mounted, the panel goes dark and the picture is on the eGPU. The
+panel only comes back if the eGPU failed to mount. The one thing still refused is darkening the panel when no eGPU is
+mounted at all, which is what leaves a machine with no screen and no way back in.
+
+0.7.30 — a monitor in standby counts as connected, and gets driven.
+
+Correction to 0.7.29. That release would only turn the built-in panel off if an eGPU display was already **lit**, which
+is the wrong test: a monitor in standby, or with its panel switched off, is still connected — it answers on DisplayPort
+AUX / DDC and it wakes the moment a signal is driven at it. Requiring it to be lit first would refuse the very handover
+that wakes it, and would keep the session on the built-in screen for a display that was perfectly available.
+
+The test is now **connected, after asking**: every eGPU connector is probed first ("detect" makes the driver query the
+monitor), and any connected output on a card that is not the built-in GPU counts. So a sleeping or panel-off monitor is
+found, the session moves to it, and the signal wakes it.
+
+The protection is unchanged for the case that caused the trouble: with no eGPU display connected at all, the built-in
+panel is not turned off, and the machine is never left with no screen.
+
+Checked on a machine whose only external display hangs off the built-in GPU: still refused, because that display is not
+the eGPU's and darkening the panel for it would be wrong.
+
+0.7.29 — the built-in screen is never turned off unless an eGPU display is actually lit.
+
+**Update before booting with the eGPU attached.** A user booted with the eGPU plugged in and the monitor in standby and
+ended up with **both screens dark**, on a machine that was otherwise working.
+
+What happened: with the monitor asleep, no eGPU connector reported "connected". After waiting 90 seconds the switch-over
+went ahead anyway, on the theory that the monitor was merely asleep and would light up later. The compositor relogged
+onto the eGPU, the built-in panel was handed over and darkened — and the monitor never woke. No screen, no way back in.
+
+Three fixes, smallest first:
+
+- **`egpu-panel off` now refuses** unless a display on a card other than the built-in GPU is actually lit. That is the
+  rule in one place, so every caller gets it; the deliberate teardown paths that darken the panel while they still own
+  the picture pass `EGPU_PANEL_FORCE=1`. Verified on a machine with no eGPU: "refusing to turn the built-in panel off:
+  no eGPU display is lit to replace it".
+- **The 90-second wait no longer stages a session with nothing to show it on.** If no eGPU output answers, the session
+  stays on the built-in screen and says so. That is safe *and* self-correcting: switching the monitor on fires a DRM
+  hotplug that moves the session across by itself.
+- **If the monitor disappears mid-switch**, the handover now puts the built-in panel back and re-enables it, instead of
+  turning it off and leaving nothing.
+
+**Booting with the eGPU attached and the monitor asleep also works now.** The driver always came up at boot, but a
+monitor in standby does not assert hot-plug, so its connector read "disconnected" and the session went to the built-in
+screen. Boot now forces a connector probe (the driver asks the monitor over DisplayPort AUX / DDC): a sleeping but
+powered monitor answers and the eGPU gets the session. A monitor that is genuinely switched off still answers nothing,
+the machine boots on the built-in screen as it should, and switching the monitor on moves the session over.
+
+0.7.28 — the "not an eGPU" rule is vendor-neutral, and uninstall really does remove everything.
+
+**The safety rule no longer hard-codes NVIDIA.** 0.7.27 refused to act on anything that was not an NVIDIA GPU, which
+would have blocked AMD and Intel eGPUs from ever working. That was a sledgehammer. The rule is now the same one
+`egpu-detect` has always used, and it is about being an eGPU, not about being NVIDIA: **a display-class PCI device that
+does not drive the built-in panel.** Vendor-specific checks stay where they belong — in the driver actions that really
+are NVIDIA-only.
+
+What it refuses, checked on a live machine: the built-in GPU ("is the built-in GPU, not an eGPU") and a non-GPU device
+such as the NVMe controller ("is not a GPU (PCI class 0x010802)"). Neither refusal mentions a vendor. An empty address
+is still fine — that is an eGPU that has not enumerated yet. The same vendor-neutral test now decides which displays
+belong to the eGPU, so a USB-C monitor or XR glasses on the built-in GPU can never be claimed by the eGPU path.
+
+**Uninstall was leaving things behind.** It removed the installed files but not what this project writes at runtime, so
+a reinstall was never really a fresh install. Now also removed: `/etc/nv-egpu-buddy`, `/var/lib/nvegpu` (lockout and
+learned-device state), the installed GBM gamescope in `~/.local/gamescope-gbm`, `~/.local/lib/nv-egpu-buddy`, the
+gamescope output routing file in `~/.config/environment.d`, and the project's logs.
+
+**New: `uninstall.sh --verify`** lists anything still on the system and exits non-zero if there is any, so a clean
+uninstall can be proven before reinstalling from scratch. When the uninstall came from the Decky plugin it reports the
+plugin and its installed copy as deliberately kept — the plugin cannot delete itself mid-run, and it is what you
+reinstall from.
+
+0.7.27 — one rule, enforced at the root: hardware that is not an eGPU is never touched.
+
+Every privileged action now refuses outright if the device it was pointed at is present and is not an NVIDIA GPU. That
+is checked once, at the root-owned boundary that every attach, detach, reset, power and bus operation goes through, so
+it holds for all of them at once instead of relying on each caller getting it right. An address with nothing at it is
+still fine — that is an eGPU that has not enumerated yet, and waiting or rescanning for it touches nobody else's device.
+
+Verified against the built-in GPU: `remove-gpu`, `reset-gpu`, `dpc-off`, `load-nvidia` and `status` all refuse with
+"is not an NVIDIA GPU (vendor 0x1002); refusing to touch it".
+
+The recovery tool no longer resets a hard-coded bridge either. It finds the GPU by vendor and class, takes that card's
+own parent bridge, and refuses the Secondary Bus Reset if anything that is not part of the eGPU sits behind it — a bus
+reset hits every device under the bridge, so a dock or a drive there must never be caught by it.
+
+0.7.26 — an external display is never mistaken for an eGPU, and a dock is never mistaken for an enclosure.
+
+Follow-up to 0.7.25, from auditing every place that decides "there is an eGPU here" rather than waiting for the next
+report. Two more classes of mistake were found, both able to affect people who own no eGPU at all.
+
+**A display was attributed to an eGPU by address alone.** Every "is this monitor the eGPU's?" test compares the card
+driving the connector against one PCI address. If that address was wrong — and until 0.7.25 it could fall back to the
+development handheld's slot — an ordinary external display was handed to the eGPU path. Demonstrated on a machine with
+no eGPU: forcing the wrong address made the Game Mode session claim the DisplayPort output of the built-in GPU. The
+ownership test now also requires that the card really is an NVIDIA GPU, checked where ownership is decided and not only
+where the address is resolved, so a wrong address can no longer produce a wrong answer. The same check was added to the
+attach helper.
+
+**A Thunderbolt dock was treated as an eGPU enclosure.** Any USB4/Thunderbolt device arriving fires the same event as
+an eGPU box. With no GPU behind it, this software would clear the port's error containment, **de-authorize and
+re-authorize the device** — which drops a dock and any display attached to it — and rescan the bus, on every plug. At
+boot it would poke the bus and wait 30 seconds for a GPU that was never coming. Now:
+
+- A device that has been through the full bring-up three times without ever producing a GPU is left completely alone
+  from then on. Three, not one, because a real enclosure's PCIe tunnel is slow and racy and can genuinely miss a plug.
+- Any successful attach clears that judgement, and **pressing Attach always tries anyway** regardless of it.
+- The boot path does not poke the bus or wait at all on a machine where no eGPU has ever attached. A dock-only machine
+  boots straight through.
+
+Nothing here changes behaviour on a machine with a working eGPU.
+
+0.7.25 — with no eGPU connected, this software now does nothing at all.
+
+**Update if you use any other external display: a USB-C monitor, a dock, or XR display glasses.**
+
+Several components fell back to the development handheld's PCI address (`0000:62:00.0`) when no NVIDIA GPU was
+detected, instead of concluding that there is no eGPU. On another machine that slot can hold something else entirely,
+and one component collapsed an empty address into a path that always exists — so an ordinary external display could be
+treated as an attached eGPU. The visible result was the software rearranging a display layout it has no business
+touching: the built-in panel forced back on as the primary screen while you were using glasses or a USB-C monitor, and
+Game Mode waiting on an eGPU that was never there.
+
+Fixed in the four components that run by themselves:
+
+- **The display failover watcher** now stays completely idle unless an NVIDIA GPU is on the bus or it was the one that
+  darkened the built-in panel. It was the component that pushed the panel back to primary, at 5-second intervals,
+  against whatever you had set up.
+- **The desktop display autostart** no-ops when there is no eGPU, rather than acting on a path that always exists.
+- **Game Mode** checks the vendor of the device it finds before believing it is an eGPU, so an unrelated device in that
+  slot no longer costs a 25-second wait at session start.
+- **The display profile helper** takes the fallback address only when that slot really holds an NVIDIA GPU.
+
+No hardware value is assumed anywhere in these paths any more: the eGPU is found by vendor and class, or it is absent.
+
+Found by a user running external display glasses on a Legion Go 2 with no eGPU attached.
+
+0.7.24 — critical: a detach could leave the machine unable to start any Vulkan game.
+
+**Update immediately if you have ever used Safe Detach or unplugged the eGPU.**
+
+While the eGPU is attached, the session is pinned to the NVIDIA Vulkan driver (`VK_DRIVER_FILES`). Detaching hides that
+driver file, as it must, because the card is gone — but nothing cleared the pin. The Vulkan loader then reports
+`vkCreateInstance: Found no drivers!` and **every Vulkan game fails to start**, on the built-in GPU, with the eGPU not
+even connected. Games hang on Steam's launch screen or crash immediately, and nothing points at this software as the
+cause. A second variant set the same variables to an empty string, which the loader also reads as "no drivers at all".
+
+Fixed in all three paths that move you back to the built-in GPU: Safe Detach, the desktop Safe Detach tool, and the
+surprise-unplug recovery. They now clear the pin so the loader finds the built-in GPU's driver again.
+
+**Already affected machines repair themselves.** Every session start now checks whether the Vulkan pin names a file
+that exists, and clears it if not. That runs in both Game Mode and the desktop, so a reboot or a session restart is
+enough; no manual repair and no reinstall. A valid pin is left alone.
+
+Found on the development machine after a detach, by a user who reported that every game had started failing.
+
+0.7.23 — everything SteamOS: a real device found what a container could not.
+
+Tested end to end on a Legion Go (SteamOS 3.8, kernel 6.16 valve) with an RTX 5060 Ti in an AORUS TB5 box on a
+5120x1440@144 ultrawide: install, driver, attach, a game in Game Mode, Safe Detach, replug, surprise unplug, and the
+same again on the desktop. Every fix below came from that session. **Nothing changes on CachyOS / Legion Go 2 unless
+it is named as a fix there.**
+
+**The eGPU could never attach on a clean machine.** The display half of the driver was only loaded when
+`/etc/nv-egpu-buddy/surprise-removal-safe` said `yes` — a file created by hand on the development machine and shipped
+by nothing. Everywhere else the attach loaded the compute driver, said "display stack ready", and Game Mode fell back
+to the handheld screen after a 25 second wait. The proof is now read from the installed modules themselves (strings
+only this project's patches add), so it is true wherever the patched driver really is installed.
+
+**The desktop ran on both GPUs instead of the eGPU alone.** `~/.config/plasma-workspace/env/00-egpu-free-nvidia-modeset.sh`
+— the hook that pins the compositor to the eGPU and keeps the built-in GPU out of the session — also existed only on the
+development machine. That hook *is* the anti-crosstalk mechanism; without it the desktop came back extended across both
+GPUs after an attach. It is now part of the install.
+
+**Game Mode composited on the built-in GPU.** Where the distribution's gamescope carries file capabilities (SteamOS),
+the Vulkan loader ignores the environment this project uses for NVIDIA routing. The session now names the eGPU on the
+command line instead, where capabilities cannot strip it.
+
+**The picture was corrupted on SteamOS** because the GBM-scanout gamescope is built on CachyOS and cannot run there, so
+the session silently fell back to the distribution's. A SteamOS build is now shipped, and the installer picks whichever
+shipped build actually runs on the machine, by trying them, not by distribution name. If none runs it builds one on the
+device. Both builds link the system EDID library so HDR metadata is read the same way everywhere.
+
+**The Steam UI was 1080p on a 5120x1440 display.** SteamOS's session script hardcodes an inner resolution; it is now
+dropped when this project stages a native canvas, so the UI follows the monitor's real mode.
+
+**Login manager, sessions and Safe Detach.** All session pinning wrote CachyOS's login-manager file, which SteamOS
+ignores, so a desktop Safe Detach came back in Game Mode and could not finish. One helper now detects the login manager
+and the real session file names on both. The pin is released once the session it was for has returned, so "Return to
+Gaming Mode" is not overridden. The password-less sudo rules were being outranked by SteamOS's own `wheel` rule because
+of the file name; they now sort last and apply, which is what the desktop app's Safe Detach needs.
+
+**Decky vanished after a detach.** Its backend holds `/dev/nvidia*`, so the driver unload killed it and nothing brought
+it back: Game Mode returned with no plugins at all. Both the planned detach and the unplug recovery restart it now.
+
+**A cable pull reset the machine.** On a USB4 root port without Downstream Port Containment the surprise removal raised
+a fatal error and the platform answered with a data-fabric sync flood, i.e. an instant reboot. The attach now masks the
+uncorrectable errors that port accepts and makes them non-fatal, by capability, so ports that have containment (Legion
+Go 2) are untouched. With that in place the same yank recovered in eight seconds with the session back on the handheld.
+If a reset does happen, the automatic attach pauses, says so, and the plugin offers Repair; every such reset is
+remembered and the plugin keeps a standing "always Safe Detach" note for that machine.
+
+**The handheld panel stayed lit and black in eGPU mode.** Turning it off gave up whenever anything held its graphics
+card, which is always true in eGPU mode. The backlight is now powered down and zeroed regardless, and restored on the
+way back.
+
+**Desktop app and launchers.** The app is a native Qt/QML window with a system-tray icon instead of a browser tab
+(SteamOS has no WebKitGTK), the tray runs as a user service so it survives the compositor restarts this project
+performs, and "EGPU Buddy" and "Safely Eject eGPU" are installed to the menu and the desktop. Re-attach reports what
+happened instead of failing silently.
+
+**Also:** the plugin's update backup no longer lives inside Decky's plugin folder, where Decky loaded it as a second
+copy of the plugin and kept running the old version after every update; the driver extension ships this project's own
+driver package files (modprobe options, hotplug rule) without dragging a compiler along; the unplug recovery waits for
+a working display before restarting Steam, so no "cannot open display" dialog; card numbers, the dock and the audio
+route are looked up instead of assumed, so a machine that enumerates its GPUs the other way round works.
+
+0.7.22 — SteamOS: installing again over a working install no longer fails; updates are plugin first, system files second.
+
+- **SteamOS, found on a real Legion Go with 0.7.21:** the first install went through and the driver extension merged,
+  but any later install (update, repair) failed with `cannot remove '/usr/local/sbin/...': Read-only file system`. On
+  SteamOS `/usr/local` belongs to the system partition, and a merged system extension turns all of `/usr` into a
+  read-only overlay. The installer and the uninstaller now unmerge the extension first and merge it again on every
+  way out; they refuse (changing nothing) while the NVIDIA driver is loaded: Safe Detach and unplug first.
+  The test container had mounted `/usr/local` separately, which SteamOS does not do; it now matches the device,
+  reproduces the 0.7.21 failure and passes with 0.7.22.
+- **An update is two separate jobs, plugin first:** the plugin replaces itself (seconds) and Decky restarts; the new
+  plugin then installs the system files it carries, with its own code and its own progress view, and reports the
+  result in a notification. Old plugin code no longer drives a newer installer. If the second half cannot start
+  (a game is running), the first page offers **Update system integration**.
+  Updating *from* 0.7.21 or older still runs in the old order once, because that plugin's code is what runs it.
+- The log of the previous install run is kept (`/tmp/egpu-buddy-setup.log.prev`): a retry no longer erases the first
+  failure.
+- Nothing in the attach, detach or recovery paths changed; CachyOS / Legion Go 2 behaviour is untouched.
+
+0.7.21 — SteamOS: fix for the install failure found on a real device; an honest progress bar; a visible finish line.
+
+- **SteamOS, found on a real Legion Go:** the driver compiled, then the install stopped at `overlay: case-insensitive
+  capable filesystem ... not supported`. SteamOS formats `/home` as ext4 with case-folding and its kernel's overlayfs
+  refuses directories there, which also rules out a directory-based system extension. The extension is now one
+  squashfs image (about 520 MB instead of a 1.5 GB directory) and the module dependency step works on tmpfs. If you
+  hit this: press **Repair**; the compiled driver is reused, it takes about a minute. Verified in the test container
+  (now with a case-folding `/home`); the merged extension is still unconfirmed on a real device, see `TESTED.md`.
+- A failed driver step no longer ends in "done": the installer says the driver was not built and the plugin shows it,
+  with a **Repair** button, until the driver really is there. The state is read from the system, so it is the same
+  after closing the menu, a Decky restart or a reboot.
+- The message when you plug the eGPU in without a driver now says what to do (wait for a running build, or Repair).
+- **Much shorter driver build on SteamOS:** the compile ran on one CPU core (makepkg's default); it now uses all of them.
+- **Progress bar:** percentages follow measured time per stage, the compile advances with its real output, the line
+  under the bar is a short plain label that fits, a running clock shows it is alive, and the expected duration is
+  stated before you start and while it runs.
+- **Finish line:** a notification appears when the install ends, also when the menu was closed or Decky restarted
+  meanwhile.
+- **Updates:** the update button only appears when a newer release was detected and the setup is complete; a first
+  install is never mixed with an update. A plugin left behind by an interrupted update is brought level on its own,
+  without reinstalling the system files.
+- Nothing in the attach, detach or recovery paths changed; CachyOS / Legion Go 2 behaviour is untouched.
+
+0.7.20 — one click really is one click: no separate "Apply kernel parameters".
+
+- The install always wrote the kernel parameters as its last step, yet the plugin showed a second "Apply kernel
+  parameters" button: after every install until the reboot (it only looked at the running kernel), and after an install
+  that had died before its last step. Now the first page says **Reboot to activate** when the parameters are written
+  but not active yet, and an incomplete setup is handled by the one Install / Repair button. The Apply button is gone.
+- The installer now checks that the parameters are **persisted in the bootloader configuration**, not merely present in
+  the running kernel. On the development machine the boot entries had been edited by hand while the file they are
+  regenerated from still held an older set; a kernel update would have brought the old parameters back unnoticed.
+  `egpu-kernel-cmdline --written` / `--pending` report these states.
+
+0.7.19 — plugin: a calm first page; the disclaimer is a dialog, not a banner.
+
+- The first page shows the eGPU state and the controls. When something needs you there is one short neutral line and
+  one button; the explanation is in the dialog that opens. No coloured paragraphs; colour is kept for a failure and for
+  the live attach/detach status.
+- The untested-hardware notice is a dialog that must be accepted once, before the first install **or update**, also
+  on a machine where an earlier partial install had let it slip past. It no longer sits on the first page; the Setup
+  page keeps the note, together with the kernel-parameter details.
+- One button per job: the separate "Update now" pair only appears when a newer release exists (it used to show next to
+  "Update system integration" for the same version).
+- On SteamOS the dialog states the real duration (15-20 minutes the first time).
+- With automatic updates switched on, untested hardware still never installs in the background before the notice was
+  accepted.
+- Each release page now carries only its own notes (all existing pages were rewritten accordingly).
+
+0.7.18 — updates are opt-in, and the update controls are where you can find them.
+
+- **Automatic updates are off by default.** A new release is announced on the first page with an Update button; it
+  installs by itself only if you switch Automatic updates on in Setup. (Anyone who had switched it on keeps that.)
+- **Check for updates** is now a button at the bottom of the plugin's first page. Before, it was only on the Setup page,
+  which is reached by pressing the top button twice, and was reported as missing.
+
+0.7.17 — SteamOS: the patched driver without touching the 5 GB system partition; self-healing across OS updates.
+
+- Measured on Valve's SteamOS 3.8.14 image: 870 MB free on the system partition, the tested driver needs 1.5-2.1 GB,
+  `/var` is 256 MB, no compiler, and Arch's 610.57.04 userspace needs `egl-wayland2`, which SteamOS 3.8 lacks. The old
+  approach could not work there. Patching SteamOS's own 575 driver was ruled out: the hot-unplug patches do not apply.
+- New on SteamOS: the same tested 610.57.04 driver is built in a SteamOS build environment on `/home` against the
+  exact running kernel and delivered as a systemd system extension on `/home`; kernel parameters as a GRUB drop-in;
+  the integration's `/etc` files registered with the OS updater; the self-heal service re-activates the extension at
+  boot and rebuilds the modules after an update that brings a new kernel. See README, "Surviving OS updates".
+- **On SteamOS only**, the attach script refuses to bring the eGPU up while the driver or the kernel parameters are
+  missing (the window after an OS update) and says so in the plugin. No other system gets this gate.
+- Nothing SteamOS-specific is applied elsewhere: on CachyOS and Arch the distro's own NVIDIA packages are kept, the
+  driver step pins nothing when the installed userspace already matches, and attach/detach behave as in 0.7.16.
+- The userspace packages are installed as checksum-verified local files instead of by URL (an older keyring does not
+  know newer packagers).
+- Safe Detach hides the NVIDIA userspace with bind mounts where `/usr` is read-only.
+- The plugin runs the installer in its own systemd unit: a Steam or Decky restart no longer kills a long install.
+  Install and uninstall from the plugin need no password.
+- The plugin re-checks for updates when it is opened and the last check is older than ten minutes (the hourly timer
+  only counts awake time, so after a night of sleep it showed a stale "up to date").
+- Uninstall also removes the driver extension, the build environment, the keep-list and the GRUB drop-in.
+- The installer no longer treats a failed udev/systemd/user-session reload as fatal (install at boot, chroot).
+- Verified in a container built from Valve's image (TESTED.md). **Not yet run on a real SteamOS device.**
+
+0.7.16 — first real SteamOS install attempt (Legion Go, SteamOS): install failed; fixed. Untested-hardware notice.
+
+- **"Install failed (rc 1)" on SteamOS.** Near its end the installer records the installed NVIDIA package versions for
+  the self-heal. On a system where `nvidia-utils` is not installed the version query fails, and under the installer's
+  strict error mode that one failed query ended the whole install, just before the kernel parameters were written
+  (everything before it had been installed). Fixed; the installer was audited for the same pattern.
+- **SteamOS ships pacman without a keyring**, so every package step failed ("keyring is not writable", "required key
+  missing"). The installer now initialises and populates the keyring once when it is missing, and the driver step
+  installs the kernel's matching `-headers` package by itself.
+- **Untested-hardware notice (requested earlier, missing from the stable line until now).** The plugin, the `.run` and the
+  terminal install compare the machine with the one tested configuration (Legion Go 2, RTX 5060 Ti, CachyOS); when
+  anything differs they say what, state that the project has not been tested there and that you install and test at
+  your own risk, and install nothing until you accept. The plugin keeps a one-line reminder on its first page.
+- Honest status for SteamOS: still **experimental and unverified**. SteamOS's repositories carry NVIDIA 575.64.05, the
+  patched driver here is 610.57.04; the installer pins the 610 userspace from the Arch archive and builds the patched
+  modules for Valve's kernel, and none of that has been confirmed on a SteamOS machine yet.
 
 0.7.15 — games black after a re-attach, and the cable-yank recovery, both fixed and verified on real replugs.
 
