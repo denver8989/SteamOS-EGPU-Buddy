@@ -1,3 +1,28 @@
+0.7.63 — a cable pull on the desktop no longer dumps you into Game Mode.
+
+Unplugging the eGPU while using the **desktop** recovered into **Game Mode**. From the machine's own log:
+
+    SURPRISE removal detected (GPU gone from bus)
+    game-mode=1
+    kwin= on            <- the desktop's compositor was already dead
+
+The recovery decides which session to bring back. A live gamescope means Game Mode — but it also treated
+`gamescope-session.target` being *active* as proof, and on SteamOS that target stays active, and relaunches itself,
+while the desktop is on screen. The desktop's own compositor dies instantly with the card, so by the time the recovery
+runs there is nothing left to contradict it.
+
+The session marker should have caught it, and could not: each background relaunch of the Game Mode session had
+overwritten it with "gamemode" while the desktop was running.
+
+Both ends fixed:
+
+- **Desktop evidence now outranks the target.** A running Plasma session, or a marker that says desktop, decides;
+  the target is consulted only when neither session can be identified at all.
+- **The Game Mode session no longer claims the marker while a desktop compositor is running**, so it stays truthful.
+
+The recovery also logs what it saw — "session evidence: gamescope=0 desktop=1 marker=desktop" — so a wrong choice can
+be read rather than guessed at.
+
 0.7.62 — audio actually follows the eGPU, on the paths people use.
 
 0.7.49 moved sound to the eGPU on attach. On a real machine it did not: the picture went to the monitor and the sound

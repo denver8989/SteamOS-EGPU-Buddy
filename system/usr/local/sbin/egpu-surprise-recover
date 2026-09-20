@@ -20,11 +20,23 @@ log "SURPRISE removal detected (GPU gone from bus)"
 mkdir -p /run/nvegpu; printf '{"state":"DETACHED","message":"The eGPU was unplugged. The session is back on the handheld screen."}\n' > /run/nvegpu/gm-status.json 2>/dev/null
 T0=$(date +%s); SELF_START=$(awk '{print $22}' /proc/self/stat); mkdir -p /run/nvegpu; date +%s > /run/nvegpu/surprise-pending   # hotplug-mount: stale modules -> unbind+FLR+rebind on next attach
 # gamescope dies with the card within a second, so it cannot be asked; the session wrapper / desktop login script record the type
-GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1; runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
+# A LIVE gamescope means Game Mode. The gamescope-session TARGET does not: on SteamOS it stays
+# active (and relaunches itself) while the desktop is on screen, so treating it as proof put a
+# desktop user into Game Mode after a cable pull — the desktop's compositor had already died with
+# the card, so nothing contradicted it. Desktop evidence now wins, and the target is a last resort.
+GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1
+DESK=0
+pgrep -x kwin_wayland >/dev/null 2>&1 && DESK=1
+runuser -u deck -- env $RUNENV systemctl --user is-active plasma-workspace.target >/dev/null 2>&1 && DESK=1
+[ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = desktop ] && DESK=1
+if [ "$GM" = 0 ] && [ "$DESK" = 0 ]; then
+  runuser -u deck -- env $RUNENV systemctl --user is-active gamescope-session.target >/dev/null 2>&1 && GM=1
+fi
 # A compositor that is ALIVE decides. The marker is only for the case where neither is left (gamescope gone with the card):
 # it is written at the start of BOTH session types, so it names the latest one. (Until 0.7.22 only Game Mode wrote it: after
 # one Game Mode session an unplug in the Desktop was treated as Game Mode and the desktop was replaced by Game Mode.)
-if [ "$GM" = 0 ] && ! pgrep -x kwin_wayland >/dev/null 2>&1; then [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1; fi
+if [ "$GM" = 0 ] && [ "$DESK" = 0 ] && ! pgrep -x kwin_wayland >/dev/null 2>&1; then [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1; fi
+log "session evidence: gamescope=$GM desktop=$DESK marker=$(cat /run/user/$U/egpu-session-type 2>/dev/null)"
 log "game-mode=$GM"
 # 1. user-manager env -> iGPU immediately (the relaunching session must not point at the dead card)
 if [ "$GM" = 1 ]; then

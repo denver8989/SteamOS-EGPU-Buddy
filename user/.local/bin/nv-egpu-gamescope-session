@@ -528,7 +528,11 @@ done
 unset _v _p
 
 # which session type is running: read by egpu-surprise-recover (gamescope itself dies with the card, so it cannot be asked)
-printf gamemode > "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-session-type" 2>/dev/null || true
+# Only claim the session marker if a desktop is NOT on screen. SteamOS keeps this session's target
+# active (and relaunches it) behind a running desktop, and each relaunch used to overwrite the
+# marker with "gamemode" — so a cable pull on the desktop was recovered as Game Mode.
+pgrep -x kwin_wayland >/dev/null 2>&1 ||
+  printf gamemode > "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-session-type" 2>/dev/null || true
 # A Safe Detach restarts this session ON PURPOSE for the handheld screen, with the NVIDIA userspace already hidden: the eGPU
 # can never become "ready" then, and the result is ignored below anyway. Waiting cost ~30 s of dark screen per detach.
 if [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-detach-mode" ] || [ -e /run/nvegpu/gm-detach-pending ]; then
