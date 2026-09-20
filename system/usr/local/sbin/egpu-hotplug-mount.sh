@@ -11,7 +11,9 @@
 set -u
 PRIV=/usr/local/sbin/nv-egpu-buddy-privileged
 LOG=/var/log/egpu-hotplug-mount.log
-log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>&1; }
+# fdatasync every line: a fabric flood is an instant reset, and it took the unflushed tail of this
+# log with it every time — the lines that would have shown which step caused it
+log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>&1; sync -d "$LOG" 2>/dev/null || true; }
 exec 9>/run/egpu-hotplug-mount.lock 2>/dev/null || true
 flock -n 9 2>/dev/null || { log "another instance running — skip"; exit 0; }
 
@@ -148,7 +150,22 @@ fi
 [ -n "$dock" ] || { log "no authorized dock within 20s — exit"; remember_not_egpu; exit 0; }
 log "dock authorized: $dock"
 
+# Keep the tunnel ports awake BEFORE looking for the GPU (see pin-tunnel-ports in the helper).
+"$PRIV" pin-tunnel-ports on 2>/dev/null | while read -r _l; do log "tunnel port: $_l"; done
 gpu=$(find_gpu || true)
+if [ -z "$gpu" ]; then
+  # Gentle first. A card that was just powered on needs longer to train its link than one that was
+  # already warm, and the step below — de-authorizing the Thunderbolt device — is a cable pull done
+  # in software, on a root port whose fatal-error bits cannot be masked. Doing that to a card in the
+  # middle of link training is the most likely cause of the resets seen at plug-in. With the ports
+  # pinned awake, a plain rescan is usually all that was missing. If the GPU is already there
+  # (the normal case), none of this runs.
+  log "no GPU yet — tunnel ports pinned awake; waiting up to 24s with gentle rescans before anything drastic"
+  for _g in $(seq 1 8); do
+    echo 1 > /sys/bus/pci/rescan 2>/dev/null; sleep 3
+    gpu=$(find_gpu || true); [ -n "$gpu" ] && { log "GPU appeared after a gentle rescan (~$((_g*3))s) — no re-authorization needed"; break; }
+  done
+fi
 if [ -z "$gpu" ]; then
   log "no GPU yet — clear DPC (status+trigger) + reauth + rescan"
   clear_dpc
@@ -365,6 +382,23 @@ pin_link_speed "$gpu"
 /usr/local/sbin/egpu-safe-detach --restore >/dev/null 2>&1 || true
 mask_surprise_down "$gpu"
 log "GPU $gpu healthy (cfg=$cfg) — load driver + display stack"
+# Config space answering is not proof the card can be driven: the driver talks to it through BAR0,
+# and a BAR that the kernel has assigned but the HARDWARE register does not hold (lspci marks it
+# "[virtual]") decodes nothing — every read fails and the driver reports the GPU has "fallen off
+# the bus". Seen on an RTX 3080. Compare the two and say so, so the cause is in the log.
+_bar_hw=$(setpci -s "${gpu#0000:}" BASE_ADDRESS_0 2>/dev/null)
+_bar_kn=$(awk 'NR==1{print $1}' "$GDEV/resource" 2>/dev/null)
+_bar_hw_addr=$(( 0x${_bar_hw:-0} & ~0xf ))
+if [ -n "$_bar_kn" ] && [ "$_bar_hw_addr" -ne "$(( _bar_kn ))" ]; then
+  log "BAR0 MISMATCH: hardware holds 0x$(printf %x "$_bar_hw_addr"), the kernel assigned $_bar_kn — the card cannot decode MMIO like this"
+  log "re-enumerating the GPU function so the kernel programs its BARs again"
+  echo 1 > "$GDEV/remove" 2>/dev/null; sleep 1; echo 1 > /sys/bus/pci/rescan 2>/dev/null
+  for _ in $(seq 1 15); do [ -e "$GDEV" ] && break; sleep 1; done
+  _bar_hw=$(setpci -s "${gpu#0000:}" BASE_ADDRESS_0 2>/dev/null)
+  log "after re-enumeration: hardware BAR0=0x${_bar_hw:-?} kernel=$(awk 'NR==1{print $1}' "$GDEV/resource" 2>/dev/null)"
+else
+  log "BAR0 programmed in hardware (0x$(printf %x "$_bar_hw_addr")) — MMIO should decode"
+fi
 # a refusal or a failed load must be visible in the log (it used to be discarded, which hid a refused display stack)
 _pv(){ local o; o=$("$PRIV" "$@" 2>&1) || log "helper $*: ${o:-failed}"; }
 _pv load-nvidia

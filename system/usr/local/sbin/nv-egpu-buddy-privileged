@@ -272,6 +272,22 @@ case "$action" in
     [ "$#" -eq 0 ] || die "status takes no arguments"
     gpu_state
     ;;
+  pin-tunnel-ports)
+    # AMD USB4 tunnel root ports runtime-suspend while a Thunderbolt 5 (Intel JHL9480) device is
+    # connected, and the PCIe hierarchy behind them then fails to appear — documented on exactly
+    # this pairing (CachyOS/linux-cachyos#1057: root port 1022:14ef + JHL9480; forcing
+    # power/control=on "immediately restores enumeration"). Found by what the port IS (a host root
+    # port that is a USB4/Thunderbolt tunnel), not by device id. "auto" hands them back when the
+    # eGPU is gone, so a handheld on battery does not pay for it.
+    [ "$#" -eq 1 ] || die "pin-tunnel-ports takes on|auto"
+    case "$1" in on|auto) ;; *) die "pin-tunnel-ports takes on|auto" 2 ;; esac
+    for _ptp in $(lspci -Dn 2>/dev/null | awk '$1 ~ /^[0-9a-f]{4}:00:/ && $2 ~ /^0604:/ {print $1}'); do
+      lspci -s "$_ptp" 2>/dev/null | grep -qiE 'usb4|thunderbolt' || continue
+      [ -w "/sys/bus/pci/devices/$_ptp/power/control" ] || continue
+      echo "$1" > "/sys/bus/pci/devices/$_ptp/power/control" 2>/dev/null &&
+        printf '%s power/control=%s (was runtime %s)\n' "$_ptp" "$1" "$(cat "/sys/bus/pci/devices/$_ptp/power/runtime_status" 2>/dev/null)"
+    done
+    ;;
   mask-surprise-down)
     # Make a cable pull survivable. Root ports WITHOUT Downstream Port Containment answer a lost
     # link with an uncorrectable error, and this platform answers THAT with a data-fabric sync

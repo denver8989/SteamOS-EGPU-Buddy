@@ -18,7 +18,7 @@ LOG=/var/log/egpu-boot-enumerate.log
 # Written the first time a real NVIDIA eGPU is seen on this machine; gates the
 # bus-poking recovery below so it can never run on someone's plain dock.
 SEEN=/var/lib/nvegpu/egpu-seen
-log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>&1; }
+log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>&1; sync -d "$LOG" 2>/dev/null || true; }
 
 # The flood lockout that used to live here is gone: it refused to bring the eGPU up at boot
 # until the user ran egpu-rearm, which read as "the eGPU just stopped working". Unplugging the
@@ -68,6 +68,7 @@ clear_dpc_status(){   # clear any latched DPC containment status on the USB4 roo
 [ -e /etc/nv-egpu-buddy/skip-boot-enumerate ] && { log "skip flag present — bypassing"; exit 0; }
 log "=== boot-enumerate (lean) start ==="
 dock_present || { log "no TB dock — iGPU boot"; exit 0; }
+"$PRIV" pin-tunnel-ports on 2>/dev/null | while read -r _l; do log "tunnel port: $_l"; done
 
 gpu=$(find_gpu || true)
 # A Thunderbolt device is not an eGPU: docks, displays and storage enclosures all

@@ -204,5 +204,6 @@ rm -f "$DM"
 [ "$DECKY_WAS_UP" = 1 ] && ! systemctl is-active plugin_loader.service >/dev/null 2>&1 && { systemctl start plugin_loader.service >/dev/null 2>&1 || true; say "      Decky plugin loader restarted"; }
 runuser -u deck -- env $RUNENV bash -c 'pgrep -x plasmashell >/dev/null || (setsid plasmashell >/dev/null 2>&1 &)' 2>/dev/null
 audio_restore
+[ "$on_bus" = 0 ] && /usr/local/sbin/nv-egpu-buddy-privileged pin-tunnel-ports auto >/dev/null 2>&1
 [ "$on_bus" = 0 ] && say "DONE — safe to unplug. Re-attach WITHOUT replug: sudo egpu-reattach" \
                   || say "DONE — but GPU still on bus; do NOT unplug."
