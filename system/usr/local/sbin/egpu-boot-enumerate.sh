@@ -151,7 +151,11 @@ EOF
 # "GPU has a bound driver". Unbinding after the fact is worse than not binding at all, because the
 # driver's own remove path can reset the card and take the BAR request with it. Restored to 1
 # immediately after, and the driver is then loaded deliberately.
+# Restored by a trap as well as inline, because leaving this at 0 would stop the kernel binding a
+# driver to ANY pci device for the rest of the boot. Nothing may leave it off, including a failure
+# part-way through the block below.
 _autoprobe_was=$(cat /sys/bus/pci/drivers_autoprobe 2>/dev/null || echo 1)
+trap 'echo "${_autoprobe_was:-1}" > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true' EXIT HUP INT TERM
 echo 0 > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true
 if [ "$EGPU_SKIP_RESIZE" = 1 ]; then
   log "BAR resize skipped for this card (BAR1 left as the firmware set it)"
@@ -249,6 +253,7 @@ elif [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
 fi
 
 echo "${_autoprobe_was:-1}" > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true
+trap - EXIT HUP INT TERM
 log "eGPU at $gpu — load driver (FLR done, BAR1 $(bar1_mib "$gpu")MiB)"
 "$PRIV" load-nvidia >/dev/null 2>&1 || true
 [ -L "/sys/bus/pci/devices/$gpu/driver" ] || "$PRIV" bind-nvidia >/dev/null 2>&1 || true
