@@ -24,6 +24,25 @@ hid the 0.7.21 reinstall failure described below), Valve's real `pacman.conf`, r
 | OS-update keep-list, GRUB drop-in (as Valve's `grub-mkconfig` sources it) | written; resulting command line contains the parameters |
 | Uninstall | nothing left: extension, build environment, keep-list, drop-in, units, scripts |
 
+## SteamOS: boot WITH the eGPU attached, end to end (0.7.46)
+
+Same Legion Go (the first one), SteamOS 3.8, kernel 6.16.12-valve24.5, RTX 5060 Ti in a Gigabyte AORUS TB5 box,
+5120x1440@144 ultrawide. 2026-09-20, read from the machine's own logs rather than reported by eye.
+
+| Verified on the device | Result |
+|---|---|
+| Boot with the eGPU attached, on the **second** USB4 port | Game Mode comes up on the monitor, handheld panel dark |
+| BAR1 at boot | `BAR1 resized while driverless -> 16384MiB` — the full bar, on the first path, no re-enumeration |
+| Surprise-removal protection | applied at boot (`uncorrectable errors masked`), not only on attach |
+| A monitor in standby at boot | answers the forced probe; the session lands on it |
+| Quiet boot, no boot menu | `quiet` and `splash` reach the kernel; 13 s from power to network |
+| The session stays up | past 3 minutes, where earlier builds tore it down at ~90 s |
+| Either USB4 port | both reach a full 16 GiB BAR1; the eGPU enumerates behind whichever root port is used |
+| Patched driver detection | read from the installed modules, not from a package SteamOS does not have |
+
+Not verified on this machine: a from-scratch install after a full uninstall (the next thing to test), and anything on
+hardware other than the two handhelds named here.
+
 ## SteamOS: tested on a real device (0.7.23)
 
 Legion Go (the first one), SteamOS 3.8, kernel 6.16.12-valve24.5, RTX 5060 Ti in a Gigabyte AORUS TB5 box, Acer X49 V

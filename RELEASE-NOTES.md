@@ -1,3 +1,24 @@
+0.7.48 — the first build proven end to end on SteamOS, booting with the eGPU attached.
+
+This is the release to use. Everything before it has at least one of the faults fixed in the last few versions, and
+several of them are the kind that leave a handheld with no screen.
+
+Read from a Legion Go (the first one) on SteamOS 3.8, from the machine's own logs:
+
+    root port 0000:00:03.1: uncorrectable errors masked      (unplug protection, at boot)
+    BAR1 resized while driverless -> 16384MiB                (the full bar, first attempt)
+    eGPU output card1-DP-9 answered the probe
+    [surprise recovery] skip                                 (triggered, and correctly stood down)
+
+- boots with the eGPU attached, on either USB4 port, straight into Game Mode on the monitor at 5120x1440@144 with HDR
+- full 16 GiB BAR1 at boot, not 256 MiB
+- handheld panel dark while the picture is on the monitor
+- quiet boot, no boot menu, 13 seconds from power to network
+- the session stays up, where earlier builds tore it down about ninety seconds in
+- a monitor left in standby is found and driven
+
+What is still not verified, and is the next thing to test: a from-scratch install after a full uninstall.
+
 0.7.47 — stop telling SteamOS users their driver is unpatched when it is not.
 
 The installer ended with "patched driver not installed. Without it a cable yank can hang the compositor" on machines
