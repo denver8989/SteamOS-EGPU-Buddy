@@ -5,6 +5,7 @@ Talks only to the NV-EGPU-Buddy system helpers; no Go Hub, no LACT daemon.
 import asyncio
 import hashlib
 import json
+import glob
 import os
 import pwd
 import re
@@ -24,7 +25,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.68"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.69"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -344,7 +345,7 @@ def _cmdline_reboot_needed():
     return _sh(["/usr/local/sbin/egpu-kernel-cmdline", "--check"], 5)[0] != 0
 
 
-def _setup_worker(action, with_driver=False, version=None):
+def _setup_worker(action, with_driver=False, version=None, vendor="nvidia"):
     env = _clean_env(EGPU_TARGET_USER=USER, HOME=USER_HOME, EGPU_AUTO_YES="1", EGPU_ACCEPT_UNTESTED="1" if _accepted() else "0")
     ro = shutil.which("steamos-readonly")
     try:
@@ -360,7 +361,11 @@ def _setup_worker(action, with_driver=False, version=None):
             env.update(EGPU_COMPONENTS=comps, EGPU_PREBUILT_GAMESCOPE=f"{SYSDIR}/prebuilt/gamescope-gbm")
             if ro: subprocess.run([ro, "disable"], env=_clean_env())
             _slog("running install.sh", 6)
-            rc = _run_logged(["bash", f"{SYSDIR}/install.sh"], env, SYSDIR)
+            # An AMD (or Intel) eGPU skips the two NVIDIA-only components: the patched nvidia-open
+            # build, which is the long part of an install, and the GBM-scanout gamescope, which only
+            # exists to fix the NVIDIA scan-out corruption. Everything else is vendor-neutral.
+            _argv = ["bash", f"{SYSDIR}/install.sh"] + (["--amd"] if vendor == "amd" else [])
+            rc = _run_logged(_argv, env, SYSDIR)
             if ro: subprocess.run([ro, "enable"], env=_clean_env())
         else:
             if not os.path.exists(f"{SYSDIR}/uninstall.sh"):
@@ -413,7 +418,7 @@ def _unsupported():
     return ""
 
 
-def _start_setup(action, with_driver=False, version=None):
+def _start_setup(action, with_driver=False, version=None, vendor="nvidia"):
     if action == "install" and _unsupported():
         return {"ok": False, "message": _unsupported()}
     if action == "install" and _untested() and not _accepted():
@@ -425,7 +430,7 @@ def _start_setup(action, with_driver=False, version=None):
         os.replace(SETUP_LOG, SETUP_LOG + ".prev")   # the previous run stays readable: a retry must not erase the first failure
     except OSError:
         pass
-    threading.Thread(target=_setup_worker, args=(action, with_driver, version), daemon=True).start()
+    threading.Thread(target=_setup_worker, args=(action, with_driver, version, vendor), daemon=True).start()
     return {"ok": True, "message": f"{action} started"}
 
 
@@ -579,8 +584,32 @@ class Plugin:
     async def reboot_system(self):
         subprocess.Popen(["systemctl", "reboot"], env=_clean_env()); return {"ok": True, "message": "Rebooting"}
 
-    async def install_system(self, with_driver: bool = False):
-        return _start_setup("install", bool(with_driver))
+    async def install_system(self, with_driver: bool = False, vendor: str = "nvidia"):
+        return _start_setup("install", bool(with_driver), vendor=(vendor if vendor in ("nvidia", "amd") else "nvidia"))
+
+    async def detected_gpu_vendor(self):
+        """Which eGPU is plugged in, so the page can offer the right install. Vendor-neutral:
+        a display-class PCI device that is not the one driving the built-in panel."""
+        try:
+            internal = ""
+            for c in glob.glob("/sys/class/drm/card*-eDP-*"):
+                internal = os.path.basename(os.path.realpath(os.path.join(c.rsplit("-eDP-", 1)[0], "device")))
+                break
+            for d in sorted(glob.glob("/sys/bus/pci/devices/*")):
+                if os.path.basename(d) == internal:
+                    continue
+                try:
+                    cls = open(os.path.join(d, "class")).read().strip()
+                    ven = open(os.path.join(d, "vendor")).read().strip()
+                except OSError:
+                    continue
+                if not cls.startswith(("0x0300", "0x0302", "0x0380")):
+                    continue
+                return {"ok": True, "vendor": {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}.get(ven, ven),
+                        "bdf": os.path.basename(d)}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+        return {"ok": True, "vendor": ""}
 
     async def accept_untested(self):
         d = _settings(); d["accepted_untested"] = True; _save_settings(d); return {"ok": True, "message": "accepted"}

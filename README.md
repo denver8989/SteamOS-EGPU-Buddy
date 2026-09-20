@@ -36,6 +36,32 @@ PCI device id (`0x22xx`–`0x25xx`, the GA10x desktop line), so the mechanism co
 card from each family has actually been tested, the RTX 3080 and the RTX 5060 Ti. Ada (RTX 40) has never
 been on the bench; it falls through to the default path, which may or may not suit it.
 
+### AMD / Intel eGPUs — experimental, testers wanted
+
+An AMD or Intel eGPU needs neither of the two NVIDIA-only pieces: the patched `nvidia-open` build (the
+long part of an install — several minutes of compiling) and the GBM-scanout gamescope, which exists
+solely to fix the NVIDIA scan-out corruption and does nothing on Mesa. Everything else this project does
+is vendor-neutral and still applies:
+
+- hot-plug attach in Game Mode and on the Desktop
+- safe detach, and recovery from a surprise cable pull
+- the session landing back where it started, with the built-in panel re-enabled
+- audio following the eGPU output and coming back on detach
+- the Decky plugin, the desktop app and the boot policy
+
+Install it from the Decky plugin with **"Install for an AMD / Intel eGPU (skip the NVIDIA driver)"**, or
+from a terminal:
+
+```
+./install.sh --amd
+```
+
+**This has never been run on real AMD or Intel eGPU hardware.** The non-NVIDIA attach/detach path
+(`egpu-generic`, udev rule 96) was written from the kernel's behaviour, not from a bench. It is kept
+completely separate from the NVIDIA path, so it cannot affect a working NVIDIA install — but it is
+unproven, and that is exactly why it is in the beta. If you have an AMD or Intel eGPU, reports are very
+welcome: what attached, what did not, and the contents of `/var/log/egpu-generic.log`.
+
 ### What has been tested, per rig
 
 | Behaviour | RTX 5060 Ti | RTX 3080 |

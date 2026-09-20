@@ -24,6 +24,16 @@ Verified on that rig in one session:
 No benchmarks or performance figures are recorded for any rig: what is tracked here is whether the eGPU attaches,
 renders, survives a cable pull and comes back.
 
+## AMD / Intel eGPU: NOT tested
+
+The non-NVIDIA path (`/usr/local/sbin/egpu-generic`, udev rule `96-egpu-generic.rules`) and the
+`./install.sh --amd` mode have **never been run on real hardware**. They were written from the kernel's
+behaviour: the Mesa driver is shared with the built-in GPU, so nothing is loaded or unloaded, and there
+is no BAR resize, link pin or FLR. It is a separate code path that the NVIDIA rules never enter, so it
+cannot affect a working NVIDIA install - but nothing about it is proven.
+
+If you try it, `/var/log/egpu-generic.log` is the file to attach to a report.
+
 ## Earlier: the reference rig
 
 Legion Go 2 + RTX 5060 Ti eGPU + 5120×1440 DisplayPort monitor, CachyOS Deckify, nvidia-open 610.57.04. Exercised

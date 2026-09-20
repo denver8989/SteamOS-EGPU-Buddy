@@ -29,8 +29,17 @@ umkdir(){ if [ "$AS_ROOT" = 1 ]; then runuser -u "$USER_NAME" -- mkdir -p "$@"; 
 uown(){ [ "$AS_ROOT" = 1 ] && chown -R "$USER_NAME" "$@" 2>/dev/null || true; }
 COMPONENTS=${EGPU_COMPONENTS:-core,session,gamescope,decky,bootpolicy,desktopapp}
 MODE=install
-for a in "$@"; do case "$a" in --check) MODE=check;; --with-driver) COMPONENTS="$COMPONENTS,driver";; --no-gamescope) COMPONENTS=${COMPONENTS//gamescope/};; *) echo "unknown option $a"; exit 1;; esac; done
+# --amd: an AMD (or Intel) eGPU. Skips the two NVIDIA-only components - the patched nvidia-open driver
+# build, which is the long part of an install, and the GBM-scanout gamescope, which exists only to fix
+# the NVIDIA scan-out corruption and does nothing on Mesa. Everything that makes this project useful is
+# vendor-neutral and still installed: hot-plug attach, safe detach, surprise-removal recovery, the
+# session fallback, audio follow, the Decky plugin and the desktop app.
+GPU_VENDOR=${EGPU_GPU_VENDOR:-nvidia}
+for a in "$@"; do case "$a" in --check) MODE=check;; --amd|--no-nvidia) GPU_VENDOR=amd;; --with-driver) COMPONENTS="$COMPONENTS,driver";; --no-gamescope) COMPONENTS=${COMPONENTS//gamescope/};; *) echo "unknown option $a"; exit 1;; esac; done
 want(){ case ",$COMPONENTS," in *",$1,"*) return 0;; *) return 1;; esac; }
+if [ "$GPU_VENDOR" = amd ]; then
+  COMPONENTS=$(printf '%s' "$COMPONENTS" | tr ',' '\n' | grep -vxE 'gamescope|driver' | paste -sd, -)
+fi
 say(){ printf '\033[1m%s\033[0m\n' "$*"; }
 
 # ---- preflight -----------------------------------------------------------------------------------
@@ -69,7 +78,7 @@ if [ "$MODE" = install ] && command -v pacman-key >/dev/null 2>&1 && ! sudo pacm
 fi
 # SteamOS only: the driver step builds everything in a build root on /home, and the distro packages (3.8: 575.64.05,
 # ~1.4 GB) neither fit the 5 GB system partition nor match the tested driver. Every other distro keeps its own packages.
-if ! { want driver && command -v steamos-readonly >/dev/null 2>&1; } && ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
+if [ "$GPU_VENDOR" != amd ] && ! { want driver && command -v steamos-readonly >/dev/null 2>&1; } && ! command -v nvidia-smi >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1 && [ "$MODE" = install ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "NVIDIA packages are missing. Install nvidia-open-dkms + nvidia-utils now with pacman? [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
   if [ "$yes" = 1 ]; then say "== installing nvidia-open-dkms nvidia-utils lib32-nvidia-utils"; sudo pacman -S --needed --noconfirm nvidia-open-dkms nvidia-utils lib32-nvidia-utils || echo "warning: NVIDIA package install failed; install them by hand"; else echo "warning: no nvidia-smi; install nvidia-open-dkms + nvidia-utils before plugging the eGPU in"; fi
 fi
@@ -178,7 +187,7 @@ cd '$SYS_TMP'; find . -type f | while read -r f; do d=\"\${f#.}\"; mkdir -p \"\$
 rm -f /etc/sudoers.d/steamos-egpu-buddy   # pre-0.7.23 name: sorted BEFORE /etc/sudoers.d/wheel, which then outranked it
 [ -f /etc/sudoers.d/zz-steamos-egpu-buddy ] && { chmod 0440 /etc/sudoers.d/zz-steamos-egpu-buddy; visudo -cf /etc/sudoers.d/zz-steamos-egpu-buddy >/dev/null; }
 chmod 0755 /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* /usr/local/bin/nv-egpu-offset-helper 2>/dev/null || true
-mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/version
+mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/version; echo '$GPU_VENDOR' > /etc/nv-egpu-buddy/gpu-vendor
 # reloads are conveniences (a reboot applies everything); they have nothing to talk to in a chroot/container
 udevadm control --reload >/dev/null 2>&1 || true; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
 systemctl daemon-reload >/dev/null 2>&1 || true
