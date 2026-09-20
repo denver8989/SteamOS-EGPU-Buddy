@@ -286,8 +286,12 @@ EGPU_SKIP_LINKPIN=0; EGPU_SKIP_REBAR=0; EGPU_SKIP_FLR=0
 # and this one logged nothing at all while the steps it was meant to skip ran anyway
 log "card check: gpu='${gpu:-unset}' id=$(cat "/sys/bus/pci/devices/${gpu:-none}/device" 2>/dev/null || echo unreadable)"
 if egpu_is_ampere_consumer "$gpu"; then
-  EGPU_SKIP_LINKPIN=0; EGPU_PIN_CORRECTED=1; EGPU_SKIP_REBAR=1; EGPU_SKIP_FLR=1
-  log "RTX 30 series (GA10x): lean bring-up — no FLR, no ReBAR, corrected Gen3 link pin"
+  # ReBAR is back ON for this card. It was disabled when a resize before the driver load left the
+  # GPU rendering black, and the fix for that is already below (re-enumerate after a real resize).
+  # The boot path now reaches a full 16GiB BAR1 on this same card, and a hot-plug is a BETTER case
+  # than boot: the tunnel link is never reset, so the card keeps whatever BAR it is told to ask for.
+  EGPU_SKIP_LINKPIN=0; EGPU_PIN_CORRECTED=1; EGPU_SKIP_REBAR=0; EGPU_SKIP_FLR=1
+  log "RTX 30 series (GA10x): lean bring-up — no FLR, ReBAR attempted, corrected Gen3 link pin"
 fi
 if [ ! -L "$GDEV/driver" ] && [ "$EGPU_SKIP_FLR" = 1 ]; then
   # The FLR is what leaves this card decoding nothing: config space still reads, but every MMIO
@@ -308,6 +312,14 @@ fi
 # it to 256M); (2) after a real resize, remove + rescan the GPU once and FLR it again, so the driver loads on a freshly
 # enumerated device exactly like the working path. About two seconds, no session involved.
 _bar1_bytes(){ stat -c %s "$GDEV/resource1" 2>/dev/null || echo 0; }
+# Nothing may bind the card while its BAR is being changed. udev autoloads nvidia as soon as the
+# device appears and it wins the race BETWEEN the steps below, which silently turns the resize and
+# the re-enumeration into no-ops (the tell is kernel messages reading "nvidia 0000:..: BAR 1 ..."
+# instead of "pci 0000:..."). Restored by trap as well as inline: leaving this at 0 would stop the
+# kernel binding a driver to ANY pci device.
+_autoprobe_was=$(cat /sys/bus/pci/drivers_autoprobe 2>/dev/null || echo 1)
+trap 'echo "${_autoprobe_was:-1}" > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true' EXIT HUP INT TERM
+echo 0 > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true
 if [ "${EGPU_SKIP_REBAR:-0}" = 1 ]; then
   log "ReBAR skipped for this card"
 elif [ ! -e /etc/nv-egpu-buddy/no-rebar ] && [ "$(_bar1_bytes)" -ge 17179869184 ]; then
@@ -343,7 +355,38 @@ elif [ ! -e /etc/nv-egpu-buddy/no-rebar ]; then
     if   "$PRIV" resize 14 >/dev/null 2>&1; then log "BAR1 -> 16GB (ReBAR on: gaming aperture)"
     elif "$PRIV" resize 13 >/dev/null 2>&1; then log "BAR1 -> 8GB (16G refused)"
     elif "$PRIV" resize 12 >/dev/null 2>&1; then log "BAR1 -> 4GB (8G refused)"
-    else log "BAR1 resize failed — staying 256M (siblings may not have freed)"; fi
+    else
+      # The kernel refuses with ENOSPC when the bridge window above the card cannot hold the new
+      # BAR, and it will not grow that window on its own: it sizes it around what the card is
+      # CURRENTLY asking for. So tell the card to ask for its largest BAR (rebar-set writes the
+      # Resizable BAR control register directly) and hand the switch's downstream ports back so the
+      # kernel lays the whole range out in one pass with the big BAR in view. "port" mode keeps the
+      # switch — and the tunnel link — up, which is what stops the card losing the request.
+      log "BAR1 resize refused by the kernel — asking the card directly and re-enumerating the ports"
+      _max=$("$PRIV" resize-max 2>/dev/null); _max=${_max:-14}
+      if _rset=$("$PRIV" rebar-set "$_max" 2>&1); then
+        log "  $_rset"
+        if _rout=$("$PRIV" reenumerate-tunnel port 2>&1); then
+          printf '%s\n' "$_rout" | while read -r _rl; do [ -n "$_rl" ] && log "  re-enum: $_rl"; done
+          for _ in $(seq 1 20); do [ -e "$GDEV/config" ] && break; sleep 1; done
+          for _ in $(seq 1 15); do [ "$(_bar1_bytes)" -gt 0 ] && break; sleep 1; done
+          log "after re-enumeration: BAR1 $(( $(_bar1_bytes) / 1048576 ))MiB"
+          # a BAR that could not be placed at all is worse than the stock one: put the request back
+          if [ "$(_bar1_bytes)" -lt 536870912 ]; then
+            log "the kernel could not place the large BAR — restoring the stock request"
+            "$PRIV" rebar-set 8 >/dev/null 2>&1 || true
+            "$PRIV" reenumerate-tunnel port >/dev/null 2>&1 || true
+            for _ in $(seq 1 20); do [ -e "$GDEV/config" ] && break; sleep 1; done
+            log "restored: BAR1 $(( $(_bar1_bytes) / 1048576 ))MiB"
+          fi
+        else
+          log "port re-enumeration refused: ${_rout:-no reason given} — restoring the stock request"
+          "$PRIV" rebar-set 8 >/dev/null 2>&1 || true
+        fi
+      else
+        log "could not set the BAR1 request directly: ${_rset:-no reason given}"
+      fi
+    fi
     if [ "$(_bar1_bytes)" -ge 4294967296 ]; then
       log "re-enumerating the GPU after the resize (fresh device for the driver)"
       # the removal below is ours, not a cable yank: the surprise recovery honours this marker and stays out
@@ -361,6 +404,9 @@ elif [ ! -e /etc/nv-egpu-buddy/no-rebar ]; then
   fi
 fi
 
+
+echo "${_autoprobe_was:-1}" > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true
+trap - EXIT HUP INT TERM
 
 # --- ROOT-CAUSE FIX: PIN THE LINK SPEED (2026-08-20) --------------------------
 # The tunnelled link's HARDWARE-AUTONOMOUS Gen3<->Gen4 renegotiation is what drops
