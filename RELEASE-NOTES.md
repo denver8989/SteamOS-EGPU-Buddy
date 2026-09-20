@@ -1,3 +1,22 @@
+0.7.65 — flood protection covers the whole path, and the RTX 30 series gets a lean bring-up.
+
+**Surprise-removal protection was only masking the root port.** The hardware accepts just some of the
+mask bits there (we write ffffffff, the port keeps 035dd010) and leaves errors in UESvrt fatal — and the Thunderbolt
+switch ports between the root port and the GPU were never touched at all, so an error raised on the path still reached
+the fabric as fatal. A machine took a data-fabric sync flood — an instant hard reset — while the root port was
+"protected".
+
+Every bridge from the GPU up to the root port is masked now, plus the GPU itself. On a real machine the two switch
+ports come back with **UESvrt=00000000**: nothing raised there can escalate to fatal.
+
+**RTX 30 series (GA10x) gets a lean bring-up**, in both the attach hook and the boot path: no FLR, no BAR resize, no
+link pin. Each of those was measured killing an RTX 3080 attach — the link pin dropped the link outright, and the FLR
+left the card answering config space while every MMIO read failed, which the driver reports as "fallen off the bus".
+
+**Scoped by PCI id (0x22xx-0x25xx) on purpose.** Blackwell — including the RTX 5060 Ti this project was built and
+tested with — Ada and Turing do not match and keep exactly the behaviour they were verified with. Same driver for every
+card; no second driver stack.
+
 0.7.64 — BAR1 size comes from the card, not from the one this was developed on.
 
 The boot path asked for a 16 GiB BAR1 and accepted nothing else — correct for the 16 GB card it was written against,

@@ -85,13 +85,32 @@ mkdir -p "$(dirname "$SEEN")" 2>/dev/null && : > "$SEEN" 2>/dev/null || true
 # soon as the eGPU is known to be there, so an unplug is survivable from that moment on.
 "$PRIV" mask-surprise-down 2>/dev/null | while read -r _l; do log "$_l"; done
 
+# ---- per-card quirks (same gate as the attach hook) --------------------------------------------
+# Scoped to Ampere consumer ids (0x22xx-0x25xx = GA10x, RTX 30 series). Blackwell (the 5060 Ti this
+# was built with, 0x2d04), Ada and Turing do not match and keep exactly the behaviour they were
+# tested with. On a 3080 the FLR and the BAR resize leave the card answering config space but
+# nothing on MMIO — the driver then reports it has "fallen off the bus".
+egpu_is_ampere_consumer(){
+  local id; id=$(cat "/sys/bus/pci/devices/$1/device" 2>/dev/null)
+  case "$id" in 0x22??|0x23??|0x24??|0x25??) return 0 ;; esac
+  return 1
+}
+EGPU_SKIP_FLR=0; EGPU_SKIP_RESIZE=0
+log "card check: gpu='${gpu:-unset}' id=$(cat "/sys/bus/pci/devices/${gpu:-none}/device" 2>/dev/null || echo unreadable)"
+if egpu_is_ampere_consumer "$gpu"; then
+  EGPU_SKIP_FLR=1; EGPU_SKIP_RESIZE=1
+  log "RTX 30 series (GA10x): lean boot bring-up — no FLR, no BAR resize"
+fi
+
 # FLR while driverless — NOT ReBAR. The manual egpu-attach.sh (the path that produced the known-good
 # June captures: sane 154W power reading, GPU boosting) always did this; the lean boot path skipped it.
 # The helper documents FLR as clearing "host-side first-init residue". A GPU inited without it carries
 # stale state — and a stale/garbage POWER CALIBRATION is exactly the fault we're chasing (driver reports
 # a fixed ~425W offset -> permanent SW power cap -> core clock clamped to 210MHz minimum, 2026-07-12).
 # FLR only. ReBAR stays OFF (it wedges RmInitAdapter on this Strix Halo + RTX 3080).
-if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ]; then
+if [ "$EGPU_SKIP_FLR" = 1 ]; then
+  log "FLR skipped for this card"
+elif [ ! -L "/sys/bus/pci/devices/$gpu/driver" ]; then
   if "$PRIV" reset-gpu >/dev/null 2>&1; then log "FLR done (clears first-init residue)"
   else log "FLR unavailable — continuing"; fi
 fi
@@ -111,7 +130,9 @@ try:
 except Exception: print(0)
 EOF
 }
-if [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
+if [ "$EGPU_SKIP_RESIZE" = 1 ]; then
+  log "BAR resize skipped for this card (BAR1 left as the firmware set it)"
+elif [ ! -L "/sys/bus/pci/devices/$gpu/driver" ] && [ -e "/sys/bus/pci/devices/$gpu/resource1_resize" ]; then
   # 16GiB or nothing. A PARTIAL resize is worse than none: on a real machine 4GiB was accepted and
   # then the driver would not create a DRM card at all, so a boot that used to work at 256MiB
   # ended with no eGPU. The sizes in between buy little and cost that risk.

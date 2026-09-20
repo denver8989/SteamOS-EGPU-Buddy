@@ -186,6 +186,22 @@ if [ "$cfg" = "ffffffff" ] || [ "$(cat /sys/bus/pci/devices/$gpu/current_link_wi
 fi
 GDEV=/sys/bus/pci/devices/$gpu
 
+# ---- per-card quirks ---------------------------------------------------------------------------
+# SEGMENTED ON PURPOSE: this changes nothing for the card this project was built and tested with.
+# The tuning below (ReBAR to 16GB, pinning the link to Gen3) was measured on an RTX 5060 Ti (0x2d04)
+# in an AORUS TB5 box. On an RTX 3080 (GA102, 0x2206) the same steps killed the attach: the link
+# pin dropped the link (width 63), and the driver then reported the GPU had "fallen off the bus and
+# is not responding to commands". This project's own notes record the same wedge from the Ampere era.
+#
+# Matched by PCI device id, Ampere consumer range only (0x22xx-0x25xx = GA10x, the RTX 30 series).
+# Ada (0x26xx-0x28xx) and Blackwell (0x2bxx-0x2dxx, including the 5060 Ti) do not match and keep the
+# exact behaviour they were tested with.
+egpu_is_ampere_consumer(){
+  local id; id=$(cat "/sys/bus/pci/devices/$1/device" 2>/dev/null)
+  case "$id" in 0x22??|0x23??|0x24??|0x25??) return 0 ;; esac
+  return 1
+}
+
 # ---- ReBAR / BAR1 -> 16GB : GAMING fix, HOTPLUG PATH ONLY --------------------------------------
 # WHY: with the default 256M BAR1 the CPU sees only a 256M window into ~10GB of VRAM. A game with
 # ~6GB resident (measured: DOOM = 5932MB, BAR1 176/256MB pinned) re-maps that aperture constantly
@@ -211,7 +227,21 @@ if [ -L "$GDEV/driver" ] && [ -e /run/nvegpu/surprise-pending ]; then
   _aud="${gpu%.*}.1"; [ -L "/sys/bus/pci/devices/$_aud/driver" ] && echo "$_aud" > "/sys/bus/pci/devices/$_aud/driver/unbind" 2>/dev/null
   echo "$gpu" > "$GDEV/driver/unbind" 2>/dev/null; sleep 2; rm -f /run/nvegpu/surprise-pending
 fi
-if [ ! -L "$GDEV/driver" ]; then
+# Decide the card's quirks before anything touches it (see egpu_is_ampere_consumer).
+EGPU_SKIP_LINKPIN=0; EGPU_SKIP_REBAR=0; EGPU_SKIP_FLR=0
+# say what was detected, every time: a quirk that silently does not fire is worse than no quirk,
+# and this one logged nothing at all while the steps it was meant to skip ran anyway
+log "card check: gpu='${gpu:-unset}' id=$(cat "/sys/bus/pci/devices/${gpu:-none}/device" 2>/dev/null || echo unreadable)"
+if egpu_is_ampere_consumer "$gpu"; then
+  EGPU_SKIP_LINKPIN=1; EGPU_SKIP_REBAR=1; EGPU_SKIP_FLR=1
+  log "RTX 30 series (GA10x): lean bring-up — no FLR, no ReBAR, no link pin"
+fi
+if [ ! -L "$GDEV/driver" ] && [ "$EGPU_SKIP_FLR" = 1 ]; then
+  # The FLR is what leaves this card decoding nothing: config space still reads, but every MMIO
+  # read fails and the driver reports the GPU has "fallen off the bus". This project's own notes
+  # from the Ampere era say the same thing — a lean load inits clean, FLR and ReBAR do not.
+  log "FLR skipped for this card (it stops the card answering on MMIO)"
+elif [ ! -L "$GDEV/driver" ]; then
   if "$PRIV" reset-gpu >/dev/null 2>&1; then log "FLR done (clears first-init residue)"
   else log "FLR unavailable — continuing"; fi
 else
@@ -225,7 +255,9 @@ fi
 # it to 256M); (2) after a real resize, remove + rescan the GPU once and FLR it again, so the driver loads on a freshly
 # enumerated device exactly like the working path. About two seconds, no session involved.
 _bar1_bytes(){ stat -c %s "$GDEV/resource1" 2>/dev/null || echo 0; }
-if [ ! -e /etc/nv-egpu-buddy/no-rebar ] && [ "$(_bar1_bytes)" -ge 17179869184 ]; then
+if [ "${EGPU_SKIP_REBAR:-0}" = 1 ]; then
+  log "ReBAR skipped for this card"
+elif [ ! -e /etc/nv-egpu-buddy/no-rebar ] && [ "$(_bar1_bytes)" -ge 17179869184 ]; then
   log "BAR1 already 16GB — resize block skipped"
 elif [ ! -e /etc/nv-egpu-buddy/no-rebar ]; then
   cfg0(){ xxd -l4 "$1/config" 2>/dev/null | awk '{print $2$3}'; }
@@ -270,7 +302,7 @@ elif [ ! -e /etc/nv-egpu-buddy/no-rebar ]; then
       sleep 2; rm -f /run/nvegpu/gm-detach-pending /run/nvegpu/surprise-pending
       if [ -e "$GDEV/config" ]; then
         log "GPU back, BAR1=$(( $(_bar1_bytes) / 1048576 ))MiB"
-        [ -L "$GDEV/driver" ] || { "$PRIV" reset-gpu >/dev/null 2>&1 && log "FLR done (after re-enumeration)"; }
+        [ -L "$GDEV/driver" ] || [ "${EGPU_SKIP_FLR:-0}" = 1 ] || { "$PRIV" reset-gpu >/dev/null 2>&1 && log "FLR done (after re-enumeration)"; }
       else log "GPU did not come back after the re-enumeration — exit"; exit 0; fi
     fi
   fi
@@ -285,6 +317,8 @@ fi
 # driver loads, so no renegotiation can ever happen while the GPU is live.
 # Tune: echo 2 > /etc/nv-egpu-buddy/link-gen   (Gen2 if Gen3 still floods)
 pin_link_speed(){
+  # skipped for the cards whose link does not survive it (see egpu_is_ampere_consumer)
+  [ "${EGPU_SKIP_LINKPIN:-0}" = 1 ] && { log "LINK-PIN: skipped for this card"; return 0; }
   local gpu_full=$1 gen bridge gpu_s bridge_s
   gen=$(cat /etc/nv-egpu-buddy/link-gen 2>/dev/null || echo 3)
   case "$gen" in 1|2|3|4|5) ;; *) gen=3 ;; esac
@@ -306,6 +340,23 @@ pin_link_speed(){
   sleep 0.5
   log "LINK-PIN: $bridge_s + $gpu_s pinned to Gen$gen, autonomous speed change DISABLED, ASPM/L1SS off"
   log "LINK-PIN: $(lspci -vv -s "$gpu_s" 2>/dev/null | grep -oE 'LnkSta:.*' | head -1)"
+  # Verify the link SURVIVED the pin. These settings were tuned for one card; on an RTX 3080 the same
+  # retrain dropped the link (width reads 63 = down), the GPU then read as a zombie and every driver
+  # step was refused — an attach that failed completely because of a tuning tweak. If the link is
+  # gone, undo the pin, let the hardware negotiate freely and retrain again.
+  _lp_w=$(cat "/sys/bus/pci/devices/$gpu_full/current_link_width" 2>/dev/null)
+  if [ "$_lp_w" = "63" ] || [ -z "$_lp_w" ] || [ "$_lp_w" = "0" ]; then
+    log "LINK-PIN: the link did not survive the pin (width=${_lp_w:-unreadable}) — reverting to hardware negotiation"
+    setpci -s "$bridge_s" CAP_EXP+30.w=0000 2>/dev/null || true
+    setpci -s "$gpu_s"    CAP_EXP+30.w=0000 2>/dev/null || true
+    setpci -s "$bridge_s" CAP_EXP+10.w=0020 2>/dev/null || true
+    for _lp_i in $(seq 1 10); do
+      sleep 1
+      _lp_w=$(cat "/sys/bus/pci/devices/$gpu_full/current_link_width" 2>/dev/null)
+      case "$_lp_w" in 1|2|4|8|16) break ;; esac
+    done
+    log "LINK-PIN: after reverting, link width=${_lp_w:-unreadable} ($(lspci -vv -s "$gpu_s" 2>/dev/null | grep -oE 'LnkSta:.*' | head -1))"
+  fi
 }
 pin_link_speed "$gpu"
 
