@@ -95,6 +95,17 @@ KC="$ROOT/system/usr/local/sbin/egpu-kernel-cmdline"
 if bash "$KC" --written >/dev/null 2>&1; then
   bash "$KC" --check >/dev/null 2>&1 || echo "note: the kernel parameters are written; they become active with the next reboot (before plugging the eGPU in)"
 else
+  # Most people install this with NOTHING plugged in, so "reboot before plugging it in" is not a detail -
+  # it is the whole safety story. The protections that stop a cable event taking the machine down (AER
+  # handling, ASPM, the Thunderbolt options) are KERNEL PARAMETERS: until the reboot they do not exist,
+  # and on an AMD host a PCIe event over the USB4 tunnel can reset the machine outright.
+  if [ -z "$(bash "$ROOT/system/usr/local/sbin/egpu-detect" 2>/dev/null)" ]; then
+    echo
+    echo "  *** DO NOT CONNECT THE eGPU UNTIL YOU HAVE REBOOTED ***"
+    echo "      The kernel parameters this install just wrote are what keep a cable event from resetting"
+    echo "      the machine. They are not active until the next boot, and no eGPU is connected right now."
+    echo
+  fi
   echo "note: the eGPU kernel parameters are not in the bootloader configuration yet; this install writes them (backup kept). Reboot BEFORE plugging the eGPU in."
   CMDLINE_MISSING=1
 fi

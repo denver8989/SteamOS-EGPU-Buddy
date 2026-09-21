@@ -18,7 +18,7 @@ const safeDetach = callable<[], Result>("safe_detach");
 const setPowerLimit = callable<[number], Result>("set_power_limit");
 const setCoreOffset = callable<[number], Result>("set_core_offset");
 const resetClocks = callable<[], Result>("reset_clocks");
-type Setup = { started?: number; expect?: string; driver_ready?: boolean; slow_build?: boolean; cmdline_pending?: boolean; untested?: string; accepted_untested?: boolean; installed_version: string; payload_version: string; needs_reboot: boolean; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
+type Setup = { started?: number; expect?: string; driver_ready?: boolean; slow_build?: boolean; cmdline_pending?: boolean; installed_vendor?: string; egpu_on_bus?: string; untested?: string; accepted_untested?: boolean; installed_version: string; payload_version: string; needs_reboot: boolean; helpers_present: boolean; busy: boolean; step: string; rc: number | null; progress: number; can_build_driver: boolean; cmdline_missing: string; unsupported: string; log: string };
 const getSetup = callable<[], Setup>("get_setup_status");
 const acceptUntested = callable<[], Result>("accept_untested");
 const installSystem = callable<[boolean, string?], Result>("install_system");
@@ -33,7 +33,7 @@ const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
-const PLUGIN_VERSION = "0.7.70";
+const PLUGIN_VERSION = "0.7.71";
 
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 // The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
@@ -140,7 +140,11 @@ function Content() {
             <>
               {su.needs_reboot ? (
                 <>
-                  <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Installed. One reboot activates the kernel parameters — the eGPU can stay plugged in.</div></PanelSectionRow>
+                  <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>
+                    {su.egpu_on_bus
+                      ? "Installed. One reboot activates the kernel parameters \u2014 the eGPU can stay plugged in."
+                      : "Installed. One reboot activates the kernel parameters. DO NOT CONNECT THE eGPU UNTIL AFTER THAT REBOOT \u2014 the protections that stop a cable event resetting the machine are kernel parameters, and they are not active yet."}
+                  </div></PanelSectionRow>
                   <PanelSectionRow><ButtonItem layout="below" onClick={() => run(rebootSystem)}>Reboot the system</ButtonItem></PanelSectionRow>
                 </>
               ) : (
@@ -254,6 +258,20 @@ function Content() {
               {confirmSetup === "install" ? "Press again to confirm install" : (su?.installed_version ? "Reinstall / update system integration" : "Install system integration")}
             </ButtonItem>
           </PanelSectionRow>
+            {su?.installed_vendor === "amd" && su?.egpu_on_bus === "nvidia" && (
+              <PanelSectionRow>
+                <div style={{ fontSize: "12px", color: "#ffb300" }}>
+                  An NVIDIA eGPU is connected, but this machine was set up with the AMD install, which skips the NVIDIA driver. Run the normal install above to add it.
+                </div>
+              </PanelSectionRow>
+            )}
+            {su?.installed_vendor !== "amd" && (su?.egpu_on_bus === "amd" || su?.egpu_on_bus === "intel") && (
+              <PanelSectionRow>
+                <div style={{ fontSize: "12px", color: "#ffb300" }}>
+                  A non-NVIDIA eGPU is connected. The NVIDIA driver this install built is not used by it \u2014 the button below re-runs the install without it.
+                </div>
+              </PanelSectionRow>
+            )}
             <PanelSectionRow>
               <ButtonItem
                 layout="below"

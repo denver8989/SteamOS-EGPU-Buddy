@@ -257,6 +257,23 @@ Re-attach. It is the stripped-down successor of the eGPU page from a private hub
 in this repository, has no side panel and no LACT dependency. GTK 4 + WebKitGTK 6.0 window when `python-gobject`
 provides them, otherwise it opens in your browser at `http://127.0.0.1:8772/`.
 
+## Before you connect anything
+
+**Install, reboot, *then* plug the eGPU in.** The protections that stop a cable event taking the whole
+machine down — AER handling, ASPM, the Thunderbolt options — are **kernel parameters**. They do not exist
+until the next boot. On an AMD host a PCIe event over the USB4 tunnel can trigger a *data fabric sync
+flood* (`0x08000800`), which resets the machine instantly with nothing in the logs, and that is exactly
+the class of event an unprotected first plug-in can produce.
+
+Almost everyone installs this with nothing connected, so it is not a footnote: the installer and the
+Decky page both say so explicitly when no eGPU is present, and the plugin will not tell you the eGPU
+"can stay plugged in" unless one already is.
+
+**Which install to choose when nothing is plugged in.** The AMD/Intel button only decides whether the
+NVIDIA driver is built — it is a choice, not a detection, and it can be changed later by running the
+other install. If the card you eventually connect does not match what you chose, the plugin says so and
+points at the right button.
+
 ## Install
 
 **SteamOS note.** The `deck` account normally has no password, and without one `sudo` cannot work. The Decky plugin

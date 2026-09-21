@@ -25,7 +25,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.70"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.71"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -266,6 +266,37 @@ def _slog(msg, progress=None):
 
 def _notify(text):
     d = _settings(); d["notice"] = text; _save_settings(d)
+
+
+def _installed_vendor():
+    """Which install was chosen: 'amd' skips the NVIDIA driver. Nothing was connected at install
+    time for most people, so this is a CHOICE, not a detection, and it can turn out to be wrong."""
+    try:
+        return open("/etc/nv-egpu-buddy/gpu-vendor").read().strip() or "nvidia"
+    except OSError:
+        return "nvidia"
+
+
+def _egpu_on_bus():
+    """A display-class PCI device that is not the one driving the built-in panel."""
+    try:
+        internal = ""
+        for c in glob.glob("/sys/class/drm/card*-eDP-*"):
+            internal = os.path.basename(os.path.realpath(os.path.join(c.rsplit("-eDP-", 1)[0], "device")))
+            break
+        for d in sorted(glob.glob("/sys/bus/pci/devices/*")):
+            if os.path.basename(d) == internal:
+                continue
+            try:
+                cls = open(os.path.join(d, "class")).read().strip()
+                ven = open(os.path.join(d, "vendor")).read().strip()
+            except OSError:
+                continue
+            if cls.startswith(("0x0300", "0x0302", "0x0380")):
+                return {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}.get(ven, ven)
+    except Exception:
+        pass
+    return ""
 
 
 def _driver_ready():
@@ -561,6 +592,7 @@ class Plugin:
                 "helpers_present": os.path.exists(PRIV) and os.path.exists(DETACH),
                 "busy": _setup["busy"], "step": _setup["step"], "rc": _setup["rc"], "progress": _setup["progress"],
                 "started": _setup["started"], "expect": _expect(), "driver_ready": _driver_ready(),
+                "installed_vendor": _installed_vendor(), "egpu_on_bus": _egpu_on_bus(),
                 "can_build_driver": bool(shutil.which("pacman")), "slow_build": bool(shutil.which("steamos-readonly")), "log": tail}
 
     async def pop_notice(self):
