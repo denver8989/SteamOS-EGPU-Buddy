@@ -25,7 +25,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.71"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.72"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -619,29 +619,6 @@ class Plugin:
     async def install_system(self, with_driver: bool = False, vendor: str = "nvidia"):
         return _start_setup("install", bool(with_driver), vendor=(vendor if vendor in ("nvidia", "amd") else "nvidia"))
 
-    async def detected_gpu_vendor(self):
-        """Which eGPU is plugged in, so the page can offer the right install. Vendor-neutral:
-        a display-class PCI device that is not the one driving the built-in panel."""
-        try:
-            internal = ""
-            for c in glob.glob("/sys/class/drm/card*-eDP-*"):
-                internal = os.path.basename(os.path.realpath(os.path.join(c.rsplit("-eDP-", 1)[0], "device")))
-                break
-            for d in sorted(glob.glob("/sys/bus/pci/devices/*")):
-                if os.path.basename(d) == internal:
-                    continue
-                try:
-                    cls = open(os.path.join(d, "class")).read().strip()
-                    ven = open(os.path.join(d, "vendor")).read().strip()
-                except OSError:
-                    continue
-                if not cls.startswith(("0x0300", "0x0302", "0x0380")):
-                    continue
-                return {"ok": True, "vendor": {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}.get(ven, ven),
-                        "bdf": os.path.basename(d)}
-        except Exception as e:
-            return {"ok": False, "message": str(e)}
-        return {"ok": True, "vendor": ""}
 
     async def accept_untested(self):
         d = _settings(); d["accepted_untested"] = True; _save_settings(d); return {"ok": True, "message": "accepted"}

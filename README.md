@@ -269,10 +269,13 @@ Almost everyone installs this with nothing connected, so it is not a footnote: t
 Decky page both say so explicitly when no eGPU is present, and the plugin will not tell you the eGPU
 "can stay plugged in" unless one already is.
 
-**Which install to choose when nothing is plugged in.** The AMD/Intel button only decides whether the
-NVIDIA driver is built — it is a choice, not a detection, and it can be changed later by running the
-other install. If the card you eventually connect does not match what you chose, the plugin says so and
-points at the right button.
+**The plugin asks which eGPU you will connect, before it installs anything.** That is deliberate: the
+whole point of this app is to be set up *in advance* so the eGPU mounts by itself when it is finally
+plugged in, which means there is usually nothing connected to detect. So it asks rather than guesses —
+two buttons, *NVIDIA eGPU (builds the driver)* and *AMD / Intel eGPU (no driver build)*. The choice only
+decides whether the NVIDIA driver is built, the eGPU does not need to be present, and running the other
+install later switches it. Detection is used only afterwards, to notice that the card you eventually
+connected does not match what you chose and to point at the right button.
 
 ## Install
 
