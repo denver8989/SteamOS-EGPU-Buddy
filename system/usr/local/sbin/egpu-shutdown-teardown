@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# egpu-shutdown-teardown — take the NVIDIA eGPU down on the way to power-off / reboot, the same way a detach does.
+#
+# Runs as the ExecStop of egpu-buddy-shutdown.service, ordered so it stops AFTER the display manager, the user
+# sessions (gamescope, Steam, PipeWire), Decky and bolt have gone, while the USB4 tunnel is still up. That is exactly
+# the state Game Mode detach reaches before it hands over to `egpu-safe-detach --teardown-only` (compositor already
+# off the eGPU), so this runs that same, proven teardown and nothing else: eGPU audio unbound (with its open-card
+# guard), /dev/nvidia* users released, the driver stack unloaded, the GPU functions PCI-removed, tunnel ports released.
+# No new teardown logic lives here.
+#
+# Why: nothing took the eGPU down at shutdown, and the kernel was left to shut it down behind a live tunnel. Reported
+# on a Legion Go 2 + RTX 5060 Ti (issue #1): it never powers off; the panel and the eGPU stay on.
+set -u
+LOG=/var/log/egpu-shutdown.log
+log(){ printf '%s %s\n' "$(date '+%F %T' 2>/dev/null)" "$*" >>"$LOG" 2>/dev/null; sync -d "$LOG" 2>/dev/null || true; }
+
+# Only on a real power-off / reboot / halt. A plain `systemctl stop` or a reinstall must never detach the eGPU.
+going_down(){
+  [ "$(systemctl is-system-running 2>/dev/null)" = stopping ] && return 0
+  systemctl list-jobs --no-legend 2>/dev/null | grep -qE '(poweroff|reboot|halt|kexec)\.target'
+}
+[ -e /etc/nv-egpu-buddy/skip-shutdown-teardown ] && { log "skip flag present — eGPU left to the kernel"; exit 0; }
+going_down || exit 0
+lspci -Dn 2>/dev/null | grep -qE ' 0300: 10de:' || exit 0
+
+log "=== shutdown: egpu-safe-detach --teardown-only ==="
+/usr/local/sbin/egpu-safe-detach --teardown-only >>"$LOG" 2>&1; rc=$?
+log "=== teardown rc=$rc; eGPU on bus: $(lspci -Dn 2>/dev/null | grep -cE ' 0300: 10de:') ==="
+# never fail the stop job: shutdown continues either way, and the log says what happened
+exit 0

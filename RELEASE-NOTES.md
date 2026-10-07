@@ -1,3 +1,21 @@
+0.7.73 — the machine powers off with the eGPU connected.
+
+Reported on a Legion Go 2 (Z2 Extreme) with an RTX 5060 Ti in an Aorus AI Box (issue #1): Shut Down never finished —
+the handheld panel and the eGPU stayed lit and only holding the power button turned it off.
+
+Nothing in this project took the eGPU down at power-off: the kernel was left to shut down the NVIDIA and HDMI-audio
+functions behind a live USB4 tunnel, with the tunnel ports pinned awake and their fatal errors masked. A new unit,
+`egpu-buddy-shutdown.service`, now runs the existing detach teardown on the way down — the same
+`egpu-safe-detach --teardown-only` that Game Mode's safe detach uses once the compositor is off the eGPU, which is
+exactly where shutdown is after the session and Decky have stopped. No new teardown code: audio unbound with its
+open-card guard, `/dev/nvidia*` released, driver unloaded, GPU PCI-removed, tunnel ports handed back.
+
+It only acts on a real power-off/reboot, never when the unit is stopped by hand, and systemd gives it at most 60 s.
+Log: `/var/log/egpu-shutdown.log`. Escape hatch: `sudo touch /etc/nv-egpu-buddy/skip-shutdown-teardown`.
+
+**Not tested on hardware yet** — built from the report, with no machine to hand. If shutdown still hangs, the log above
+says which step did not finish. The cold-boot hang on the Legion logo in the same report is not addressed here.
+
 0.7.67 — the RTX 3080 mounts. Same driver as the 5060 Ti, fully automatic, in a different enclosure.
 
 Verified on a Legion Go (SteamOS 3.8) with an RTX 3080 in an **Aoostar AG03**: plug in, and Game Mode comes up on the

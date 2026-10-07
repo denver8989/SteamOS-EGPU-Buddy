@@ -202,7 +202,9 @@ mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/ve
 # reloads are conveniences (a reboot applies everything); they have nothing to talk to in a chroot/container
 udevadm control --reload >/dev/null 2>&1 || true; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
 systemctl daemon-reload >/dev/null 2>&1 || true
-for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal egpu-buddy-resume; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
+for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal egpu-buddy-resume egpu-buddy-shutdown; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
+# the shutdown teardown only acts in its ExecStop: start it now so it already covers the next power-off (no reboot needed)
+systemctl start egpu-buddy-shutdown.service >/dev/null 2>&1 || true
 if [ -f /etc/pacman.conf ]; then
   # pin the NVIDIA userspace to the patched modules' version: append to an existing IgnorePkg line, never replace it
   for pk in nvidia-utils lib32-nvidia-utils opencl-nvidia lib32-opencl-nvidia; do
