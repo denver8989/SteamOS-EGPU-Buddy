@@ -27,6 +27,8 @@ jobs:
 
       - name: Check the version is new
         run: |
+          # only master is released: a test branch (e.g. update-resilience) must never be published by picking it here
+          [ "$GITHUB_REF_NAME" = master ] || { echo "::error::Releases are published from master only (this run is on $GITHUB_REF_NAME)."; exit 1; }
           VER=$(cat VERSION)
           echo "Publishing v$VER"
           if gh release view "v$VER" >/dev/null 2>&1; then
