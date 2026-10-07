@@ -1,0 +1,66 @@
+# Build and publish the release for the version in VERSION — runnable from the GitHub app, no PC needed.
+# Actions tab -> "Publish release" -> Run workflow. It refuses if that version is already released.
+# The prebuilt gamescope is not in git (binary), so it is taken from the newest published release's tarball.
+name: Publish release
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check the version is new
+        run: |
+          VER=$(cat VERSION)
+          echo "Publishing v$VER"
+          if gh release view "v$VER" >/dev/null 2>&1; then
+            echo "::error::v$VER is already released. Bump VERSION and add a RELEASE-NOTES.md section first."; exit 1
+          fi
+          python3 release-notes-for.py "$VER" RELEASE-NOTES.md > /dev/null
+
+      - name: Take the prebuilt gamescope from the latest release
+        run: |
+          PREV=$(gh release view --json tagName --jq .tagName)
+          echo "prebuilt from $PREV"
+          mkdir -p /tmp/prev
+          gh release download "$PREV" --pattern 'SteamOS-EGPU-Buddy-*.tar.gz' --dir /tmp/prev
+          tar -xzf /tmp/prev/SteamOS-EGPU-Buddy-*.tar.gz -C /tmp/prev
+          cp -a /tmp/prev/SteamOS-EGPU-Buddy-*/prebuilt .
+          test -x prebuilt/gamescope-gbm/usr/bin/gamescope
+
+      - name: Build
+        run: ./build-release.sh
+
+      - name: Check the artifacts before publishing
+        run: |
+          VER=$(cat VERSION)
+          test -s "dist/SteamOS-EGPU-Buddy-$VER.tar.gz"
+          test -s "dist/SteamOS-EGPU-Buddy-$VER.run"
+          unzip -l "dist/EGPU-Buddy-Decky-$VER.zip" | grep -q "payload/SteamOS-EGPU-Buddy-$VER.tar.gz"
+          unzip -l "dist/EGPU-Buddy-Decky-$VER.zip" | grep -q "EGPU-Buddy/dist/index.js"
+          tar -tzf "dist/SteamOS-EGPU-Buddy-$VER.tar.gz" | grep -q "prebuilt/gamescope-gbm/usr/bin/gamescope$"
+          cat dist/SHA256SUMS
+
+      - name: Publish
+        run: |
+          VER=$(cat VERSION); NAME="SteamOS-EGPU-Buddy-$VER"
+          python3 release-notes-for.py "$VER" RELEASE-NOTES.md > "dist/NOTES-$VER.md"
+          gh release create "v$VER" --target "$GITHUB_SHA" \
+            "dist/$NAME.run" "dist/$NAME.tar.gz" "dist/EGPU-Buddy-Decky-$VER.zip" dist/SHA256SUMS get-egpu-buddy.sh \
+            --title "SteamOS EGPU Buddy $VER" --notes-file "dist/NOTES-$VER.md"
