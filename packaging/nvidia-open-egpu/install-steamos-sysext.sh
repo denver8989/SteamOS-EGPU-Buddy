@@ -19,6 +19,7 @@
 # only the modules for the new kernel are built.
 #   install-steamos-sysext.sh            build (or rebuild for the running kernel) and activate
 #   install-steamos-sysext.sh --boot     re-activate at boot; rebuild for a new kernel (used by the self-heal service)
+#   install-steamos-sysext.sh --host-check  exit 1 when the OS changed since the image was packed (self-heal re-packs)
 #   install-steamos-sysext.sh --status   what is in place for the running kernel (exit 0 = driver usable)
 #   install-steamos-sysext.sh --remove   deactivate and delete everything this created
 set -euo pipefail
@@ -34,17 +35,38 @@ link_ext(){ mkdir -p /etc/extensions; rm -f /etc/extensions/$NAME; ln -sfn "$IMG
 # merging attaches the image to a loop device; a device that is still being released makes that fail once in a while
 merge(){ local i; for i in 1 2 3; do systemd-sysext refresh >/dev/null 2>&1 && break; sleep 2; done; ldconfig 2>/dev/null || true; }
 active(){ [ "$(readlink -f /etc/extensions/$NAME.raw 2>/dev/null)" = "$IMG" ] && ls "/usr/lib/modules/$K"/kernel/drivers/video/nvidia.ko* >/dev/null 2>&1 && [ -e /usr/lib/libnvidia-ml.so.1 ]; }
+# The userspace half of the image is "what the driver needs that the HOST does not have", so it is only right for the OS it
+# was packed on. An OS update that keeps the kernel would otherwise keep a stale set: a library the OS now ships shadowed by
+# our older copy, or one the OS dropped missing from both. The fingerprint is the host's package set; a change re-packs.
+host_fp(){ pacman -Q 2>/dev/null | sha256sum | cut -c1-16; }
+nv_loaded(){ lsmod 2>/dev/null | grep -q '^nvidia'; }
+# A re-packed image is swapped in only while no NVIDIA module is loaded (the swap un-merges the libraries from /usr). Built
+# while the eGPU was in use, it waits as $IMG.new and lands at the next boot, before the eGPU is brought up.
+apply_staged(){
+  [ -s "$IMG.new" ] && [ -s "$MANIFEST.new" ] || return 0
+  nv_loaded && return 0
+  rm -f /etc/extensions/$NAME /etc/extensions/$NAME.raw; systemd-sysext refresh >/dev/null 2>&1 || true
+  mv -f "$IMG.new" "$IMG"; mv -f "$MANIFEST.new" "$MANIFEST"; echo "staged driver extension swapped in"
+}
 
 case "${1:-}" in
   --status)
     echo "kernel: $K"; echo "extension image: $([ -s "$IMG" ] && echo present || echo absent)  userspace: $(sed -n 's/^userspace //p' "$MANIFEST" 2>/dev/null | grep . || echo none)"
     echo "modules for this kernel: $(have_modules && echo yes || echo NO)   merged into /usr: $(active && echo yes || echo NO)"
     active && have_modules; exit $? ;;
+  --host-check)   # exit 1 when the image was packed for a different OS (re-pack needed); an image from before the
+    # fingerprint existed ADOPTS the current one instead: it has been working, and nothing should rebuild it unasked
+    [ -s "$MANIFEST" ] || exit 0
+    if ! grep -q '^host ' "$MANIFEST"; then echo "host $(host_fp)" >> "$MANIFEST"; echo "fingerprint recorded"; exit 0; fi
+    [ "$(sed -n 's/^host //p' "$MANIFEST")" = "$(host_fp)" ] && exit 0
+    echo "the OS changed since the driver extension was packed"; exit 1 ;;
   --activate)   # fast, offline, never builds: merge what exists (first thing at boot)
+    apply_staged
     have_modules || { echo "no modules for kernel $K in the extension"; exit 4; }
     link_ext; merge
     active && { echo "driver extension active for $K"; exit 0; }; echo "extension present but not merged"; exit 9 ;;
   --boot)   # every boot (self-heal): re-activate what exists; rebuild only when the kernel changed
+    apply_staged
     if have_modules; then link_ext; merge
       active && { echo "driver extension active for $K"; exit 0; }; echo "extension present but not merged"; exit 9; fi
     [ -d "$BR" ] || { echo "no driver extension installed"; exit 0; }
@@ -78,6 +100,9 @@ else P -Sy >/dev/null 2>&1 || true; fi
 # headers of EXACTLY the running kernel: the repository database may have moved on to a newer build, but the mirror
 # keeps the older files, and modules only load when the headers match the running kernel to the letter
 if [ ! -f "$BR/usr/lib/modules/$K/build/Makefile" ]; then
+  say "new kernel: updating the build environment's toolchain"
+  P -Syu --ignore "nvidia-utils,lib32-nvidia-utils,opencl-nvidia,lib32-opencl-nvidia,nvidia-open-egpu,nvidia-open-egpu-dkms,${kpkg}-headers" >/dev/null 2>&1 \
+    || say "toolchain update failed; building with the existing one"
   hf="${kpkg}-headers-${kver}-x86_64.pkg.tar.zst"; got=""
   if [ ! -s "$CACHE/$hf" ]; then
     for repo in $(sed -n 's/^\[\(.*\)\]$/\1/p' "$BASE/pacman.conf" | grep -v '^options$'); do
@@ -158,9 +183,12 @@ fi
 
 # ---- 5. one image file, then activate --------------------------------------------------------------------------------
 say "packing the extension image"
-{ echo "userspace $PV"; for kd in "$SX.new"/usr/lib/modules/*/; do echo "kernel $(basename "$kd")"; done; } > "$MANIFEST.new"
+{ echo "userspace $PV"; for kd in "$SX.new"/usr/lib/modules/*/; do echo "kernel $(basename "$kd")"; done; echo "host $(host_fp)"; } > "$MANIFEST.new"
 rm -f "$IMG.new"; mksquashfs "$SX.new" "$IMG.new" -noappend -comp zstd -quiet -no-progress >/dev/null
 rm -rf "$SX.new"
+if [ "${EGPU_DEFER_SWAP:-0}" = 1 ] && nv_loaded; then
+  say "the NVIDIA driver is in use: the new extension is staged and swapped in at the next boot"; exit 0
+fi
 # unmerge before swapping the file that is loop-mounted
 rm -f /etc/extensions/$NAME /etc/extensions/$NAME.raw; systemd-sysext refresh >/dev/null 2>&1 || true
 mv -f "$IMG.new" "$IMG"; mv -f "$MANIFEST.new" "$MANIFEST"

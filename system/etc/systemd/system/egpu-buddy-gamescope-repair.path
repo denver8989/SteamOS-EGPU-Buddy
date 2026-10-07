@@ -1,0 +1,10 @@
+[Unit]
+Description=SteamOS EGPU Buddy: watch for the GBM-scanout gamescope being marked as crashing on this OS build
+
+[Path]
+# written by the session shim after three rapid gamescope restarts (PathModified: fires on each write, never loops)
+PathModified=/home/deck/.local/state/nv-egpu-buddy/gamescope-bad
+Unit=egpu-buddy-gamescope-repair.service
+
+[Install]
+WantedBy=paths.target

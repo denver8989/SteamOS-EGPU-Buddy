@@ -5,6 +5,11 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); VER=$(cat "$HERE/VERSION" 2>/dev/null || echo dev)
 USER_NAME=$(stat -c %U "$HERE"); log(){ logger -t egpu-buddy-selfheal "$*"; echo "$*"; }
+# in /var/log, not /tmp: /tmp is emptied at every reboot, and "why did the eGPU stop working after the update" is asked
+# after a reboot. Kept small: the previous log is kept as .1 once it passes 1 MB.
+SLOG=/var/log/egpu-buddy-selfheal.log
+[ "$(stat -c %s "$SLOG" 2>/dev/null || echo 0)" -gt 1048576 ] && mv -f "$SLOG" "$SLOG.1"
+echo "=== $(date '+%F %T') self-heal (payload $VER, kernel $(uname -r)) ===" >> "$SLOG"
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 ro=$(command -v steamos-readonly || true)
 # Older plugin versions kept their update backup INSIDE homebrew/plugins; Decky loads every folder there as a plugin and ran
@@ -28,30 +33,37 @@ if [ $need = 1 ]; then
     done
   fi
   EGPU_TARGET_USER=$USER_NAME EGPU_AUTO_YES=1 EGPU_COMPONENTS=core,session,gamescope,bootpolicy,desktopapp EGPU_PREBUILT_GAMESCOPE="$HERE/prebuilt/gamescope-gbm" \
-    EGPU_ACCEPT_UNTESTED=1 bash "$HERE/install.sh" >/tmp/egpu-buddy-selfheal.log 2>&1 && log "repair done" || log "repair reported errors (see /tmp/egpu-buddy-selfheal.log)"
+    EGPU_ACCEPT_UNTESTED=1 EGPU_DEFER_GAMESCOPE_BUILD=1 bash "$HERE/install.sh" >>$SLOG 2>&1 && log "repair done" || log "repair reported errors (see $SLOG)"
   [ -n "$ro" ] && $ro enable >/dev/null 2>&1
 fi
 # SteamOS: the driver is a system extension on /home (the 5 GB system partition cannot hold it). Re-activate it now;
 # when the OS update brought a new kernel, rebuild the modules for it in the background (needs the network, minutes).
 SX="$HERE/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
 if [ -n "$ro" ] && [ -x "$SX" ] && [ -d /home/.egpu-buddy ]; then
-  if bash "$SX" --activate >>/tmp/egpu-buddy-selfheal.log 2>&1; then log "driver extension active"
+  if bash "$SX" --activate >>$SLOG 2>&1; then log "driver extension active"
+    # same kernel, different OS: the NVIDIA userspace in the image may not fit the new OS any more. Re-pack it in the
+    # background (offline, about a minute: the modules are already built). The current image stays active meanwhile.
+    if ! bash "$SX" --host-check >>$SLOG 2>&1; then
+      log "OS changed since the driver extension was packed: re-packing it in the background"
+      systemd-run --quiet --collect --unit=egpu-buddy-driver-repack --property=TimeoutStartSec=3600 --setenv=EGPU_DEFER_SWAP=1 \
+        /bin/bash -c "bash '$SX' >>$SLOG 2>&1" || log "could not start the re-pack"
+    fi
   else
     log "driver extension has no modules for $(uname -r): rebuilding in the background"
     systemd-run --quiet --collect --unit=egpu-buddy-driver-build --property=TimeoutStartSec=5400 /bin/bash -c \
-      "for i in \$(seq 1 40); do curl -fsI --max-time 8 https://steamdeck-packages.steamos.cloud/ >/dev/null 2>&1 && break; sleep 30; done; bash '$SX' --boot >>/tmp/egpu-buddy-selfheal.log 2>&1; \
+      "for i in \$(seq 1 40); do curl -fsI --max-time 8 https://steamdeck-packages.steamos.cloud/ >/dev/null 2>&1 && break; sleep 30; done; EGPU_DEFER_SWAP=1 bash '$SX' --boot >>$SLOG 2>&1; \
        # the eGPU may have been plugged in WHILE the driver was building: the attach hook refused it \
        # then, and the user should not have to unplug and replug to finish what is now possible. \
        if modinfo -n nvidia >/dev/null 2>&1 && lspci -Dn 2>/dev/null | grep -qE '0300: 10de:'; then \
-         echo 'driver build finished with an eGPU connected: attaching' >>/tmp/egpu-buddy-selfheal.log; \
-         /usr/local/sbin/egpu-hotplug-mount.sh >>/tmp/egpu-buddy-selfheal.log 2>&1; fi" \
+         echo 'driver build finished with an eGPU connected: attaching' >>$SLOG; \
+         /usr/local/sbin/egpu-hotplug-mount.sh >>$SLOG 2>&1; fi" \
       || log "could not start the background rebuild"
   fi
 fi
 # patched driver package: restore from cache (done above) or rebuild from the payload's PKGBUILD (source cached)
 if [ -z "$ro" ] && command -v pacman >/dev/null 2>&1 && ! pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1 && [ -x "$HERE/packaging/nvidia-open-egpu/install-patched-nvidia.sh" ] && [ -f "/usr/lib/modules/$(uname -r)/build/Makefile" ]; then
   log "patched driver package missing: rebuilding from the payload"; [ -n "$ro" ] && $ro disable >/dev/null 2>&1
-  EGPU_TARGET_USER=$USER_NAME bash "$HERE/packaging/nvidia-open-egpu/install-patched-nvidia.sh" >>/tmp/egpu-buddy-selfheal.log 2>&1 && log "driver package rebuilt" || log "driver rebuild failed (see /tmp/egpu-buddy-selfheal.log)"
+  EGPU_TARGET_USER=$USER_NAME bash "$HERE/packaging/nvidia-open-egpu/install-patched-nvidia.sh" >>$SLOG 2>&1 && log "driver package rebuilt" || log "driver rebuild failed (see $SLOG)"
   [ -n "$ro" ] && $ro enable >/dev/null 2>&1
 fi
 # kernel modules for the running kernel: DKMS rebuild if possible, else the cached modules of this exact kernel
@@ -66,6 +78,12 @@ if [ -z "$ro" ] && { ! modinfo -n nvidia >/dev/null 2>&1 || [ ! -f "/usr/lib/mod
   else
     log "no patched NVIDIA modules for kernel $K and no way to build or restore them; the eGPU will not attach on this kernel"
   fi
+fi
+# SteamOS: the GBM-scanout gamescope (the NVIDIA picture-corruption fix) must still run on this OS. If it cannot, or it
+# kept crashing on this OS build, rebuild it in the background: egpu-gamescope-repair decides, builds at most once per OS
+# build, and reloads Game Mode onto it when no game is running. Never in the boot path: the build takes 10-15 minutes.
+if [ -n "$ro" ] && [ -x /usr/local/sbin/egpu-gamescope-repair ] && /usr/local/sbin/egpu-gamescope-repair --needed >>$SLOG 2>&1; then
+  systemctl start --no-block egpu-buddy-gamescope-repair.service >/dev/null 2>&1 && log "GBM-scanout gamescope needs a rebuild for this OS: started in the background"
 fi
 # kernel parameters (bootloader config may have been regenerated)
 if ! /usr/local/sbin/egpu-kernel-cmdline --check >/dev/null 2>&1; then

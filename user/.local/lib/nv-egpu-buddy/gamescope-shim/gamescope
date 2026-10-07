@@ -103,6 +103,33 @@ if [ "$gamescope_bin" != /usr/bin/gamescope ] && { [ ! -x "$gamescope_bin" ] || 
   gamescope_bin=/usr/bin/gamescope
   unset gamescope_drm_gbm_scanout
 fi
+# Crash-loop guard. The check above only catches a build that cannot START. One that starts and then exits at once (an
+# OS or Steam update it does not fit) made the session restart over and over. Three starts of the private build each
+# within 20 s of the last one = it is crashing: mark it bad for THIS OS build + THIS binary and use the stock gamescope.
+# The mark is what egpu-buddy-gamescope-repair.path watches (rebuild + reload). A rebuilt or updated binary, or a new OS
+# build, no longer matches the mark, so the private build gets a fresh chance. Normal sessions start once and are untouched.
+if [ "$gamescope_bin" != /usr/bin/gamescope ]; then
+  _gs_state=/home/deck/.local/state/nv-egpu-buddy; _gs_bad=$_gs_state/gamescope-bad
+  _gs_os=$( (. /etc/os-release 2>/dev/null; printf '%s' "${BUILD_ID:-${VERSION_ID:-}}") )-$(uname -r)
+  _gs_id="$_gs_os $(stat -c %Y:%s "$gamescope_bin" 2>/dev/null || echo ?)"
+  if [ "$(cat "$_gs_bad" 2>/dev/null || true)" = "$_gs_id" ]; then
+    echo "nv-egpu-gamescope-shim: $gamescope_bin is marked as crashing on this OS build, using /usr/bin/gamescope" >&2
+    gamescope_bin=/usr/bin/gamescope; unset gamescope_drm_gbm_scanout
+  else
+    _gs_starts=${XDG_RUNTIME_DIR:-/tmp}/nv-egpu-buddy-gamescope-starts; _gs_now=$(date +%s)
+    _gs_recent=$( { tail -n 2 "$_gs_starts" 2>/dev/null || true; echo "$_gs_now"; } | tr '\n' ' ')
+    printf '%s\n' "$_gs_now" >> "$_gs_starts" 2>/dev/null || true
+    read -r _a _b _c _ <<<"$_gs_recent" || true
+    case "${_a:-x}${_b:-x}${_c:-x}" in *[!0-9]*) _c="" ;; esac   # anything unexpected in the file: no decision
+    if [ -n "${_c:-}" ] && [ $((_b - _a)) -lt 20 ] && [ $((_c - _b)) -lt 20 ] 2>/dev/null; then
+      mkdir -p "$_gs_state" 2>/dev/null || true
+      printf '%s\n' "$_gs_id" > "$_gs_bad" 2>/dev/null || true
+      : > "$_gs_starts" 2>/dev/null || true
+      echo "nv-egpu-gamescope-shim: $gamescope_bin restarted 3 times within 40 s; marked as crashing on this OS build, using /usr/bin/gamescope" >&2
+      gamescope_bin=/usr/bin/gamescope; unset gamescope_drm_gbm_scanout
+    fi
+  fi
+fi
 # A gamescope with file capabilities (the distro's: cap_sys_nice) runs the Vulkan loader in "secure" mode, which IGNORES
 # VK_DRIVER_FILES / VK_ICD_FILENAMES: the session's NVIDIA-only routing never reaches it and it composites on the built-in
 # GPU and opens ITS display node (seen on SteamOS, where the private build cannot run). A command-line option cannot be

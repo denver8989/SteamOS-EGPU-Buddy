@@ -1,3 +1,34 @@
+0.7.74 — staying working through SteamOS updates and channel switches (UNTESTED — branch only until tested on a device).
+
+An audit of what happens to the eGPU setup when SteamOS updates, or when Game Mode is switched from Stable to Beta,
+found five ways it could quietly stop working. Each fix reuses what the project already does; nothing that works today
+changes behaviour unless the situation it covers actually happens.
+
+- **The display fix can no longer crash-loop Game Mode.** The GBM-scanout gamescope was only replaced by Valve's when
+  it could not start at all. One that starts and exits at once (an OS or Steam update it does not fit) made Game Mode
+  restart over and over. Three restarts within 40 s now mark it as crashing on that OS build, and Valve's gamescope is
+  used instead, so Game Mode comes back.
+- **...and it repairs itself.** When the private gamescope cannot run on a new OS, or was marked as crashing,
+  `egpu-gamescope-repair` rebuilds it in the background with the existing on-device build (once per OS build), then
+  reloads Game Mode onto it through the existing Attach path, only when no game is running. Before, a self-heal after
+  an update could run that 10-15 minute build at BOOT, in front of the login screen.
+- **The driver's NVIDIA libraries follow the OS.** The driver extension carries the NVIDIA libraries SteamOS does not
+  have, worked out when it was packed, but it was only re-packed when the kernel changed. It now records which OS it was
+  packed for and re-packs in the background when that changes (about a minute, nothing to download). A new image is
+  never swapped in while the eGPU is in use; it waits for the next boot. Existing installs adopt the current OS as-is.
+- **New kernels get a current compiler.** Before building the driver for a new kernel, the build environment's toolchain
+  is brought level with SteamOS's repositories (driver packages and kernel headers excluded). If that fails, the build
+  goes ahead as before.
+- **No unprotected bring-up after an update.** Plug-in attach already refused without the eGPU kernel parameters; the
+  boot-time bring-up now does too, on machines where they were active on an earlier boot. The handheld says why.
+- **Decky on SteamOS Beta.** A Steam beta client often stops stable Decky's UI from loading. When Decky's backend runs
+  but its UI has not loaded for 10 minutes of Game Mode, on a non-stable SteamOS channel, the plugin installs Decky's
+  newest pre-release with Decky's own installer: at most once a day, only if there is a newer one, with a full backup
+  that is put back if the new loader does not come up. `"decky_prerelease_repair": true/false` in
+  `~/.config/egpu-buddy/plugin.json` turns it on or off regardless of channel.
+- The self-heal log moved from `/tmp` (emptied at every reboot) to `/var/log/egpu-buddy-selfheal.log`. New logs:
+  `/var/log/egpu-gamescope-repair.log`, `/var/log/egpu-decky-repair.log`.
+
 0.7.73 — the machine powers off with the eGPU connected.
 
 Reported on a Legion Go 2 (Z2 Extreme) with an RTX 5060 Ti in an Aorus AI Box (issue #1): Shut Down never finished —

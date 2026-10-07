@@ -203,6 +203,8 @@ mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/ve
 udevadm control --reload >/dev/null 2>&1 || true; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
 systemctl daemon-reload >/dev/null 2>&1 || true
 for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal egpu-buddy-resume egpu-buddy-shutdown; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
+# watches for the session shim marking the GBM-scanout gamescope as crashing on this OS build (a .path unit, not a .service)
+[ -f /etc/systemd/system/egpu-buddy-gamescope-repair.path ] && systemctl enable --now egpu-buddy-gamescope-repair.path >/dev/null 2>&1 || true
 # the shutdown teardown only acts in its ExecStop: start it now so it already covers the next power-off (no reboot needed)
 systemctl start egpu-buddy-shutdown.service >/dev/null 2>&1 || true
 if [ -f /etc/pacman.conf ]; then
@@ -283,6 +285,7 @@ if [ "$MODE" = install ] && [ -d /etc/atomic-update.conf.d ]; then
 /etc/modules-load.d/egpu-thunderbolt.conf
 /etc/sudoers.d/zz-steamos-egpu-buddy
 /etc/nv-egpu-buddy/**
+/etc/systemd/system/egpu-buddy-gamescope-repair.path
 /etc/pacman.d/gnupg/**
 KEEP
 fi
@@ -317,7 +320,11 @@ fi
 
 # ---- gamescope built on the device (only when no shipped build runs here; needs the SteamOS build root from the driver step)
 if [ "${NEED_GAMESCOPE_BUILD:-0}" = 1 ]; then
-  if [ -x /home/.egpu-buddy/buildroot/usr/bin/makepkg ]; then
+  if [ "${EGPU_DEFER_GAMESCOPE_BUILD:-0}" = 1 ]; then
+    # the self-heal runs this at BOOT, before the login screen: a 10-15 minute build there is a 10-15 minute black screen.
+    # It hands the build to egpu-gamescope-repair instead, which runs in the background and reloads Game Mode when done.
+    say "== the GBM-scanout gamescope build is left to the background repair (not built during boot)"
+  elif [ -x /home/.egpu-buddy/buildroot/usr/bin/makepkg ]; then
     say "== building the GBM-scanout gamescope on this device (10-15 minutes, one time)"
     sudo bash "$ROOT/packaging/gamescope-gbm/build-steamos.sh" "$USER_NAME" || echo "warning: gamescope build failed; Game Mode on the eGPU will use the distro gamescope (picture corruption on NVIDIA above ~2560 px wide)"
   else echo "warning: no gamescope build for this system and no build environment; the distro gamescope is used (picture corruption on NVIDIA above ~2560 px wide)"; fi

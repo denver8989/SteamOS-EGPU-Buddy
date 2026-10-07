@@ -25,7 +25,7 @@ UID = pwd.getpwnam(USER).pw_uid
 PLUGIN_DIR = getattr(decky, "DECKY_PLUGIN_DIR", "") or os.path.dirname(os.path.abspath(__file__))
 RUNENV = {"XDG_RUNTIME_DIR": f"/run/user/{UID}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{UID}/bus"}
 # ---- system integration setup (the whole SteamOS-EGPU-Buddy install, driven from Game Mode) ----
-PAYLOAD_VERSION = "0.7.73"   # pinned by build-release.sh; the matching release tarball is fetched and verified
+PAYLOAD_VERSION = "0.7.74"   # pinned by build-release.sh; the matching release tarball is fetched and verified
 REPO = "denver8989/SteamOS-EGPU-Buddy"
 SYSDIR = f"{USER_HOME}/.local/share/steamos-egpu-buddy"
 SETUP_LOG = "/tmp/egpu-buddy-setup.log"
@@ -37,6 +37,36 @@ SETTINGS = f"{USER_HOME}/.config/egpu-buddy/plugin.json"
 PLUGIN_LIVE = f"{USER_HOME}/homebrew/plugins/EGPU-Buddy"
 _update = {"available": "", "state": "", "checked": 0.0, "last_error": ""}
 _started = time.time()
+# ---- Decky UI watchdog: Steam beta clients break stable Decky's UI injection while its backend (this) keeps running.
+# The plugin UI calls pop_notice every 5 s as soon as Decky loads it, panel open or not. Game Mode up for 10 minutes and
+# not one call = Decky's UI is not loading. On a SteamOS non-stable channel (or with the setting on), install Decky's
+# pre-release through its official installer (egpu-decky-prerelease: backup + automatic rollback). At most once a day, and
+# only when a newer pre-release than the installed loader exists. Setting "decky_prerelease_repair": true/false overrides.
+_decky_ui = {"seen": 0.0, "gs_since": 0.0}
+DECKY_REPAIR = "/usr/local/sbin/egpu-decky-prerelease"
+def _steamos_branch():
+    rc, out, _ = _sh(["steamos-select-branch", "-c"], 5) if shutil.which("steamos-select-branch") else (1, "", "")
+    return out.strip().split()[0].lower() if rc == 0 and out.strip() else ""
+def _decky_watchdog_tick():
+    if not os.path.exists(DECKY_REPAIR): return
+    if _decky_ui["seen"]: return                                   # the UI is loading: nothing to do
+    if not (_gamescope_running() and _proc_running("steam")): _decky_ui["gs_since"] = 0.0; return
+    now = time.time(); _decky_ui["gs_since"] = _decky_ui["gs_since"] or now
+    if now - _decky_ui["gs_since"] < 600 or now - _started < 600: return
+    d = _settings(); want = d.get("decky_prerelease_repair")
+    if want is None: want = _steamos_branch() not in ("", "rel", "stable")
+    if not want or now - d.get("decky_repair_last", 0) < 86400: return
+    installed = _read(f"{USER_HOME}/homebrew/services/.loader.version")
+    try:
+        rels = json.loads(_get("https://api.github.com/repos/SteamDeckHomebrew/decky-loader/releases", 20).decode())
+        tag = next((r.get("tag_name", "") for r in rels if r.get("prerelease")), "")
+    except Exception as ex:  # noqa: BLE001
+        decky.logger.info(f"decky watchdog: release check failed: {ex}"); return
+    d["decky_repair_last"] = now; _save_settings(d)
+    if not tag or tag == installed:
+        decky.logger.info(f"decky watchdog: UI not loading, but no newer pre-release than {installed or '?'}"); return
+    decky.logger.info(f"decky watchdog: Decky UI has not loaded for 10 min; installing pre-release {tag} (was {installed or '?'})")
+    _spawn_root_job("decky-prerelease", [DECKY_REPAIR])
 def _settings():
     try: return json.load(open(SETTINGS))
     except Exception: return {}
@@ -596,6 +626,7 @@ class Plugin:
                 "can_build_driver": bool(shutil.which("pacman")), "slow_build": bool(shutil.which("steamos-readonly")), "log": tail}
 
     async def pop_notice(self):
+        _decky_ui["seen"] = time.time()   # the plugin's UI polls this every 5 s from the moment Decky loads it
         d = _settings(); text = d.pop("notice", "")
         if text: _save_settings(d)
         return text
@@ -698,12 +729,20 @@ class Plugin:
         rc, out, err = _sh([PRIV, "reset-gpu-clocks"], 20)
         return {"ok": rc == 0, "message": (err or out)[-200:]}
 
+    def _decky_watchdog(self):
+        while True:
+            try: _decky_watchdog_tick()
+            except Exception as ex:  # noqa: BLE001
+                decky.logger.error(f"decky watchdog: {ex}")
+            time.sleep(60)
+
     async def _main(self):
         decky.logger.info("EGPU Buddy backend loaded")
         if os.path.realpath(PLUGIN_DIR) == os.path.realpath(PLUGIN_LIVE) and _drop_stray_plugin_copies():
             decky.logger.info("removed stray plugin copies from homebrew/plugins")
         await asyncio.sleep(8)
         threading.Thread(target=_continue_update, daemon=True).start()   # second half of a plugin-first update, if one is pending
+        threading.Thread(target=self._decky_watchdog, daemon=True).start()
         await asyncio.sleep(300)
         while True:  # automatic updates: hourly check; install only if enabled, already installed, and no game running
             try:

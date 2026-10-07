@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# egpu-gamescope-repair — keep the GBM-scanout gamescope (the NVIDIA scan-out corruption fix) working across SteamOS
+# updates and channel switches, with the pieces that already exist: build-steamos.sh builds it in the SteamOS build root,
+# egpu-gamemode-switch reloads Game Mode (it refuses while a game runs).
+#   egpu-gamescope-repair --needed   exit 0 when a rebuild is needed for this OS build (used by the self-heal at boot)
+#   egpu-gamescope-repair            rebuild if needed, then reload Game Mode onto it once no game is running
+# Started by: the self-heal (the private build cannot run on this OS), and egpu-buddy-gamescope-repair.path (the session
+# shim marked it as crashing on this OS build). Builds at most ONCE per OS build: if the rebuilt one still fails, Game
+# Mode stays on Valve's gamescope (working, but with the corruption) and the log says so - that needs a project update.
+set -u
+UH=/home/deck; LOG=/var/log/egpu-gamescope-repair.log
+PRIV=$UH/.local/gamescope-gbm/usr/bin/gamescope; BAD=$UH/.local/state/nv-egpu-buddy/gamescope-bad
+DONE=/var/lib/nvegpu/gamescope-rebuilt-for
+BUILD=$UH/.local/share/steamos-egpu-buddy/packaging/gamescope-gbm/build-steamos.sh
+BR=/home/.egpu-buddy/buildroot
+log(){ printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; echo "$*"; }
+os_id(){ ( . /etc/os-release 2>/dev/null; printf '%s' "${BUILD_ID:-${VERSION_ID:-}}" ); printf -- '-%s' "$(uname -r)"; }
+OS=$(os_id)
+
+reason(){
+  command -v steamos-readonly >/dev/null 2>&1 || return 1            # SteamOS only; other systems build it with the installer
+  [ -x "$BR/usr/bin/makepkg" ] && [ -f "$BUILD" ] || return 1         # no build root / payload: nothing this can do
+  [ "$(cat "$DONE" 2>/dev/null)" = "$OS" ] && return 1                # already rebuilt for this OS build
+  [ -x "$PRIV" ] || return 1                                          # never installed (e.g. --no-gamescope, AMD): not ours to add
+  if ldd "$PRIV" 2>/dev/null | grep -q 'not found'; then echo "cannot start on this OS (missing libraries)"; return 0; fi
+  case "$(cat "$BAD" 2>/dev/null)" in "$OS "*) echo "kept crashing on this OS build"; return 0 ;; esac
+  return 1
+}
+if [ "${1:-}" = --needed ]; then r=$(reason) || exit 1; echo "gamescope repair needed: $r"; exit 0; fi
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+r=$(reason) || { log "nothing to repair"; exit 0; }
+log "=== GBM-scanout gamescope: $r (OS $OS) ==="
+
+# never build over a binary that is running
+for g in $(pgrep -x 'gamescope(-wl)?'); do
+  [ "$(readlink -f /proc/$g/exe 2>/dev/null)" = "$(readlink -f "$PRIV" 2>/dev/null)" ] && { log "the private build is running; nothing to repair"; exit 0; }
+done
+# the driver build / re-pack use the same build root (pacman lock): wait for them
+for _ in $(seq 1 240); do
+  systemctl is-active --quiet egpu-buddy-driver-build.service egpu-buddy-driver-repack.service || break; sleep 30
+done
+for _ in $(seq 1 40); do curl -fsI --max-time 8 https://steamdeck-packages.steamos.cloud/ >/dev/null 2>&1 && break; sleep 30; done
+
+echo "$OS" > "$DONE"    # recorded BEFORE building: a build that hangs or fails is not retried in a loop on this OS build
+if ! bash "$BUILD" "$(stat -c %U "$UH")" >> "$LOG" 2>&1; then
+  log "rebuild failed: Game Mode keeps using Valve's gamescope on this OS build (NVIDIA picture corruption above ~2560 px)"; exit 0
+fi
+rm -f "$BAD"; log "rebuilt: $("$PRIV" --version 2>&1 | grep -o 'gamescope version [^ ]*' | head -1)"
+
+# reload Game Mode onto it - only when Game Mode is on the eGPU and fell back to Valve's gamescope, and no game runs
+for _ in $(seq 1 720); do
+  g=$(pgrep -n -x 'gamescope(-wl)?') || { log "Game Mode is not running; the rebuilt gamescope is used next time it starts"; exit 0; }
+  tr '\0' '\n' </proc/$g/environ 2>/dev/null | grep -qxF "NV_EGPU_BUDDY_GAMESCOPE_BIN=$PRIV" || { log "Game Mode is not on the eGPU; nothing to reload"; exit 0; }
+  [ "$(readlink -f /proc/$g/exe)" = "$(readlink -f "$PRIV")" ] && { log "already running the rebuilt gamescope"; exit 0; }
+  if ! pgrep -x reaper >/dev/null && [ ! -e /run/nvegpu/gm-attach-pending ] && ! grep -qE '"state":"(SWITCHING|DETACHING)"' /run/nvegpu/gm-status.json 2>/dev/null; then
+    log "no game running: reloading Game Mode onto the rebuilt gamescope"
+    /usr/local/sbin/egpu-gamemode-switch >> "$LOG" 2>&1 && log "reloaded" || log "reload did not complete (rc $?)"
+    exit 0
+  fi
+  sleep 30
+done
+log "a game kept running for 6 hours; the rebuilt gamescope is used the next time Game Mode starts"
