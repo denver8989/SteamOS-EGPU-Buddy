@@ -218,7 +218,7 @@ def _kwin_enable(conn, on):
 
 def watch():
     """Desktop (KWin) only - Game Mode picks its screens at attach (nv-egpu-buddy-mount)."""
-    names, last = set(), {}
+    names, last, ours = set(), {}, set()
     if subprocess.run(["which", "kscreen-doctor"], capture_output=True).returncode:
         print("no kscreen-doctor (not KDE Plasma): desktop screen rule off", flush=True); return
     while True:
@@ -231,6 +231,8 @@ def watch():
             if len(found) > 1:
                 for conn, bus, edid in found:
                     st = read(conn, bus, edid)[0]
+                    if st == "unknown" and conn in last:
+                        continue  # a read that failed this time is not news
                     if st == last.get(conn):
                         continue  # act on changes only, so a manual KDE change is never fought
                     last[conn] = st
@@ -238,9 +240,14 @@ def watch():
                     enabled = any(open(n).read().strip() == "enabled" for n in glob.glob(f"/sys/class/drm/card*-{conn}/enabled"))
                     others = [c for c, _, _ in found if c != conn and any(open(n).read().strip() == "enabled"
                               for n in glob.glob(f"/sys/class/drm/card*-{c}/enabled"))]
-                    if use != enabled and (use or others):  # never switch off the last lit screen
-                        print(f"{conn}: {st} -> {'enable' if use else 'disable'}", flush=True)
-                        _kwin_enable(conn, use)
+                    # Only ever undo our own change: re-enable a screen this watcher disabled, never one KDE (or
+                    # the user) turned off. A KDE-side output toggle on the eGPU can leave the link dark.
+                    if not use and enabled and others:  # never switch off the last lit screen
+                        print(f"{conn}: {st} -> disable", flush=True)
+                        _kwin_enable(conn, False); ours.add(conn)
+                    elif use and not enabled and conn in ours:
+                        print(f"{conn}: {st} -> enable (we disabled it)", flush=True)
+                        _kwin_enable(conn, True); ours.discard(conn)
         time.sleep(5)
 
 
