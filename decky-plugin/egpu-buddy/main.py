@@ -260,6 +260,41 @@ def _trial():
     return d
 
 
+# beta driver trial progress, read from its log the same way the install progress is: (line prefix, percent, label).
+# Percentages follow the measured 615 run on a Legion Go 2 (detach 40 s, compile 85 s / ~13,700 lines, DKMS 100 s, attach 15 s).
+TRIAL_STAGES = (("Safe Detach (", 3, "Safely detaching the eGPU"),
+    ("building the NVIDIA userspace nvidia-utils", 8, "Downloading NVIDIA's driver (about 530 MB) and packaging its libraries"),
+    ("building the NVIDIA userspace lib32", 22, "Packaging the 32-bit libraries"),
+    ("== creating the build environment", 10, "Downloading the build tools (SteamOS, 1.3 GB)"), ("== kernel headers:", 20, "Kernel headers downloaded"),
+    ("==> Making package: nvidia-open-egpu", 32, "Preparing the patched driver"), ("==> Starting prepare()", 34, "Applying the eGPU patches"),
+    ("==> Starting build()", 36, "Compiling the patched driver"), ("==> Finished making: nvidia-open-egpu", 60, "Installing the driver"),
+    ("==> dkms install", 64, "Building the modules for this kernel (1-2 minutes)"), ("installed: nvidia-open-egpu-dkms", 86, "Driver installed"),
+    ("== assembling the system extension", 80, "Collecting the driver files"), ("== packing the extension image", 84, "Packing the driver image"),
+    ("[attempting]", 88, "Attaching the eGPU with the beta driver"))
+TRIAL_REVERT = (("[reverting]", 10, "Putting the tested driver back"), ("Safe Detach (", 15, "Safely detaching the eGPU"),
+    ("==> dkms install", 40, "Rebuilding the tested driver's modules (1-2 minutes)"), ("the tested driver", 80, "Tested driver back; attaching the eGPU"))
+TRIAL_SPAN = {"==> Starting build()": (13700, 60)}
+
+
+def _trial_progress():
+    """(percent, label) of the trial in progress, from its log since the trial started."""
+    try:
+        lines = open(TRIAL_LOG, errors="replace").read().splitlines()
+    except OSError:
+        return 0, ""
+    start = max((i for i, l in enumerate(lines) if "==== beta driver trial" in l), default=0)
+    table, pct, label, span, base, n = TRIAL_STAGES, 0, "Starting", None, 0, 0
+    for l in lines[start:]:
+        body = l[20:] if l[:4].isdigit() else l   # strip the "YYYY-MM-DD HH:MM:SS " prefix the trial adds
+        if body.startswith("[reverting]"): table, pct, span = TRIAL_REVERT, 0, None
+        for marker, p, lab in table:
+            if body.startswith(marker):
+                pct, label, span, base, n = max(pct, p), lab, TRIAL_SPAN.get(marker), p, 0; break
+        else:
+            if span: n += 1; pct = max(pct, base + (span[1] - base) * min(n / span[0], 1.0))
+    return round(pct), label
+
+
 def _operation_in_progress():
     st = _json(GM_STATUS).get("state", "")
     return os.path.exists(GM_PENDING) or st in ("DETACHING", "SWITCHING") or _setup["busy"] or _game_running() or _trial()["running"]
@@ -708,7 +743,8 @@ class Plugin:
         except OSError: pass
         return {"available": bool(pv(beta)) and os.path.exists(TRIAL) and _installed_vendor() == "nvidia",
                 "beta": pv(beta), "tested": pv(tested), "installed": _sh(["modinfo", "-F", "version", "nvidia"], 5)[1],
-                "state": t.get("state", ""), "message": t.get("message", ""), "running": t["running"], "log": tail}
+                "state": t.get("state", ""), "message": t.get("message", ""), "running": t["running"], "log": tail,
+                "started": int(t.get("started", "0") or 0), "progress": _trial_progress()[0], "step": _trial_progress()[1]}
 
     async def start_driver_trial(self):
         if _trial()["running"]: return {"ok": False, "message": "A driver trial is already running."}

@@ -30,7 +30,7 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
-type Trial = { available: boolean; beta: string; tested: string; installed: string; state: string; message: string; running: boolean; log: string };
+type Trial = { available: boolean; beta: string; tested: string; installed: string; state: string; message: string; running: boolean; log: string; started: number; progress: number; step: string };
 const getTrial = callable<[], Trial>("get_driver_trial");
 const startTrial = callable<[], Result>("start_driver_trial");
 const revertTrial = callable<[], Result>("revert_driver_trial");
@@ -61,6 +61,34 @@ function stateLine(s: Status): string {
   if (s.game_mode) return s.on_egpu ? `Attached — Game Mode on ${s.output}` : "eGPU present — Game Mode on the handheld screen";
   return "eGPU present (Desktop)";
 }
+
+// Beta driver trial: a progress screen that opens by itself whenever Game Mode starts while a trial runs (it restarts
+// twice: onto the handheld at the Safe Detach, onto the monitor at the attach), and once more with the result.
+let trialOpen = false;
+const TRIAL_ACK = "egpu-buddy-trial-ack";
+const trialAcked = (st: number) => { try { return localStorage.getItem(TRIAL_ACK) === String(st); } catch { return false; } };
+const ackTrial = (st: number) => { try { localStorage.setItem(TRIAL_ACK, String(st)); } catch { /* private storage unavailable */ } };
+function TrialModal({ closeModal }: { closeModal?: () => void }) {
+  const [t, setT] = useState<Trial | null>(null);
+  useEffect(() => { let alive = true; const tick = async () => { try { const x = await getTrial(); if (alive) setT(x); } catch { /* backend restarting */ } };
+    tick(); const i = setInterval(tick, 1000); return () => { alive = false; clearInterval(i); }; }, []);
+  const done = !!t && !t.running;
+  const back = !!t && (t.state === "reverting" || t.state === "reverted");
+  const close = () => { trialOpen = false; if (done && t) ackTrial(t.started); closeModal?.(); };
+  return (
+    <ConfirmModal strTitle={!t ? "Beta driver" : back ? `Returning to the tested driver ${t.tested}` : `Installing beta driver ${t.beta}`}
+      strDescription={!t ? "…" : done
+        ? <div style={{ fontSize: "14px", color: t.state === "kept" ? "#4caf50" : t.state === "failed" ? "#ff6b6b" : "#f0b429" }}>{t.message}</div>
+        : <Progress pct={t.progress} title={back ? "Reverting" : "Installing"} step={t.step} started={t.started} expect={back ? "3-5 minutes" : "5-20 minutes"} />}
+      bAlertDialog strOKButtonText={done ? "OK" : "Working… (B hides this)"} bOKDisabled={!done} onOK={close} onCancel={close} closeModal={close} />
+  );
+}
+const maybeShowTrial = async () => {
+  if (trialOpen) return;
+  const t = await getTrial();
+  const recent = t.started && Date.now() / 1000 - t.started < 7200;
+  if (recent && (t.running || (["kept", "reverted", "failed"].includes(t.state) && !trialAcked(t.started)))) { trialOpen = true; showModal(<TrialModal />); }
+};
 
 function Content() {
   const visible = useQuickAccessVisible();
@@ -359,7 +387,8 @@ function Content() {
 
 export default definePlugin(() => {
   // the finish line must reach the user even when the menu was closed or Decky restarted (plugin update) meanwhile
-  const notices = setInterval(async () => { try { const t = await popNotice(); if (t) toaster.toast({ title: "EGPU Buddy", body: t, duration: 15000 }); } catch { /* backend not up yet */ } }, 5000);
+  const notices = setInterval(async () => { try { const t = await popNotice(); if (t) toaster.toast({ title: "EGPU Buddy", body: t, duration: 15000 }); } catch { /* backend not up yet */ }
+    try { await maybeShowTrial(); } catch { /* backend not up yet */ } }, 5000);
   return {
   name: "EGPU Buddy",
   title: <div className={staticClasses.Title}>EGPU Buddy</div>,
