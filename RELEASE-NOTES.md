@@ -1,3 +1,21 @@
+0.7.74 — try NVIDIA's newest driver (615.78.08) from Game Mode, and go back to the tested one with one button.
+
+**Beta driver (advanced).** Decky → Setup & updates → "Try beta driver 615.78.08". The eGPU is safely detached, NVIDIA's own
+615.78.08 files are downloaded from download.nvidia.com (about 530 MB, checked against pinned checksums), the same eGPU patches
+— ported to 615 — are applied and built on the device, and the eGPU is attached with it and checked. If it does not come up,
+the tested driver 610.57.04 is put back and attached again by itself. If the machine resets or hangs during the test, the
+tested driver is put back at the next boot, before the eGPU is used. "Return to the tested driver" goes back at any time.
+Nothing of the driver is in the plugin or the release: the download stays small. A progress screen opens by itself whenever
+Game Mode restarts during the install, and once with the result. Log: `/var/log/egpu-driver-trial.log`.
+
+Tested on a Legion Go 2 (CachyOS) with an RTX 5060 Ti in an Aorus AI Box: install from the button, a game, Safe Detach and
+Attach, standby, a real cable yank, Return to 610 and install again. **Not tested on SteamOS yet.**
+
+**Also:**
+- The power-off teardown from 0.7.73 now runs at the right moment: after the session and its sound server have stopped
+  (in 0.7.73 it ran before them and stopped at its own sound-card safety check). Still untested on SteamOS.
+- eGPU details: one line per row, shorter names ("RTX 5060 Ti", "eGPU HDMI 1").
+
 0.7.73 — the machine powers off with the eGPU connected.
 
 Reported on a Legion Go 2 (Z2 Extreme) with an RTX 5060 Ti in an Aorus AI Box (issue #1): Shut Down never finished —

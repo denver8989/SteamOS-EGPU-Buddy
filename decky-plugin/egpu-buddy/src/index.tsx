@@ -37,7 +37,7 @@ const revertTrial = callable<[], Result>("revert_driver_trial");
 const ackTrial = callable<[], Result>("ack_driver_trial");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
-const PLUGIN_VERSION = "0.7.73";
+const PLUGIN_VERSION = "0.7.74";
 
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 // The percentage follows real stages (and real compile output); the running clock shows it is alive between stage changes.
