@@ -23,14 +23,13 @@ going_down(){
 going_down || exit 0
 lspci -Dn 2>/dev/null | grep -qE ' 0300: 10de:' || exit 0
 
-# The power-off splash (plymouthd, started at the beginning of the shutdown) holds the eGPU's DRM node, and the teardown
-# refuses to pull a GPU that is still open ("/dev/nvidia* still held by: plymouthd", Legion Go 2, 2026-10-08). plymouth's
-# own deactivate makes the daemon close the display devices and wait; reactivate afterwards puts the splash back on
-# whatever GPU is left. Both are no-ops when no splash is running.
-plymouth deactivate >/dev/null 2>&1 || true
+# The power-off splash (plymouthd, started at the beginning of the shutdown) keeps the eGPU's DRM node open, and the
+# teardown refuses to pull a GPU that is still open ("/dev/nvidia* still held by: plymouthd", Legion Go 2, 2026-10-08).
+# `plymouth deactivate` was not enough (it only gives up control of the screen, the file stays open — tried 2026-10-08
+# 14:55). `quit --retain-splash` ends the daemon, which closes everything, and leaves the splash image on the screen.
+plymouth quit --retain-splash >/dev/null 2>&1 || true
 log "=== shutdown: egpu-safe-detach --teardown-only ==="
 /usr/local/sbin/egpu-safe-detach --teardown-only >>"$LOG" 2>&1; rc=$?
-plymouth reactivate >/dev/null 2>&1 || true
 log "=== teardown rc=$rc; eGPU on bus: $(lspci -Dn 2>/dev/null | grep -cE ' 0300: 10de:') ==="
 # never fail the stop job: shutdown continues either way, and the log says what happened
 exit 0
