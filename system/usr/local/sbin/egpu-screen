@@ -8,13 +8,13 @@
   egpu-screen settle            the only external screen? turn it on and onto our input
   egpu-screen watch             desktop session: settle on plug-in; with 2+ screens, leave a TV that is
                                 on another input (or off) out of the desktop until it is switched to us
-  egpu-screen lg-pair HOST      pair an LG webOS TV once (switch it to the eGPU HDMI first, accept the prompt)
 
-Successor of NV-EGPU-Buddy's egpu-hdmi-state.sh, generalized to DP, no ddcutil needed.
-Screens that don't speak DDC/CI (many TVs) read as "unknown" and are treated as in use,
-so nothing is ever hidden on a guess.
+Two cable standards, any brand: DDC/CI (monitors, some TVs; read directly, no ddcutil) and
+HDMI-CEC (TVs) through the kernel's /dev/cec* when the connection exposes it (AMD/Intel DP-CEC
+tunnelling on USB-C/DP->HDMI adapters, USB-CEC adapters; NVIDIA exposes none) via cec-ctl.
+A screen that answers neither reads "unknown" and is treated as in use - never hidden on a guess.
 """
-import base64, fcntl, glob, json, os, re, socket, ssl, sys, time
+import fcntl, glob, json, os, re, subprocess, sys, time
 
 I2C_SLAVE = 0x0703
 STORE = "/var/lib/nvegpu/screen-inputs.json"  # EDID -> input code seen while in use
@@ -76,168 +76,6 @@ def setvcp(n, code, value):
         return False
 
 
-# ---- LG webOS TVs (no DDC/CI over HDMI): network remote protocol, paired once ----
-LG_CONF = "/etc/nv-egpu-buddy/lgtv.json"  # {"host","mac","key","input","edid"}
-LG_SIG = ("eyJhbGdvcml0aG0iOiJSU0EtU0hBMjU2Iiwia2V5SWQiOiJ0ZXN0LXNpZ25pbmctY2VydCIsInNpZ25hdHVyZVZlcnNpb24iOjF9."
-          "hrVRgjCwXVvE2OOSpDZ58hR+59aFNwYDyjQgKk3auukd7pcegmE2CzPCa0bJ0ZsRAcKkCTJrWo5iDzNhMBWRyaMOv5zWSrthlf7G128qvIlpMT0YNY+n/"
-          "FaOHE73uLrS/g7swl3/qH/BGFG2Hu4RlL48eb3lLKqTt2xKHdCs6Cd4RMfJPYnzgvI4BNrFUKsjkcu+WD4OO2A27Pq1n50cMchmcaXadJhGrOqH5YmHdOCj5"
-          "NSHzJYrsW0HPlpuAx/ECMeIZYDh6RMqaFM2DXzdKX9NmmyqzJ3o/0lkk/N97gfVRLW5hA29yeAwaCViZNCP8iC9aO0q9fQojoa7NQnAtw==")
-LG_SIGNED = {"appId": "com.lge.test", "created": "20140509", "localizedAppNames": {"": "LG Remote App", "ko-KR": "리모컨 앱",
-             "zxx-XX": "ЛГ Rэмotэ AПП"}, "localizedVendorNames": {"": "LG Electronics"},
-             "permissions": ["TEST_SECURE", "CONTROL_INPUT_TEXT", "CONTROL_MOUSE_AND_KEYBOARD", "READ_INSTALLED_APPS",
-                             "READ_LGE_SDX", "READ_NOTIFICATIONS", "SEARCH", "WRITE_SETTINGS", "WRITE_NOTIFICATION_ALERT",
-                             "CONTROL_POWER", "READ_CURRENT_CHANNEL", "READ_RUNNING_APPS", "READ_UPDATE_INFO",
-                             "UPDATE_FROM_REMOTE_APP", "READ_LGE_TV_INPUT_EVENTS", "READ_TV_CURRENT_TIME"],
-             "serial": "2f930e2d2cfe083771f68e4fe7bb07", "vendorId": "com.lge"}  # public manifest every LG remote app uses
-# only what we use: power state + current input (read), screen on + input switch (write)
-LG_PERMS = ["CONTROL_POWER", "CONTROL_TV_SCREEN", "CONTROL_INPUT_TV", "READ_POWER_STATE", "READ_INPUT_DEVICE_LIST",
-            "READ_APP_STATUS", "READ_RUNNING_APPS"]
-
-
-class WS:
-    """Just enough RFC 6455 for webOS: text frames, client masking, ping/pong."""
-    def __init__(self, host, timeout=3):
-        try:
-            raw = socket.create_connection((host, 3001), timeout)
-            ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-            self.s, port = ctx.wrap_socket(raw, server_hostname=host), 3001  # webOS self-signed cert
-        except (OSError, ssl.SSLError):
-            self.s, port = socket.create_connection((host, 3000), timeout), 3000
-        key = base64.b64encode(os.urandom(16)).decode()
-        self.s.sendall((f"GET / HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                        f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
-        head = b""
-        while b"\r\n\r\n" not in head:
-            c = self.s.recv(1)
-            if not c:
-                raise OSError("closed during handshake")
-            head += c
-        if b" 101 " not in head.split(b"\r\n")[0]:
-            raise OSError("websocket refused")
-
-    def _recvn(self, n):
-        b = b""
-        while len(b) < n:
-            c = self.s.recv(n - len(b))
-            if not c:
-                raise OSError("closed")
-            b += c
-        return b
-
-    def send(self, obj, op=1):
-        data = json.dumps(obj).encode() if op == 1 else obj
-        n, mask = len(data), os.urandom(4)
-        hdr = bytes([0x80 | op]) + (bytes([0x80 | n]) if n < 126 else bytes([0xFE]) + n.to_bytes(2, "big") if n < 65536
-                                   else bytes([0xFF]) + n.to_bytes(8, "big"))
-        self.s.sendall(hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
-
-    def recv(self):
-        msg = b""
-        while True:
-            b0, b1 = self._recvn(2)
-            n = b1 & 0x7F
-            n = int.from_bytes(self._recvn(2 if n == 126 else 8), "big") if n >= 126 else n
-            data = self._recvn(n)
-            op = b0 & 0x0F
-            if op == 9:
-                self.send(data, 10); continue
-            if op == 8:
-                raise OSError("closed")
-            msg += data
-            if b0 & 0x80:
-                return json.loads(msg)
-
-    def call(self, uri, payload=None, _id=[0]):
-        _id[0] += 1
-        rid = f"r{_id[0]}"
-        self.send({"type": "request", "id": rid, "uri": "ssap://" + uri, **({"payload": payload} if payload else {})})
-        while True:
-            m = self.recv()
-            if m.get("id") == rid:
-                return m.get("payload", {}) if m.get("type") == "response" else {"error": m.get("error")}
-
-
-def lg_conf():
-    try:
-        return json.load(open(LG_CONF))
-    except (OSError, ValueError):
-        return {}
-
-
-def lg_open(c, timeout=3):
-    ws = WS(c["host"], timeout)
-    ws.send({"type": "register", "id": "reg", "payload": {"forcePairing": False, "pairingType": "PROMPT", "client-key": c.get("key", ""),
-             "manifest": {"manifestVersion": 1, "appVersion": "1.1", "signed": LG_SIGNED, "permissions": LG_PERMS,
-                          "signatures": [{"signatureVersion": 1, "signature": LG_SIG}]}}})
-    while True:
-        m = ws.recv()
-        if m.get("type") == "registered":
-            return ws, m["payload"].get("client-key")
-        if m.get("type") == "error":
-            raise OSError(m.get("error"))
-
-
-def lg_read(c):
-    """-> (power, input) ; power: on | screen-off | standby | off ; input e.g. HDMI_2 (None if unknown)."""
-    try:
-        ws, _ = lg_open(c)
-    except (OSError, ValueError):
-        return "off", None  # network stack down = TV fully off (or unplugged from the network)
-    try:
-        st = ws.call("com.webos.service.tvpower/power/getPowerState").get("state", "Active")
-        app = ws.call("com.webos.applicationManager/getForegroundAppInfo").get("appId", "")
-    finally:
-        ws.s.close()
-    m = re.match(r"com\.webos\.app\.hdmi(\d)$", app)
-    power = {"Active": "on", "Screen Off": "screen-off"}.get(st, "standby")
-    return power, (f"HDMI_{m.group(1)}" if m else app or None)
-
-
-def lg_wake(c):  # power on (Wake-on-LAN + screen on), then switch to c["input"] if set
-    mac = bytes.fromhex(c.get("mac", "").replace(":", ""))
-    if len(mac) == 6:  # Wake-on-LAN: TV setting "Turn on via Wi-Fi" must be on
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        for _ in range(3):
-            s.sendto(b"\xff" * 6 + mac * 16, ("255.255.255.255", 9))
-        s.close()
-    for _ in range(20):  # the TV's network stack takes a few seconds after WoL
-        try:
-            ws, _ = lg_open(c); break
-        except (OSError, ValueError):
-            time.sleep(1)
-    else:
-        return "TV not reachable on the network"
-    try:
-        if ws.call("com.webos.service.tvpower/power/getPowerState").get("state") == "Screen Off":
-            ws.call("com.webos.service.tvpower/power/turnOnScreen", {"standbyMode": "active"})
-        if c.get("input"):
-            ws.call("tv/switchInput", {"inputId": c["input"]})
-    finally:
-        ws.s.close()
-    return "woken"
-
-
-def lg_pair(host):
-    c = {"host": host}
-    ws, key = lg_open(c, timeout=60)  # blocks on the TV's "allow?" prompt
-    c["key"] = key
-    inputs = ws.call("tv/getExternalInputList").get("devices", [])
-    power, cur = lg_read(c)
-    ws.s.close()
-    try:
-        c["mac"] = open("/proc/net/arp").read().split(host + " ", 1)[1].split()[2]
-    except (OSError, IndexError):
-        pass
-    c["inputs"] = [{k: d.get(k) for k in ("id", "label", "connected")} for d in inputs]
-    # pair with the TV switched to the eGPU's HDMI: the input it shows now is remembered as ours
-    if cur and cur.startswith("HDMI_"):
-        c["input"] = cur
-    os.makedirs(os.path.dirname(LG_CONF), exist_ok=True)
-    json.dump(c, open(LG_CONF, "w"), indent=1)
-    os.chmod(LG_CONF, 0o640); os.chown(LG_CONF, 0, 1000)  # readable by the desktop watcher (runs as the user)
-    return c
-
-
 def screens():
     """Yield (connector, bus or None, edid) for every connected non-panel output."""
     buses = {}
@@ -283,20 +121,53 @@ def edid_name(edid):
     return edid[i + 5:i + 18].split(b"\n")[0].decode(errors="ignore").strip() if i >= 0 else ""
 
 
-def _lg_for(edid):
-    # ponytail: one paired LG TV per machine, matched by EDID name; key it by EDID if someone has two
-    c = lg_conf()
-    return c if c.get("key") and edid_name(edid).startswith("LG TV") else None
+def _cec_for(conn):
+    """/dev/cecN whose parent is this DRM connector (DP-CEC tunnel), or the only CEC adapter for an HDMI port."""
+    devs = glob.glob("/sys/class/cec/cec*")
+    for d in devs:
+        if re.sub(r"^card\d+-", "", os.path.basename(os.path.realpath(d + "/device"))) == conn:
+            return "/dev/" + os.path.basename(d)
+    # ponytail: a lone USB-CEC adapter is assumed to sit on the HDMI screen; map by phys addr if two ever exist
+    return "/dev/" + os.path.basename(devs[0]) if len(devs) == 1 and conn.startswith("HDMI") else None
+
+
+def _cec(dev, *args):
+    try:
+        return subprocess.run(["cec-ctl", "-d", dev, *args], capture_output=True, text=True, timeout=6).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def cec_read(dev):
+    """-> (power, ours) ; power on|standby|None, ours True/False/None (is the TV showing our source?)"""
+    info = _cec(dev, "--playback")  # claim a playback logical address (idempotent)
+    me = re.search(r"Physical Address\s*:\s*([0-9a-f.]+)", info)
+    pw = re.search(r"pwr-state:\s*(\w+)", _cec(dev, "--to", "0", "--give-device-power-status"))
+    src = re.search(r"phys-addr:\s*([0-9a-f.]+)", _cec(dev, "--to", "15", "--request-active-source",
+                                                          "--wait-for-msgs", "--monitor-time", "2"))
+    # the active source answers by broadcast; the TV itself answers 0.0.0.0 while showing its tuner/apps
+    power = {"on": "on", "standby": "standby"}.get(pw.group(1)) if pw else None
+    ours = (src.group(1) == me.group(1)) if (src and me) else None
+    return power, ours
+
+
+def cec_wake(dev, take_input):
+    me = re.search(r"Physical Address\s*:\s*([0-9a-f.]+)", _cec(dev, "--playback"))
+    _cec(dev, "--to", "0", "--image-view-on")  # TV on (and, per spec, to us)
+    if take_input and me:
+        _cec(dev, "--active-source", f"phys-addr={me.group(1)}")
+    return "woken (CEC)"
 
 
 def read(conn, bus, edid):
     """-> (state, power, input) ; state = in-use | other-input | off | standby | unknown"""
-    lg = _lg_for(edid)
-    if lg:
-        power, src = lg_read(lg)
-        if power != "on":
-            return "off", power, src
-        return ("other-input" if lg.get("input") and src != lg["input"] else "in-use"), power, src
+    cec = _cec_for(conn)
+    if cec:
+        power, ours = cec_read(cec)
+        if power == "standby":
+            return "off", power, None
+        if power == "on" and ours is not None:
+            return ("in-use" if ours else "other-input"), power, None
     if bus is None:
         return "unknown", None, None
     power, src = getvcp(bus, 0xD6), getvcp(bus, 0x60)
@@ -317,11 +188,11 @@ def read(conn, bus, edid):
 
 
 def wake(conn, bus, edid, take_input=False):
-    lg = _lg_for(edid)
-    if lg:
+    cec = _cec_for(conn)
+    if cec:
         if not take_input and read(conn, bus, edid)[0] == "other-input":
             return "on another input - left alone"
-        return lg_wake(lg if take_input else {**lg, "input": None})
+        return cec_wake(cec, take_input)
     if bus is None:
         return "no DDC/CI - can't wake"
     st = read(conn, bus, edid)[0]
@@ -397,10 +268,6 @@ def main(argv):
         settle(); return 0
     if cmd == "watch":
         watch()
-    if cmd == "lg-pair":  # egpu-screen lg-pair 192.168.0.240 - accept the prompt on the TV
-        print(json.dumps({k: v for k, v in lg_pair(want[0]).items() if k != "key"}, indent=1)); return 0
-    if cmd == "lg-state":
-        print(lg_read(lg_conf())); return 0
     if cmd == "selftest":  # the input rule without hardware: (connector, power, input) -> state
         global getvcp, _store
         real = getvcp, _store
