@@ -744,7 +744,13 @@ class Plugin:
         return {"available": bool(pv(beta)) and os.path.exists(TRIAL) and _installed_vendor() == "nvidia",
                 "beta": pv(beta), "tested": pv(tested), "installed": _sh(["modinfo", "-F", "version", "nvidia"], 5)[1],
                 "state": t.get("state", ""), "message": t.get("message", ""), "running": t["running"], "log": tail,
-                "started": int(t.get("started", "0") or 0), "progress": _trial_progress()[0], "step": _trial_progress()[1]}
+                "started": int(t.get("started", "0") or 0), "progress": _trial_progress()[0], "step": _trial_progress()[1],
+                "acked": _settings().get("trial_ack", "") == t.get("started", "")}
+
+    async def ack_driver_trial(self):
+        """The result screen was closed with OK: never show this trial's result again (kept here, not in the browser —
+        Steam's web storage does not survive a gamescope restart, so the screen came back on every one)."""
+        d = _settings(); d["trial_ack"] = _trial().get("started", ""); _save_settings(d); return {"ok": True, "message": "ok"}
 
     async def start_driver_trial(self):
         if _trial()["running"]: return {"ok": False, "message": "A driver trial is already running."}

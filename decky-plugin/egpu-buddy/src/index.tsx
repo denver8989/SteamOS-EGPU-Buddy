@@ -30,10 +30,11 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
-type Trial = { available: boolean; beta: string; tested: string; installed: string; state: string; message: string; running: boolean; log: string; started: number; progress: number; step: string };
+type Trial = { available: boolean; beta: string; tested: string; installed: string; state: string; message: string; running: boolean; log: string; started: number; progress: number; step: string; acked: boolean };
 const getTrial = callable<[], Trial>("get_driver_trial");
 const startTrial = callable<[], Result>("start_driver_trial");
 const revertTrial = callable<[], Result>("revert_driver_trial");
+const ackTrial = callable<[], Result>("ack_driver_trial");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
 const PLUGIN_VERSION = "0.7.73";
@@ -65,18 +66,15 @@ function stateLine(s: Status): string {
 // Beta driver trial: a progress screen that opens by itself whenever Game Mode starts while a trial runs (it restarts
 // twice: onto the handheld at the Safe Detach, onto the monitor at the attach), and once more with the result.
 let trialOpen = false;
-const TRIAL_ACK = "egpu-buddy-trial-ack";
-const trialAcked = (st: number) => { try { return localStorage.getItem(TRIAL_ACK) === String(st); } catch { return false; } };
-const ackTrial = (st: number) => { try { localStorage.setItem(TRIAL_ACK, String(st)); } catch { /* private storage unavailable */ } };
 function TrialModal({ closeModal }: { closeModal?: () => void }) {
   const [t, setT] = useState<Trial | null>(null);
   useEffect(() => { let alive = true; const tick = async () => { try { const x = await getTrial(); if (alive) setT(x); } catch { /* backend restarting */ } };
     tick(); const i = setInterval(tick, 1000); return () => { alive = false; clearInterval(i); }; }, []);
   const done = !!t && !t.running;
   const back = !!t && (t.state === "reverting" || t.state === "reverted");
-  const close = () => { trialOpen = false; if (done && t) ackTrial(t.started); closeModal?.(); };
+  const close = () => { trialOpen = false; if (done) ackTrial(); closeModal?.(); };
   return (
-    <ConfirmModal strTitle={!t ? "Beta driver" : back ? `Returning to the tested driver ${t.tested}` : `Installing beta driver ${t.beta}`}
+    <ConfirmModal strTitle={!t ? "Beta driver" : done ? (t.state === "kept" ? `Beta driver ${t.beta} installed` : t.state === "reverted" ? `Back on the tested driver ${t.tested}` : "Beta driver trial failed") : back ? `Returning to the tested driver ${t.tested}` : `Installing beta driver ${t.beta}`}
       strDescription={!t ? "…" : done
         ? <div style={{ fontSize: "14px", color: t.state === "kept" ? "#4caf50" : t.state === "failed" ? "#ff6b6b" : "#f0b429" }}>{t.message}</div>
         : <Progress pct={t.progress} title={back ? "Reverting" : "Installing"} step={t.step} started={t.started} expect={back ? "3-5 minutes" : "5-20 minutes"} />}
@@ -87,7 +85,7 @@ const maybeShowTrial = async () => {
   if (trialOpen) return;
   const t = await getTrial();
   const recent = t.started && Date.now() / 1000 - t.started < 7200;
-  if (recent && (t.running || (["kept", "reverted", "failed"].includes(t.state) && !trialAcked(t.started)))) { trialOpen = true; showModal(<TrialModal />); }
+  if (recent && (t.running || (["kept", "reverted", "failed"].includes(t.state) && !t.acked))) { trialOpen = true; showModal(<TrialModal />); }
 };
 
 function Content() {
