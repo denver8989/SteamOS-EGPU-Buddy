@@ -352,6 +352,7 @@ write_gamescope_env() {
   refresh_gpu_target
   egpu_card=$(find_card_node "$GPU")
   igpu_card=$(find_card_node 0000:c2:00.0)
+  /usr/local/sbin/egpu-screen settle 2>/dev/null | while read -r l; do log "screen $l"; done  # lone TV: on + our input
   output_connector=$(egpu_output_connector_order)
   [ -n "$egpu_card" ] || egpu_card=/dev/dri/by-path/pci-$GPU-card
   [ -n "$igpu_card" ] || igpu_card=/dev/dri/by-path/pci-0000:c2:00.0-card

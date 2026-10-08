@@ -1,0 +1,12 @@
+[Unit]
+Description=EGPU Buddy screens (lone TV on + our input at plug-in; leave a TV on another input out of the desktop)
+After=plasma-workspace.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/local/sbin/egpu-screen watch
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target

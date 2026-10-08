@@ -38,7 +38,7 @@ const ackTrial = callable<[], Result>("ack_driver_trial");
 type Screen = { connector: string; name: string; state: string; ddc: boolean };
 const getScreens = callable<[], Screen[]>("get_screens");
 const wakeScreens = callable<[], Result>("wake_screens");
-const screenState: Record<string, string> = { "in-use": "on", "other-input": "other input", standby: "asleep" };
+const screenState: Record<string, string> = { "in-use": "on", "other-input": "other input", standby: "asleep", off: "off" };
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
 const PLUGIN_VERSION = "0.7.74";

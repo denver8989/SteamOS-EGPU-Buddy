@@ -108,7 +108,7 @@ const revertTrial = callable("revert_driver_trial");
 const ackTrial = callable("ack_driver_trial");
 const getScreens = callable("get_screens");
 const wakeScreens = callable("wake_screens");
-const screenState = { "in-use": "on", "other-input": "other input", standby: "asleep" };
+const screenState = { "in-use": "on", "other-input": "other input", standby: "asleep", off: "off" };
 const vt = (v) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 const PLUGIN_VERSION = "0.7.74";
 const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
