@@ -116,7 +116,7 @@ else
   released=0
   for _ in $(seq 1 20); do
     sleep 2
-    k=$(pgrep -x kwin_wayland | head -1)
+    k=$(pgrep -U 1000 -x kwin_wayland | head -1)
     [ -n "$k" ] || continue
     ls -l /proc/"$k"/fd 2>/dev/null | grep -q "/dev/dri/$EGPU_CARD\$" || { released=1; break; }
   done
@@ -125,7 +125,7 @@ else
     runuser -u deck -- env $RUNENV qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1 \
       || runuser -u deck -- env $RUNENV qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1
     for _ in $(seq 1 20); do
-      sleep 2; k=$(pgrep -x kwin_wayland | head -1); [ -n "$k" ] || continue
+      sleep 2; k=$(pgrep -U 1000 -x kwin_wayland | head -1); [ -n "$k" ] || continue
       ls -l /proc/"$k"/fd 2>/dev/null | grep -q "/dev/dri/$EGPU_CARD\$" || { released=1; break; }
     done
   fi
@@ -133,7 +133,7 @@ else
   say "      KWin released the eGPU ($EGPU_CARD free)"
   # Release the session pin only now, with the desktop session back. Unpinning earlier let the login manager relogin with
   # the system default, which on SteamOS is Game Mode: gamescope then held the card and the teardown aborted (seen live).
-  pgrep -x kwin_wayland >/dev/null 2>&1 && /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || true
+  pgrep -U 1000 -x kwin_wayland >/dev/null 2>&1 && /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || true
   fi
 
 fi

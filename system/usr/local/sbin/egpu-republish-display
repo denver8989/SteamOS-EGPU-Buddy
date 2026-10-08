@@ -6,7 +6,7 @@ set -u
 xw=$(pgrep -a Xwayland 2>/dev/null | head -1)
 D=$(printf '%s' "$xw" | grep -oE ' :[0-9]+' | head -1 | tr -d ' ')
 X=$(printf '%s' "$xw" | grep -oE -- '-auth [^ ]+' | head -1 | cut -d' ' -f2)
-k=$(pgrep -x kwin_wayland | head -1)
+k=$(pgrep -U 1000 -x kwin_wayland | head -1)
 Wd=$(tr '\0' '\n' < /proc/"$k"/environ 2>/dev/null | sed -n 's/^WAYLAND_DISPLAY=//p' | head -1)
 [ -z "$D" ] && D=$(tr '\0' '\n' < /proc/"$k"/environ 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -1)
 [ -z "$X" ] && X=$(ls -t /run/user/1000/xauth_* 2>/dev/null | head -1)

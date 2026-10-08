@@ -74,7 +74,7 @@ drm_nodes_for_card(){
 }
 kwin_holds_nodes(){
   local nodes=$1 k n
-  k=$(pgrep -x kwin_wayland | head -1)
+  k=$(pgrep -U 1000 -x kwin_wayland | head -1)
   [ -n "$k" ] || return 1
   for n in $nodes; do ls -l "/proc/$k/fd" 2>/dev/null | grep -q "/dev/dri/$n" && return 0; done
   return 1

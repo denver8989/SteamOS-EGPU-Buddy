@@ -618,7 +618,7 @@ egpu_external_only(){
   local ext="" t k
   # wait for the NVIDIA-only KWin of the relogin (up to 60s); before that kscreen talks to the dying session
   for t in $(seq 1 30); do
-    k=$(pgrep -x kwin_wayland | head -1)
+    k=$(pgrep -U 1000 -x kwin_wayland | head -1)
     [ -n "$k" ] && tr '\0' '\n' </proc/"$k"/environ 2>/dev/null | grep -q "KWIN_DRM_DEVICES=/dev/dri/$nvcard\$" && break
     sleep 2
   done
@@ -716,7 +716,7 @@ fi
 # (renderD*), but KWin holds the AMD *card* node (card1) WITHOUT opening its render node -> every
 # hotplug was mis-declared "already NVIDIA-only" and skipped the relogin, leaving an extended desktop
 # across both GPUs (found 2026-07-12). Check BOTH node types.
-kw=$(pgrep -x kwin_wayland | head -1)
+kw=$(pgrep -U 1000 -x kwin_wayland | head -1)
 amd_nodes=$(for d in /sys/class/drm/card[0-9] /sys/class/drm/renderD*; do
   [ -e "$d" ] || continue
   [ "$(basename "$(readlink -f "$d/device/driver" 2>/dev/null || true)")" = amdgpu ] && basename "$d"
@@ -752,7 +752,7 @@ if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then
 fi
 # Only a running desktop session may pin the autologin to the desktop (the NVIDIA-only re-login must come back to
 # it). At boot, before any session exists, the boot policy (egpu-conditional-session: Game Mode) decides. 2026-09-16.
-pgrep -x kwin_wayland >/dev/null 2>&1 && set_autologin_plasma
+pgrep -U 1000 -x kwin_wayland >/dev/null 2>&1 && set_autologin_plasma
 if [ "$crosstalk" = 1 ]; then
   log "eGPU display up + iGPU desktop (crosstalk) -> re-login for NVIDIA-only"; sleep 2; gpu_healthy && relogin_session
 else

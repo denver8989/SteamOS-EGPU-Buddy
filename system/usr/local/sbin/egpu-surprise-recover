@@ -58,7 +58,7 @@ T0=$(date +%s); SELF_START=$(awk '{print $22}' /proc/self/stat); mkdir -p /run/n
 # the card, so nothing contradicted it. Desktop evidence now wins, and the target is a last resort.
 GM=0; pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 && GM=1
 DESK=0
-pgrep -x kwin_wayland >/dev/null 2>&1 && DESK=1
+pgrep -U 1000 -x kwin_wayland >/dev/null 2>&1 && DESK=1
 runuser -u deck -- env $RUNENV systemctl --user is-active plasma-workspace.target >/dev/null 2>&1 && DESK=1
 [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = desktop ] && DESK=1
 if [ "$GM" = 0 ] && [ "$DESK" = 0 ]; then
@@ -67,7 +67,7 @@ fi
 # A compositor that is ALIVE decides. The marker is only for the case where neither is left (gamescope gone with the card):
 # it is written at the start of BOTH session types, so it names the latest one. (Until 0.7.22 only Game Mode wrote it: after
 # one Game Mode session an unplug in the Desktop was treated as Game Mode and the desktop was replaced by Game Mode.)
-if [ "$GM" = 0 ] && [ "$DESK" = 0 ] && ! pgrep -x kwin_wayland >/dev/null 2>&1; then [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1; fi
+if [ "$GM" = 0 ] && [ "$DESK" = 0 ] && ! pgrep -U 1000 -x kwin_wayland >/dev/null 2>&1; then [ "$(cat /run/user/$U/egpu-session-type 2>/dev/null)" = gamemode ] && GM=1; fi
 # The marker WINS over a live gamescope. A cable pull kills KWin first, so by the time this runs the
 # display manager has already fallen back to Game Mode and a gamescope IS running - that is a
 # consequence of the removal, not evidence of what the user was doing. The gamescope wrapper refuses
@@ -112,11 +112,11 @@ fi
 # 2. wait for the session to come back on the iGPU (KWin exit -> autologin relaunch), up to 90s  [desktop only]
 [ "$GM" = 0 ] && \
 for _ in $(seq 1 90); do
-  k=$(pgrep -x kwin_wayland | head -1)
+  k=$(pgrep -U 1000 -x kwin_wayland | head -1)
   if [ -n "$k" ] && tr '\0' '\n' </proc/$k/environ 2>/dev/null | grep -q "KWIN_DRM_DEVICES=/dev/dri/${igpu:-card1}"; then break; fi
   sleep 1
 done
-log "kwin=$(pgrep -x kwin_wayland | head -1) on $(k=$(pgrep -x kwin_wayland|head -1); tr '\0' '\n' </proc/$k/environ 2>/dev/null | grep -oE 'KWIN_DRM_DEVICES=.*')"
+log "kwin=$(pgrep -U 1000 -x kwin_wayland | head -1) on $(k=$(pgrep -U 1000 -x kwin_wayland|head -1); tr '\0' '\n' </proc/$k/environ 2>/dev/null | grep -oE 'KWIN_DRM_DEVICES=.*')"
 # Last check before anything is killed: if the card is back on the bus, the removal was a transient (a reset or re-pin),
 # not a cable pull, and the processes below are using a healthy GPU. Stop here.
 lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { rm -f /run/nvegpu/surprise-pending; log "GPU is back on the bus: transient removal, not a cable pull - nothing killed"; exit 0; }

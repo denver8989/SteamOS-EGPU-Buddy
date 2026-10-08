@@ -62,7 +62,7 @@ user_env_igpu(){ local ic; ic=$(igpu_card)
 # pinned to the eGPU, so it dies with the cable, and the login manager then autologins into ITS default
 # - Game Mode on SteamOS - within the same second, long before anything here can react. egpu-dm-session
 # knows both login managers and names its drop-in so it out-sorts the ones the distro ships.
-pin_plasma(){ pgrep -x kwin_wayland >/dev/null || return 0
+pin_plasma(){ pgrep -U 1000 -x kwin_wayland >/dev/null || return 0
   [ -x /usr/local/sbin/egpu-dm-session ] || return 0
   /usr/local/sbin/egpu-dm-session pin plasma >/dev/null 2>&1 &&
     log "login fallback -> plasma (losing the card returns to the desktop, not Game Mode)"; }
@@ -95,7 +95,7 @@ attach)
   [ -n "$out" ] || { log "no display on the eGPU: it stays available for rendering (DRI_PRIME), session untouched"; exit 0; }
   if game_mode; then touch $MOVED; exec 9>&-; exec /usr/local/sbin/egpu-gamemode-switch; fi
   # boot / login screen: no session to move. Game Mode picks the eGPU by itself (session wrapper); never touch the greeter's GPU.
-  pgrep -x kwin_wayland >/dev/null || { log "no running session — nothing to move"; exit 0; }
+  pgrep -U 1000 -x kwin_wayland >/dev/null || { log "no running session — nothing to move"; exit 0; }
   pgrep -u "$UN" -x plasmashell >/dev/null || { log "login screen, not a user desktop — nothing to move"; exit 0; }
   touch $MOVED; set_boot_vga "$bdf"; pin_plasma
   # eGPU first = KWin renders on it; the built-in GPU stays in the list so kscreen can switch the panel off properly
@@ -116,9 +116,9 @@ detach)
   if game_mode; then
     G0=$(pgrep -n -x 'gamescope(-wl)?'); as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
     for _ in $(seq 1 45); do sleep 2; g=$(pgrep -n -x 'gamescope(-wl)?'); [ -n "$g" ] && [ "$g" != "$G0" ] && break; done
-  elif pgrep -x kwin_wayland >/dev/null; then
-    K0=$(pgrep -x kwin_wayland | head -1); pin_plasma; logout_plasma
-    for _ in $(seq 1 45); do sleep 2; k=$(pgrep -x kwin_wayland | head -1); [ -n "$k" ] && [ "$k" != "$K0" ] && break; done
+  elif pgrep -U 1000 -x kwin_wayland >/dev/null; then
+    K0=$(pgrep -U 1000 -x kwin_wayland | head -1); pin_plasma; logout_plasma
+    for _ in $(seq 1 45); do sleep 2; k=$(pgrep -U 1000 -x kwin_wayland | head -1); [ -n "$k" ] && [ "$k" != "$K0" ] && break; done
   fi
   status DO_NOT_UNPLUG "Releasing the eGPU. Do not unplug yet."
   nodes="/dev/dri/$card /dev/dri/$(render_of "$card")"

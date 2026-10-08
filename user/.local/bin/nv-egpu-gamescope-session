@@ -546,7 +546,7 @@ unset _v _p
 # Only claim the session marker if a desktop is NOT on screen. SteamOS keeps this session's target
 # active (and relaunches it) behind a running desktop, and each relaunch used to overwrite the
 # marker with "gamemode" — so a cable pull on the desktop was recovered as Game Mode.
-pgrep -x kwin_wayland >/dev/null 2>&1 ||
+pgrep -U 1000 -x kwin_wayland >/dev/null 2>&1 ||
   printf gamemode > "${XDG_RUNTIME_DIR:-/run/user/1000}/egpu-session-type" 2>/dev/null || true
   # Keep the login manager's fallback pointing at the session actually in use, so that if this
   # session dies the machine comes back to Game Mode rather than somewhere else. The desktop attach
