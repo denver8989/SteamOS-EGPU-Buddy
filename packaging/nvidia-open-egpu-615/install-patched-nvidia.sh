@@ -55,12 +55,13 @@ rm -f "$SRCDEST/NVIDIA-Linux-x86_64-$PV.run"   # 530 MB; the built packages are 
 # unsigned local files need LocalFileSigLevel=Optional (the default); a stricter pacman.conf gets a temporary copy
 PCONF=(); if command -v pacman-conf >/dev/null && ! pacman-conf LocalFileSigLevel 2>/dev/null | grep -qiE 'Optional|Never'; then
   tc=$(mktemp); sed 's/^\[options\]/[options]\nLocalFileSigLevel = Optional/' /etc/pacman.conf > "$tc"; PCONF=(--config "$tc"); fi
-[ ${#pin[@]} -eq 0 ] || { echo "pinning NVIDIA userspace to $PV: ${pin[*]##*/}"; $R pacman "${PCONF[@]}" -U --noconfirm --ask 4 "${pin[@]}"; }
+[ ${#pin[@]} -eq 0 ] || echo "NVIDIA userspace $PV: ${pin[*]##*/} (installed together with the driver package below)"
 B=$UH/.cache/egpu-buddy/driver-build
 rm -rf "$B"; mkdir -p "$B"; cp "$HERE"/PKGBUILD "$HERE"/*.patch "$HERE"/nvidia-egpu-hotplug.* "$B"/; [ "$(id -u)" = 0 ] && chown -R "$U" "$B"
 if [ "$(id -u)" = 0 ]; then runuser -u "$U" -- bash -c "cd '$B' && makepkg -f --noconfirm"; else (cd "$B" && makepkg -f --noconfirm); fi
 PKG=$(ls -t "$B"/nvidia-open-egpu-dkms-*.pkg.tar.* | head -1); cp -f "$PKG" "$PERSIST/pkgcache/" 2>/dev/null || true
 # --ask 4 answers "yes" to removing the conflicting stock nvidia-open / nvidia-open-dkms package
-$R pacman "${PCONF[@]}" -U --noconfirm --ask 4 "$PKG"
+# ONE transaction: the installed 610 driver package depends on nvidia-utils=610, so changing the version needs both at once
+$R pacman "${PCONF[@]}" -U --noconfirm --ask 4 "${pin[@]}" "$PKG"
 echo "installed: $(pacman -Q nvidia-open-egpu-dkms 2>/dev/null); dkms: $(dkms status 2>/dev/null | grep -i nvidia | head -1)"
 echo "reboot to load the patched modules"
