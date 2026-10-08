@@ -1,0 +1,133 @@
+diff --git a/kernel-open/nvidia-modeset/nvidia-modeset-linux.c b/kernel-open/nvidia-modeset/nvidia-modeset-linux.c
+index 6bc44b3..d5f7d47 100644
+--- a/kernel-open/nvidia-modeset/nvidia-modeset-linux.c
++++ b/kernel-open/nvidia-modeset/nvidia-modeset-linux.c
+@@ -587,6 +587,8 @@ struct nvkms_per_open {
+             struct {
+                 nv_kthread_q_item_t nv_kthread_q_item;
+             } events;
++            /* NV-EGPU-Buddy: cleared by nvkms_detach_kapi_events() on surprise removal */
++            struct NvKmsKapiDevice *device;
+         } kernel;
+     } u;
+ 
+@@ -1466,9 +1468,13 @@ void nvkms_unregister_backlight(struct nvkms_backlight_device *nvkms_bd)
+ 
+ static void nvkms_kapi_event_kthread_q_callback(void *arg)
+ {
+-    struct NvKmsKapiDevice *device = arg;
++    struct nvkms_per_open *popen = arg;
++    struct NvKmsKapiDevice *device = READ_ONCE(popen->u.kernel.device);
+ 
+-    nvKmsKapiHandleEventQueueChange(device);
++    /* device is NULL once the kapi device was freed after a surprise removal */
++    if (device != NULL) {
++        nvKmsKapiHandleEventQueueChange(device);
++    }
+ }
+ 
+ static struct nvkms_per_open *nvkms_open_common(enum NvKmsClientType type,
+@@ -1510,9 +1516,10 @@ static struct nvkms_per_open *nvkms_open_common(enum NvKmsClientType type,
+             init_waitqueue_head(&popen->u.user.events.wait_queue);
+             break;
+         case NVKMS_CLIENT_KERNEL_SPACE:
++            popen->u.kernel.device = device;
+             nv_kthread_q_item_init(&popen->u.kernel.events.nv_kthread_q_item,
+                                    nvkms_kapi_event_kthread_q_callback,
+-                                   device);
++                                   popen);
+             break;
+     }
+ 
+@@ -1646,6 +1653,21 @@ void nvkms_close_from_kapi(struct nvkms_per_open *popen)
+     nvkms_close_pm_unlocked(popen);
+ }
+ 
++/*
++ * NV-EGPU-Buddy: surprise removal leaks the kapi popen on purpose (closing it would touch the
++ * missing hardware). Detach it from its NvKmsKapiDevice and wait for in-flight event work, so
++ * nvkms_kapi_event_kthread_q_callback() can never run against the freed device (NULL deref in
++ * nvKmsKapiHandleEventQueueChange under gamescope, 2026-09-11).
++ */
++void nvkms_detach_kapi_events(struct nvkms_per_open *popen)
++{
++    if (popen == NULL || popen->type != NVKMS_CLIENT_KERNEL_SPACE) {
++        return;
++    }
++    WRITE_ONCE(popen->u.kernel.device, NULL);
++    nv_kthread_q_flush(&nvkms_kthread_q);
++}
++
+ NvBool nvkms_ioctl_from_kapi_try_pmlock
+ (
+     struct nvkms_per_open *popen,
+@@ -1654,6 +1676,10 @@ NvBool nvkms_ioctl_from_kapi_try_pmlock
+ {
+     NvBool ret;
+ 
++    if (popen == NULL) {
++        return NV_FALSE;
++    }
++
+     // XXX PM lock must be allowed to fail, see bug 4432810.
+     if (nvkms_read_trylock_pm_lock()) {
+         return NV_FALSE;
+@@ -1676,6 +1702,10 @@ NvBool nvkms_ioctl_from_kapi
+ {
+     NvBool ret;
+ 
++    if (popen == NULL) {
++        return NV_FALSE;
++    }
++
+     nvkms_read_lock_pm_lock();
+     ret = nvkms_ioctl_common(popen,
+                              cmd,
+diff --git a/kernel-open/nvidia-modeset/nvidia-modeset-os-interface.h b/kernel-open/nvidia-modeset/nvidia-modeset-os-interface.h
+index a58c518..4a60f7f 100644
+--- a/kernel-open/nvidia-modeset/nvidia-modeset-os-interface.h
++++ b/kernel-open/nvidia-modeset/nvidia-modeset-os-interface.h
+@@ -358,6 +358,7 @@ struct nvkms_per_open* nvkms_open_from_kapi
+ );
+ 
+ void nvkms_close_from_kapi(struct nvkms_per_open *popen);
++void nvkms_detach_kapi_events(struct nvkms_per_open *popen);
+ 
+ NvBool nvkms_ioctl_from_kapi
+ (
+diff --git a/src/nvidia-modeset/kapi/src/nvkms-kapi.c b/src/nvidia-modeset/kapi/src/nvkms-kapi.c
+index 26de51b..6d97532 100644
+--- a/src/nvidia-modeset/kapi/src/nvkms-kapi.c
++++ b/src/nvidia-modeset/kapi/src/nvkms-kapi.c
+@@ -689,6 +689,10 @@ static void FreeDeviceForSurpriseRemoval(struct NvKmsKapiDevice *device)
+      * structure will be leaked, but this only happens during surprise
+      * removal which is an abnormal condition.
+      */
++    if (device->pKmsOpen != NULL) {
++        /* NV-EGPU-Buddy: stop event delivery for this device and wait for in-flight callbacks (kernel memory only) */
++        nvkms_detach_kapi_events(device->pKmsOpen);
++    }
+     device->pKmsOpen = NULL;
+ 
+     /* Lower the reference count of gpu - this is safe, no hardware access */
+@@ -3920,7 +3924,7 @@ void nvKmsKapiHandleEventQueueChange
+     struct NvKmsKapiDevice *device
+ )
+ {
+-    if (device == NULL) {
++    if (device == NULL || device->pKmsOpen == NULL) {
+         return;
+     }
+ 
+diff --git a/src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h b/src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h
+index a58c518..4a60f7f 100644
+--- a/src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h
++++ b/src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h
+@@ -358,6 +358,7 @@ struct nvkms_per_open* nvkms_open_from_kapi
+ );
+ 
+ void nvkms_close_from_kapi(struct nvkms_per_open *popen);
++void nvkms_detach_kapi_events(struct nvkms_per_open *popen);
+ 
+ NvBool nvkms_ioctl_from_kapi
+ (

@@ -1,0 +1,12 @@
+diff --git a/src/nvidia-modeset/Makefile b/src/nvidia-modeset/Makefile
+index 9f7de4b..e5961fc 100644
+--- a/src/nvidia-modeset/Makefile
++++ b/src/nvidia-modeset/Makefile
+@@ -167,6 +167,7 @@ ifeq ($(TARGET_ARCH),x86_64)
+   CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -mindirect-branch=thunk-extern)
+   CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -mindirect-branch-register)
+   CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -mfunction-return=thunk-extern)
++  CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -mharden-sls=all)
+ endif
+ 
+ CFLAGS += $(CONDITIONAL_CFLAGS)
