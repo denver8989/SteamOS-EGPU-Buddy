@@ -120,9 +120,17 @@ log "=== hotplug-mount triggered ==="
 # then reset / re-pin / resize it at once, the card drops off the bus for a moment, and egpu-surprise-recover took that
 # for a cable pull and killed the healthy Game Mode 90 s later (crash loop after boot, Legion Go 2, 2026-10-08).
 # Wait for the boot bring-up to finish (it has a 90 s limit); afterwards this finds the card up and only checks it.
+# (RemainAfterExit=yes: "active" = finished this boot; "inactive" early in the boot = not started yet, which is what
+#  happened on 2026-10-08 15:38 — the hook fired one second before the bring-up began.)
+_boot_up=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 999)
 for _ in $(seq 1 95); do
-  [ "$(systemctl show -p ActiveState --value egpu-boot-enumerate.service 2>/dev/null)" = activating ] || break
-  [ "$_" = 1 ] && log "boot bring-up still running — waiting for it before touching the card"
+  _be=$(systemctl show -p ActiveState --value egpu-boot-enumerate.service 2>/dev/null)
+  case "$_be" in
+    activating) ;;
+    inactive) [ "$_boot_up" -lt 120 ] && systemctl is-enabled egpu-boot-enumerate.service >/dev/null 2>&1 || break ;;
+    *) break ;;
+  esac
+  [ "$_" = 1 ] && log "boot bring-up ${_be} — waiting for it before touching the card"
   sleep 1
 done
 # A Thunderbolt/USB4 "add" is not an eGPU: docks, displays and storage enclosures
