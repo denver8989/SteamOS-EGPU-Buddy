@@ -53,9 +53,23 @@ const Progress = ({ pct, title, step, started, expect }: { pct: number; title: s
   </div>
 );
 
+// one line per row: values are kept short below, and anything still too long for a narrow screen ends in "…" instead of
+// breaking mid-word onto a second line ("RTX 5 / 060 Ti", seen on a 5120x1440 monitor and on the handheld panel)
 const Row = ({ k, v }: { k: string; v: string }) => (
-  <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", wordBreak: "break-all" }}>{v || "—"}</span></Field></PanelSectionRow>
+  <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block", maxWidth: "100%" }}>{v || "—"}</span></Field></PanelSectionRow>
 );
+const gpuName = (n?: string) => (n ?? "").replace(/^NVIDIA\s+(GeForce\s+)?/i, "");
+// "alsa_output.pci-0000_03_00.1.HiFi__HDMI1__sink" -> "eGPU HDMI 1"; the built-in card -> "Built-in"
+const audioName = (sink: string, bdf: string) => {
+  if (!sink) return "";
+  const port = sink.match(/(HDMI|DP)(\d*)/i);
+  const busDev = bdf.replace(/^0000:/, "").replace(/\.\d$/, "").replace(":", "_");
+  if (busDev && sink.includes(busDev)) return `eGPU${port ? ` ${port[1].toUpperCase()}${port[2] ? " " + port[2] : ""}` : ""}`;
+  if (/bluez/i.test(sink)) return "Bluetooth";
+  if (/usb/i.test(sink)) return "USB audio";
+  if (/pro-output|analog|speaker/i.test(sink)) return "Built-in";
+  return sink.replace(/^alsa_output\.(pci-0000_)?/, "").replace(/\.(pro-output-0|.*__sink)$/, "");
+};
 
 function stateLine(s: Status): string {
   if (!s.present) return s.driver_loaded ? "eGPU off the bus (driver still loaded)" : "No eGPU attached";
@@ -235,19 +249,19 @@ function Content() {
             {!s.present ? (
               <>
                 <PanelSectionRow><div className={staticClasses.Text}>eGPU not connected.</div></PanelSectionRow>
-                <Row k="Session" v={s.game_mode ? "Game Mode on the handheld screen" : "Desktop"} />
+                <Row k="Session" v={s.game_mode ? "Game Mode on handheld" : "Desktop"} />
               </>
             ) : (
             <>
-              <Row k="GPU" v={tel["name"] ?? (s.present ? s.bdf : "absent")} />
+              <Row k="GPU" v={gpuName(tel["name"]) || (s.present ? s.bdf : "absent")} />
               <Row k="Driver" v={s.driver_loaded ? `nvidia ${tel["driver_version"] ?? ""}` : "not loaded"} />
               <Row k="PCIe" v={s.present ? `${s.link.speed} x${s.link.width}` : ""} />
               <Row k="Session" v={s.game_mode ? (s.on_egpu ? `Game Mode on ${s.output}` : "Game Mode on panel") : "Desktop"} />
               <Row k="Displays" v={s.displays.map((d) => `${d.name}${d.enabled ? "" : " (off)"}`).join(", ")} />
-              <Row k="Audio" v={s.audio_sink.replace("alsa_output.", "").replace(".pro-output-0", "").replace(/^pci-0000_/, "")} />
+              <Row k="Audio" v={audioName(s.audio_sink, s.bdf)} />
               <Row k="Temp" v={tel["temperature.gpu"] ? `${tel["temperature.gpu"]} °C` : ""} />
-              <Row k="Power" v={tel["power.draw"] ? `${tel["power.draw"]} / ${tel["power.limit"]} W` : ""} />
-              <Row k="Clocks" v={tel["clocks.gr"] ? `${tel["clocks.gr"]} MHz core, ${tel["clocks.mem"]} MHz mem` : ""} />
+              <Row k="Power" v={tel["power.draw"] ? `${Math.round(Number(tel["power.draw"]))} / ${Math.round(Number(tel["power.limit"]))} W` : ""} />
+              <Row k="Core / mem" v={tel["clocks.gr"] ? `${tel["clocks.gr"]} / ${tel["clocks.mem"]} MHz` : ""} />
               <Row k="VRAM" v={tel["memory.used"] ? `${tel["memory.used"]} / ${tel["memory.total"]} MiB` : ""} />
               <Row k="Load" v={tel["utilization.gpu"] ? `${tel["utilization.gpu"]} %` : ""} />
               <Row k="Fan" v={tel["fan.speed"] && tel["fan.speed"] !== "[N/A]" ? `${tel["fan.speed"]} %` : ""} />
