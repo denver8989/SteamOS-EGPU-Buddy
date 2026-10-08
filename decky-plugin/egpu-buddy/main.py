@@ -183,6 +183,53 @@ def _edid_name(path):
     return e[i + 5:i + 18].split(b"\n")[0].decode(errors="ignore").strip() if i >= 0 else ""
 
 
+def _edid_modes(e):
+    """(w, h, Hz) from every detailed timing: base block, CTA-861 and DisplayID (type I / VII) extensions."""
+    def dtd(d):
+        clk = (d[0] | d[1] << 8) * 10000
+        h, hb = d[2] | (d[4] >> 4) << 8, d[3] | (d[4] & 15) << 8
+        v, vb = d[5] | (d[7] >> 4) << 8, d[6] | (d[7] & 15) << 8
+        return (h, v, round(clk / ((h + hb) * (v + vb)))) if clk and h and v else None
+
+    def did(t, k):  # DisplayID detailed timing: 20 bytes, little-endian fields stored minus one
+        u = lambda o: (t[o] | t[o + 1] << 8) + 1
+        clk = ((t[0] | t[1] << 8 | t[2] << 16) + 1) * (k * 1000)
+        h, hb, v, vb = u(4), u(6), u(12), u(14)  # byte 3 = flags
+        return (h, v, round(clk / ((h + hb) * (v + vb))))
+    out = [dtd(e[i:i + 18]) for i in range(54, 126, 18) if e[i] or e[i + 1]]
+    for x in range(128, len(e) - 127, 128):
+        blk = e[x:x + 128]
+        if blk[0] == 0x02 and blk[2] >= 4:  # CTA: DTDs from offset blk[2] to the padding
+            out += [dtd(blk[i:i + 18]) for i in range(blk[2], 110, 18) if blk[i] or blk[i + 1]]
+        elif blk[0] == 0x70:  # DisplayID: data blocks after the 5-byte section header
+            i, end = 5, 5 + blk[2]
+            while i + 3 <= end:
+                tag, n = blk[i], blk[i + 2]
+                if tag in (0x03, 0x22):  # type I (10 kHz units) / type VII (1 kHz units)
+                    out += [did(blk[j:j + 20], 10 if tag == 0x03 else 1) for j in range(i + 3, i + 3 + n - 19, 20)]
+                i += 3 + n
+    return [m for m in out if m]
+
+
+def _screen_info(conn):
+    """('LG TV SSCR2', 'HDMI · 3840x2160 @ 60 Hz · 72"') from the EDID: biggest mode at its top refresh + size."""
+    path = f"/sys/class/drm/{conn}"
+    try:
+        e = open(path + "/edid", "rb").read()
+    except OSError:
+        e = b""
+    parts = []
+    modes = _edid_modes(e) if len(e) >= 128 else []
+    if modes:
+        w, h, hz = max(modes, key=lambda m: (m[0] * m[1], m[2]))
+        parts.append(f"{w}x{h} @ {hz} Hz")
+    if len(e) >= 128 and e[21] and e[22]:
+        parts.append(f'{round((e[21] ** 2 + e[22] ** 2) ** 0.5 / 2.54)}"')
+    port = conn.split("-", 1)[1] if "-" in conn else conn
+    port = "HDMI" if port.startswith("HDMI") else "DisplayPort" if port.startswith("DP") else port
+    return _edid_name(path + "/edid"), " · ".join([port] + parts)
+
+
 def _displays(bdf):
     outs = []
     base = f"/sys/bus/pci/devices/{bdf}/drm"
@@ -193,7 +240,7 @@ def _displays(bdf):
             for c in os.listdir(f"/sys/class/drm"):
                 if c.startswith(card + "-") and _read(f"/sys/class/drm/{c}/status") == "connected":
                     outs.append({"name": c.split("-", 1)[1], "enabled": _read(f"/sys/class/drm/{c}/enabled") == "enabled",
-                                 "model": _edid_name(f"/sys/class/drm/{c}/edid")})
+                                 **dict(zip(("model", "detail"), _screen_info(c)))})
     except OSError:
         pass
     return outs
@@ -730,14 +777,14 @@ class Plugin:
         bdf = _gpu_bdf()
         if not bdf or not _gamescope_running():
             _seen_screens = None; return {}
-        now = {d["name"]: d["model"] for d in _displays(bdf)}
+        now = {d["name"]: d for d in _displays(bdf)}
         new = [c for c in now if _seen_screens is not None and c not in _seen_screens]
         _seen_screens = set(now)
         cur = _gamescope_env("OUTPUT_CONNECTOR").split(",")[0]
         for c in new:
             # a TV that is on another input is not being looked at: don't offer it
             if c != cur and _sh(["/usr/local/sbin/egpu-screen", "state", c], 15)[1] != "other-input":
-                return {"connector": c, "name": now[c] or c, "game": _game_running()}
+                return {"connector": c, "name": now[c]["model"] or c, "detail": now[c]["detail"], "game": _game_running()}
         return {}
 
     async def set_game_screen(self, connector: str):
