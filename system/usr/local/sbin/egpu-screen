@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""egpu-screen - read and wake external screens over DDC/CI (HDMI and DisplayPort).
+
+  egpu-screen list              one line per connected external screen
+  egpu-screen state CONNECTOR   exit 0 in use / unknown, 1 = on another input
+  egpu-screen wake [CONNECTOR]  power on screens still on our input (all if none given)
+  egpu-screen wake --input ...  also switch screens on another input back to us
+
+Successor of NV-EGPU-Buddy's egpu-hdmi-state.sh, generalized to DP, no ddcutil needed.
+Screens that don't speak DDC/CI (many TVs) read as "unknown" and are treated as in use,
+so nothing is ever hidden on a guess.
+"""
+import fcntl, glob, json, os, re, sys, time
+
+I2C_SLAVE = 0x0703
+STORE = "/var/lib/nvegpu/screen-inputs.json"  # EDID -> input code seen while in use
+ADAPTERS = re.compile(r"NVIDIA i2c adapter|AMDGPU DM|i915 gmbus|DPDDC|nvkm|radeon", re.I)
+INPUTS = {0x01: "VGA", 0x03: "DVI", 0x04: "DVI", 0x0F: "DisplayPort-1", 0x10: "DisplayPort-2",
+          0x11: "HDMI-1", 0x12: "HDMI-2", 0x13: "HDMI-3", 0x14: "HDMI-4",
+          0x1B: "USB-C", 0x1C: "USB-C-2"}
+
+
+def _bus(n, addr):
+    fd = os.open(f"/dev/i2c-{n}", os.O_RDWR)
+    fcntl.ioctl(fd, I2C_SLAVE, addr)
+    return fd
+
+
+def _edid(n):
+    try:
+        fd = _bus(n, 0x50)
+        try:
+            os.write(fd, b"\0")
+            return os.read(fd, 128)
+        finally:
+            os.close(fd)
+    except OSError:
+        return b""
+
+
+def _ddc(n, payload, reply=0):
+    msg = bytes([0x51, 0x80 | len(payload)]) + payload
+    chk = 0x6E
+    for b in msg:
+        chk ^= b
+    fd = _bus(n, 0x37)
+    try:
+        os.write(fd, msg + bytes([chk]))
+        time.sleep(0.06)
+        return os.read(fd, reply) if reply else b""
+    finally:
+        os.close(fd)
+
+
+def getvcp(n, code):
+    for _ in range(3):
+        try:
+            r = _ddc(n, bytes([0x01, code]), 11)
+            if len(r) == 11 and r[2] == 0x02 and r[3] == 0 and r[4] == code:
+                return (r[8] << 8) | r[9]
+        except OSError:
+            pass
+        time.sleep(0.05)
+    return None
+
+
+def setvcp(n, code, value):
+    try:
+        _ddc(n, bytes([0x03, code, value >> 8, value & 0xFF]))
+        return True
+    except OSError:
+        return False
+
+
+def screens():
+    """Yield (connector, bus or None, edid) for every connected non-panel output."""
+    buses = {}
+    for d in glob.glob("/sys/bus/i2c/devices/i2c-*"):
+        try:
+            if ADAPTERS.search(open(d + "/name").read()):
+                n = int(d.rsplit("-", 1)[1])
+                e = _edid(n)
+                if len(e) == 128:
+                    buses.setdefault(e, n)
+        except (OSError, ValueError):
+            pass
+    for node in sorted(glob.glob("/sys/class/drm/card*-*")):
+        conn = re.sub(r"^card\d+-", "", os.path.basename(node))
+        if conn.startswith(("eDP", "LVDS", "DSI", "Writeback")):
+            continue
+        try:
+            if open(node + "/status").read().strip() != "connected":
+                continue
+            edid = open(node + "/edid", "rb").read()[:128]
+        except OSError:
+            continue
+        yield conn, buses.get(edid), edid
+
+
+def _store(update=None):
+    try:
+        data = json.load(open(STORE))
+    except (OSError, ValueError):
+        data = {}
+    if update:
+        data.update(update)
+        try:
+            os.makedirs(os.path.dirname(STORE), exist_ok=True)
+            json.dump(data, open(STORE, "w"))
+        except OSError:
+            pass
+    return data
+
+
+def read(conn, bus, edid):
+    """-> (state, power, input) ; state = in-use | other-input | standby | unknown"""
+    if bus is None:
+        return "unknown", None, None
+    power, src = getvcp(bus, 0xD6), getvcp(bus, 0x60)
+    if src is not None:
+        src &= 0xFF  # high byte is vendor noise on some screens
+    name = INPUTS.get(src, "")
+    # ponytail: type match only (HDMI connector vs DP/USB-C input); a monitor with two DP inputs
+    # on the other DP one reads "in use" - fine, it just wakes up to us.
+    wrong = (conn.startswith("HDMI") and name and not name.startswith("HDMI")) or \
+            (conn.startswith("DP") and name.startswith("HDMI"))
+    if wrong:
+        return "other-input", power, src
+    if src is not None:
+        _store({edid.hex(): src})
+    if power in (2, 3, 4, 5):
+        return "standby", power, src
+    return ("in-use" if src is not None or power == 1 else "unknown"), power, src
+
+
+def wake(conn, bus, edid, take_input=False):
+    if bus is None:
+        return "no DDC/CI - can't wake"
+    st = read(conn, bus, edid)[0]
+    if st == "other-input" and not take_input:
+        return "on another input - left alone"
+    ok = setvcp(bus, 0xD6, 1)
+    src = _store().get(edid.hex())
+    if take_input and src is not None and getvcp(bus, 0x60) not in (None, src):
+        ok = setvcp(bus, 0x60, src) and ok
+    return "woken" if ok else "write failed"
+
+
+def main(argv):
+    cmd, want = (argv[1] if len(argv) > 1 else "list"), argv[2:]
+    take_input = "--input" in want
+    want = [w for w in want if w != "--input"]
+    found = [s for s in screens() if not want or s[0] in want]
+    if cmd == "list":
+        for conn, bus, edid in found:
+            st, power, src = read(conn, bus, edid)
+            i = edid.find(b"\0\0\0\xfc\0")
+            name = edid[i + 5:i + 18] if i >= 0 else b""
+            print(json.dumps({"connector": conn, "state": st, "ddc": bus is not None,
+                              "input": INPUTS.get(src, src), "power": power,
+                              "name": name.split(b"\n")[0].decode(errors="ignore").strip()}))
+        return 0
+    if cmd == "state":
+        if not found:
+            print("disconnected"); return 0
+        st = read(*found[0])[0]
+        print(st)
+        return 1 if st == "other-input" else 0
+    if cmd == "wake":
+        for s in found:
+            print(s[0], wake(*s, take_input=take_input))
+        return 0
+    if cmd == "selftest":  # the input rule without hardware: (connector, power, input) -> state
+        global getvcp, _store
+        real = getvcp, _store
+        _store = lambda update=None: {}
+        for conn, power, src, want in [("HDMI-A-1", 1, 0x0F, "other-input"), ("HDMI-A-1", 1, 0x11, "in-use"),
+                                       ("DP-7", 1, 0x12, "other-input"), ("DP-7", 1, 0x10, "in-use"),
+                                       ("DP-7", 1, 0x1B, "in-use"), ("DP-7", 4, 0x10, "standby"),
+                                       ("HDMI-A-1", None, None, "unknown")]:
+            getvcp = lambda n, c, p=power, i=src: p if c == 0xD6 else i
+            got = read(conn, 0, b"")[0]
+            assert got == want, (conn, power, src, got, want)
+        assert read("HDMI-A-1", None, b"")[0] == "unknown"
+        getvcp, _store = real
+        print("ok"); return 0
+    print(__doc__); return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

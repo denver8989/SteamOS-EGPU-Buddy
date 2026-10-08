@@ -35,6 +35,10 @@ const getTrial = callable<[], Trial>("get_driver_trial");
 const startTrial = callable<[], Result>("start_driver_trial");
 const revertTrial = callable<[], Result>("revert_driver_trial");
 const ackTrial = callable<[], Result>("ack_driver_trial");
+type Screen = { connector: string; name: string; state: string; ddc: boolean };
+const getScreens = callable<[], Screen[]>("get_screens");
+const wakeScreens = callable<[], Result>("wake_screens");
+const screenState: Record<string, string> = { "in-use": "on", "other-input": "other input", standby: "asleep" };
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
 const PLUGIN_VERSION = "0.7.74";
@@ -111,6 +115,7 @@ function Content() {
   const staleChecked = useRef(false);
   const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall" | "amd">("");
   const [s, setS] = useState<Status | null>(null);
+  const [scr, setScr] = useState<Screen[] | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [pl, setPl] = useState<number | null>(null);
@@ -120,6 +125,8 @@ function Content() {
     // the hourly check only counts awake time: after a night of sleep the status is stale, so re-check on open (wall clock)
     if (!staleChecked.current && (!u.checked || Date.now() / 1000 - u.checked > 600)) { staleChecked.current = true; checkUpdate(false); }
   } catch (e) { setMsg(`status error: ${e}`); } };
+  // DDC/CI reads are slow-ish and some screens dislike polling: read once when details open
+  useEffect(() => { if (visible && tab === "details") getScreens().then(setScr).catch(() => setScr(null)); }, [visible, tab]);
   useEffect(() => { if (!visible) return; refresh(); const t = setInterval(refresh, su?.busy ? 1000 : 3000); return () => clearInterval(t); }, [visible, su?.busy]);
 
   const gameUp = !!(s?.game_running || Router.MainRunningApp);
@@ -257,7 +264,8 @@ function Content() {
               <Row k="Driver" v={s.driver_loaded ? `nvidia ${tel["driver_version"] ?? ""}` : "not loaded"} />
               <Row k="PCIe" v={s.present ? `${s.link.speed} x${s.link.width}` : ""} />
               <Row k="Session" v={s.game_mode ? (s.on_egpu ? `Game Mode on ${s.output}` : "Game Mode on panel") : "Desktop"} />
-              <Row k="Displays" v={s.displays.map((d) => `${d.name}${d.enabled ? "" : " (off)"}`).join(", ")} />
+              <Row k="Displays" v={scr?.length ? scr.map((x) => `${x.name || x.connector}${screenState[x.state] ? ` (${screenState[x.state]})` : ""}`).join(", ") : s.displays.map((d) => `${d.name}${d.enabled ? "" : " (off)"}`).join(", ")} />
+              {scr?.some((x) => x.ddc) && <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(async () => { const r = await wakeScreens(); getScreens().then(setScr).catch(() => {}); return r; })}>Wake screens</ButtonItem></PanelSectionRow>}
               <Row k="Audio" v={audioName(s.audio_sink, s.bdf)} />
               <Row k="Temp" v={tel["temperature.gpu"] ? `${tel["temperature.gpu"]} °C` : ""} />
               <Row k="Power" v={tel["power.draw"] ? `${Math.round(Number(tel["power.draw"]))} / ${Math.round(Number(tel["power.limit"]))} W` : ""} />

@@ -702,6 +702,14 @@ class Plugin:
         }
         return status
 
+    async def get_screens(self):
+        rc, out, _ = _sh(["/usr/local/sbin/egpu-screen", "list"], 20)
+        return [json.loads(l) for l in out.splitlines() if l.startswith("{")]
+
+    async def wake_screens(self):
+        rc, out, err = _sh(["/usr/local/sbin/egpu-screen", "wake", "--input"], 20)
+        return {"ok": rc == 0, "message": out.replace("\n", "; ") or err or "No external screens connected."}
+
     async def attach(self, force: bool = False):
         decky.logger.info(f"attach pressed (force={force})")
         if not _gamescope_running():

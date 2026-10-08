@@ -14,6 +14,7 @@ active=$(for c in "$nv"-*; do [ "$(cat "$c/status" 2>/dev/null)" = connected ] &
 [ -n "$active" ] || { log "eGPU present but no display connected to it; nothing to kick"; exit 0; }
 [ -e /run/user/1000/nv-egpu-buddy/detach-handoff-active ] && exit 0
 cur=$(cat /sys/class/tty/tty0/active 2>/dev/null); cur=${cur#tty}
+/usr/local/sbin/egpu-screen wake 2>/dev/null | while read -r l; do log "screen $l"; done
 chvt 2; sleep 1; chvt "${cur:-1}"; log "post-resume modeset kick for $active (VT round-trip)"
 sleep 3
 # the eGPU display is the active one (Game Mode on it, or the NVIDIA-only desktop): handheld panel off again

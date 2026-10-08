@@ -140,7 +140,12 @@ connected_egpu_connectors() {
     esac
     device=$(readlink -f "$node/device/device" 2>/dev/null || true)
     case "$device" in
-      */"$GPU") printf '%s\n' "$output" ;;
+      */"$GPU")
+        # a TV/monitor switched to another input is not a screen the user is looking at
+        if [ "$(/usr/local/sbin/egpu-screen state "$output" 2>/dev/null)" = other-input ]; then
+          log "$output is on another input - leaving it out" >&2; continue
+        fi
+        printf '%s\n' "$output" ;;
     esac
   done | sort -u
 }
