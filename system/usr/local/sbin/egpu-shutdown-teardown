@@ -23,16 +23,6 @@ going_down(){
 going_down || exit 0
 lspci -Dn 2>/dev/null | grep -qE ' 0300: 10de:' || exit 0
 
-# The power-off splash (plymouthd, started at the beginning of the shutdown) keeps the eGPU's DRM node open, and the
-# teardown refuses to pull a GPU that is still open ("/dev/nvidia* still held by: plymouthd", Legion Go 2, 2026-10-08).
-# `plymouth deactivate` was not enough (it only gives up control of the screen, the file stays open — tried 2026-10-08
-# 14:55). `quit --retain-splash` ends the daemon, which closes everything, and leaves the splash image on the screen.
-plymouth quit --retain-splash >/dev/null 2>&1 || true
-timeout 5 plymouth --wait >/dev/null 2>&1 || true
-# The daemon's DRM file is released by the kernel a moment after it exits; `modprobe -r nvidia_drm` in the same second
-# still saw one user and the teardown aborted (4th test, 15:08). Wait, briefly, for the module to have no users.
-for _ in $(seq 1 20); do [ "$(cat /sys/module/nvidia_drm/refcnt 2>/dev/null || echo 0)" = 0 ] && break; sleep 0.25; done
-log "nvidia_drm users before teardown: $(cat /sys/module/nvidia_drm/refcnt 2>/dev/null || echo none)"
 log "=== shutdown: egpu-safe-detach --teardown-only ==="
 /usr/local/sbin/egpu-safe-detach --teardown-only >>"$LOG" 2>&1; rc=$?
 log "=== teardown rc=$rc; eGPU on bus: $(lspci -Dn 2>/dev/null | grep -cE ' 0300: 10de:') ==="
