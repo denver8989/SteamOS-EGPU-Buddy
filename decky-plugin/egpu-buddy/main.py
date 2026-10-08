@@ -183,6 +183,16 @@ def _edid_name(path):
     return e[i + 5:i + 18].split(b"\n")[0].decode(errors="ignore").strip() if i >= 0 else ""
 
 
+# CTA-861 video codes (progressive modes from 720p up; most TVs list their best modes only this way)
+_VIC = {4: (1280, 720, 60), 19: (1280, 720, 50), 47: (1280, 720, 120), 16: (1920, 1080, 60), 31: (1920, 1080, 50),
+        32: (1920, 1080, 24), 33: (1920, 1080, 25), 34: (1920, 1080, 30), 63: (1920, 1080, 120), 64: (1920, 1080, 100),
+        93: (3840, 2160, 24), 94: (3840, 2160, 25), 95: (3840, 2160, 30), 96: (3840, 2160, 50), 97: (3840, 2160, 60),
+        114: (3840, 2160, 48), 117: (3840, 2160, 100), 118: (3840, 2160, 120), 98: (4096, 2160, 24), 99: (4096, 2160, 25),
+        100: (4096, 2160, 30), 101: (4096, 2160, 50), 102: (4096, 2160, 60), 115: (4096, 2160, 48), 218: (4096, 2160, 100),
+        219: (4096, 2160, 120), 194: (7680, 4320, 24), 195: (7680, 4320, 25), 196: (7680, 4320, 30), 197: (7680, 4320, 48),
+        198: (7680, 4320, 50), 199: (7680, 4320, 60), 200: (7680, 4320, 100), 201: (7680, 4320, 120)}
+
+
 def _edid_modes(e):
     """(w, h, Hz) from every detailed timing: base block, CTA-861 and DisplayID (type I / VII) extensions."""
     def dtd(d):
@@ -197,10 +207,17 @@ def _edid_modes(e):
         h, hb, v, vb = u(4), u(6), u(12), u(14)  # byte 3 = flags
         return (h, v, round(clk / ((h + hb) * (v + vb))))
     out = [dtd(e[i:i + 18]) for i in range(54, 126, 18) if e[i] or e[i + 1]]
+    vics = []
     for x in range(128, len(e) - 127, 128):
         blk = e[x:x + 128]
         if blk[0] == 0x02 and blk[2] >= 4:  # CTA: DTDs from offset blk[2] to the padding
             out += [dtd(blk[i:i + 18]) for i in range(blk[2], 110, 18) if blk[i] or blk[i + 1]]
+            i = 4
+            while i < blk[2]:  # data blocks: video codes (tag 2) and 4:2:0-only video codes (extended tag 14)
+                tag, n = blk[i] >> 5, blk[i] & 31
+                codes = blk[i + 1:i + 1 + n] if tag == 2 else blk[i + 2:i + 1 + n] if tag == 7 and blk[i + 1] == 14 else b""
+                vics += [_VIC.get(c - 128 if 129 <= c <= 192 else c) for c in codes]  # 129-192: "native" flag on VIC 1-64
+                i += 1 + n
         elif blk[0] == 0x70:  # DisplayID: data blocks after the 5-byte section header
             i, end = 5, 5 + blk[2]
             while i + 3 <= end:
@@ -208,21 +225,32 @@ def _edid_modes(e):
                 if tag in (0x03, 0x22):  # type I (10 kHz units) / type VII (1 kHz units)
                     out += [did(blk[j:j + 20], 10 if tag == 0x03 else 1) for j in range(i + 3, i + 3 + n - 19, 20)]
                 i += 3 + n
-    return [m for m in out if m]
+    return [m for m in out if m], [m for m in vics if m]
+
+
+def _native_mode(e):
+    """Native resolution at its top refresh. Detailed timings describe the real panel (an ultrawide that also
+    accepts a 4K signal stays 5120x1440); video codes add refresh rates at that resolution, and only set the
+    resolution when the detailed timings stop at 1080p (TVs that list 4K as codes only). 3840 beats DCI 4096."""
+    dtds, vics = _edid_modes(e)
+    pool = dtds if dtds and max(w * h for w, h, _ in dtds) > 1920 * 1080 else dtds + vics
+    if not pool:
+        return None
+    w, h, _ = max(pool, key=lambda m: (m[0] * m[1] - (m[0] == 4096) * 10 ** 7, m[2]))
+    return w, h, max(z for x, y, z in dtds + vics if (x, y) == (w, h))
 
 
 def _screen_info(conn):
-    """('LG TV SSCR2', 'HDMI · 3840x2160 @ 60 Hz · 72"') from the EDID: biggest mode at its top refresh + size."""
+    """('LG TV SSCR2', 'HDMI · 3840x2160 @ 120 Hz · 72"') from the EDID: native mode at its top refresh + size."""
     path = f"/sys/class/drm/{conn}"
     try:
         e = open(path + "/edid", "rb").read()
     except OSError:
         e = b""
     parts = []
-    modes = _edid_modes(e) if len(e) >= 128 else []
-    if modes:
-        w, h, hz = max(modes, key=lambda m: (m[0] * m[1], m[2]))
-        parts.append(f"{w}x{h} @ {hz} Hz")
+    mode = _native_mode(e) if len(e) >= 128 else None
+    if mode:
+        parts.append("{}x{} @ {} Hz".format(*mode))
     if len(e) >= 128 and e[21] and e[22]:
         parts.append(f'{round((e[21] ** 2 + e[22] ** 2) ** 0.5 / 2.54)}"')
     port = conn.split("-", 1)[1] if "-" in conn else conn

@@ -174,14 +174,14 @@ def read(conn, bus, edid):
     if src is not None:
         src &= 0xFF  # high byte is vendor noise on some screens
     name = INPUTS.get(src, "")
-    # ponytail: type match only (HDMI connector vs DP/USB-C input); a monitor with two DP inputs
-    # on the other DP one reads "in use" - fine, it just wakes up to us.
-    wrong = (conn.startswith("HDMI") and name and not name.startswith("HDMI")) or \
-            (conn.startswith("DP") and name.startswith("HDMI"))
-    if wrong:
+    # Only certain cases count: an HDMI signal can only land on an HDMI input. A DP output can reach an
+    # HDMI input through an adapter, so DP + "HDMI" is NOT proof of another input. Same-type inputs
+    # (HDMI 1 vs HDMI 2) look alike over DDC/CI - telling those apart is what the CEC path is for.
+    if conn.startswith("HDMI") and name and not name.startswith("HDMI"):
         return "other-input", power, src
-    if src is not None:
-        _store({edid.hex(): src})
+    if src is not None and (conn.startswith("HDMI") and name.startswith("HDMI")
+                            or conn.startswith("DP") and name.startswith(("DisplayPort", "USB-C"))):
+        _store({conn + ":" + edid.hex(): src})  # certainly ours: what Wake switches back to
     if power in (2, 3, 4, 5):
         return "standby", power, src
     return ("in-use" if src is not None or power == 1 else "unknown"), power, src
@@ -199,7 +199,7 @@ def wake(conn, bus, edid, take_input=False):
     if st == "other-input" and not take_input:
         return "on another input - left alone"
     ok = setvcp(bus, 0xD6, 1)
-    src = _store().get(edid.hex())
+    src = _store().get(conn + ":" + edid.hex())
     if take_input and src is not None and getvcp(bus, 0x60) not in (None, src):
         ok = setvcp(bus, 0x60, src) and ok
     return "woken" if ok else "write failed"
@@ -219,6 +219,8 @@ def _kwin_enable(conn, on):
 def watch():
     """Desktop (KWin) only - Game Mode picks its screens at attach (nv-egpu-buddy-mount)."""
     names, last = set(), {}
+    if subprocess.run(["which", "kscreen-doctor"], capture_output=True).returncode:
+        print("no kscreen-doctor (not KDE Plasma): desktop screen rule off", flush=True); return
     while True:
         if os.system("pgrep -x 'gamescope(-wl)?' >/dev/null") != 0:
             found = list(screens())
@@ -273,7 +275,8 @@ def main(argv):
         real = getvcp, _store
         _store = lambda update=None: {}
         for conn, power, src, want in [("HDMI-A-1", 1, 0x0F, "other-input"), ("HDMI-A-1", 1, 0x11, "in-use"),
-                                       ("DP-7", 1, 0x12, "other-input"), ("DP-7", 1, 0x10, "in-use"),
+                                       ("DP-7", 1, 0x12, "in-use"),  # DP->HDMI adapter: not proof of another input
+                                       ("HDMI-A-1", 1, 0x1B, "other-input"), ("DP-7", 1, 0x10, "in-use"),
                                        ("DP-7", 1, 0x1B, "in-use"), ("DP-7", 4, 0x10, "standby"),
                                        ("HDMI-A-1", None, None, "unknown")]:
             getvcp = lambda n, c, p=power, i=src: p if c == 0xD6 else i

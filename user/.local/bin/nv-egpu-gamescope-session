@@ -659,6 +659,8 @@ elif [ "$detach_mode" = 0 ] && generic_egpu_ready; then
   # NVIDIA ICD pinning: stock gamescope, pointed at the eGPU's DRM card, games on the same GPU via DRI_PRIME.
   clear_egpu_env
   clear_session_env
+  gen_pref=$(cat /var/lib/nvegpu/game-screen 2>/dev/null)   # the screen picked in the plugin goes first
+  case " $gen_outputs " in *" $gen_pref "*) [ -n "$gen_pref" ] && gen_outputs="$gen_pref $(printf '%s\n' $gen_outputs | grep -vx "$gen_pref")" ;; esac
   export OUTPUT_CONNECTOR="$(printf '%s,' $gen_outputs)*,${PANEL}"
   export WLR_DRM_DEVICES="/dev/dri/$gen_card"
   export DRI_PRIME="pci-$(printf '%s' "$gen_bdf" | tr ':.' '__')!"
