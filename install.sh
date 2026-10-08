@@ -202,7 +202,7 @@ mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/ve
 # reloads are conveniences (a reboot applies everything); they have nothing to talk to in a chroot/container
 udevadm control --reload >/dev/null 2>&1 || true; udevadm trigger --subsystem-match=pci --action=change >/dev/null 2>&1 || true
 systemctl daemon-reload >/dev/null 2>&1 || true
-for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal egpu-buddy-resume egpu-buddy-shutdown; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
+for u in egpu-mount egpu-boot-enumerate egpu-conditional-session egpu-buddy-selfheal egpu-buddy-resume egpu-buddy-shutdown egpu-driver-trial-boot; do [ -f /etc/systemd/system/\$u.service ] && systemctl enable \$u.service >/dev/null; done
 # the shutdown teardown only acts in its ExecStop: start it now so it already covers the next power-off (no reboot needed)
 systemctl start egpu-buddy-shutdown.service >/dev/null 2>&1 || true
 if [ -f /etc/pacman.conf ]; then
@@ -288,15 +288,17 @@ KEEP
 fi
 
 # ---- patched NVIDIA driver (optional, Arch-based) ------------------------------------------------
+# the driver this machine runs: 610 (tested) unless a beta driver trial was kept (/etc/nv-egpu-buddy/driver-dir)
+DRVDIR="$ROOT/packaging/$(cat /etc/nv-egpu-buddy/driver-dir 2>/dev/null || echo nvidia-open-egpu)"; [ -f "$DRVDIR/PKGBUILD" ] || DRVDIR="$ROOT/packaging/nvidia-open-egpu"
 if want driver; then
-  PKGV="$(sed -n 's/^pkgver=//p' "$ROOT/packaging/nvidia-open-egpu/PKGBUILD")-$(sed -n 's/^pkgrel=//p' "$ROOT/packaging/nvidia-open-egpu/PKGBUILD")"
+  PKGV="$(sed -n 's/^pkgver=//p' "$DRVDIR/PKGBUILD")-$(sed -n 's/^pkgrel=//p' "$DRVDIR/PKGBUILD")"
   if command -v pacman >/dev/null && [ "${EGPU_DRIVER_FORCE:-0}" != 1 ] && pacman -Q nvidia-open-egpu-dkms 2>/dev/null | grep -q "$PKGV\$"; then say "== patched driver package $PKGV already installed (EGPU_DRIVER_FORCE=1 to rebuild)"
   elif command -v steamos-readonly >/dev/null 2>&1; then
     # SteamOS: the system partition has ~870 MB free (measured on Valve's 3.8.14 image) and an update replaces it, so the
     # driver goes into a system extension on /home, built in a SteamOS build root there. Nothing is written to /usr.
     say "== SteamOS: building the patched NVIDIA driver into a system extension on /home (10-20 minutes the first time, mostly downloads)"
-    sudo bash "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" || { DRIVER_FAILED=1; echo "warning: the driver extension was not built (see above); the rest is installed. Do NOT connect the eGPU until it is."; }
-  elif command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$ROOT/packaging/nvidia-open-egpu/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
+    sudo bash "$DRVDIR/install-steamos-sysext.sh" || { DRIVER_FAILED=1; echo "warning: the driver extension was not built (see above); the rest is installed. Do NOT connect the eGPU until it is."; }
+  elif command -v pacman >/dev/null; then say "== building the patched nvidia-open kernel modules (several minutes)"; EGPU_TARGET_USER="$USER_NAME" "$DRVDIR/install-patched-nvidia.sh" || echo "warning: patched driver build failed; the stock driver stays (safe detach works, cable yank may hang)"; else echo "the patched driver package needs pacman (Arch-based distro); skipping"; fi
 else
   # Do not cry wolf: on SteamOS the patched driver is delivered as a system extension, not as a
   # pacman package, so "no package" says nothing about whether it is installed. The modules

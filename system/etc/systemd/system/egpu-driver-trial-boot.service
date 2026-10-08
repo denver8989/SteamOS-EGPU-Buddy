@@ -1,0 +1,16 @@
+[Unit]
+Description=SteamOS EGPU Buddy: put the tested NVIDIA driver back if the machine restarted during a beta driver trial
+# runs only when a trial was ever started; before the self-heal and before ANY eGPU bring-up, so a beta driver that
+# reset the machine is never loaded again
+ConditionPathExists=/var/lib/nvegpu/driver-trial
+After=local-fs.target
+Before=egpu-buddy-selfheal.service egpu-boot-enumerate.service egpu-mount.service display-manager.service plasmalogin.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/egpu-driver-trial boot
+# a pacman revert rebuilds the 610 modules with DKMS (a few minutes); never block the boot for longer than this
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

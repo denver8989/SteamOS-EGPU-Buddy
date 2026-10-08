@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# egpu-driver-trial — try the BETA NVIDIA driver (615) on the eGPU, and go back to the tested one (610) by itself if it fails.
+#
+#   egpu-driver-trial start    (Decky "Try beta driver") Safe Detach, build + install 615, attach, health check;
+#                              healthy -> 615 is kept; anything else -> 610 is put back and attached again
+#   egpu-driver-trial revert   (Decky "Return to 610") Safe Detach, put 610 back, attach again
+#   egpu-driver-trial boot     (egpu-driver-trial-boot.service, before ANY eGPU bring-up) a trial that never reached
+#                              "kept" means the machine restarted during it (hard reset, hang, power button): put 610 back
+#   egpu-driver-trial status
+#
+# Nothing here is new teardown or attach logic: it calls the same Safe Detach and Attach the plugin buttons use, and the
+# same driver installers the install uses (packaging/nvidia-open-egpu for 610, packaging/nvidia-open-egpu-615 for 615).
+# CachyOS/Arch: the driver is pacman packages; the exact 610 package files are kept in the package cache before anything
+#   changes, and a revert installs those files again (offline).
+# SteamOS: the driver is a system-extension image on /home; 615 gets its own image next to 610's, a revert links 610's back.
+# The driver that should be used after a reinstall or self-heal is /etc/nv-egpu-buddy/driver-dir (absent = 610).
+set -u
+STATE=/var/lib/nvegpu/driver-trial; LOG=/var/log/egpu-driver-trial.log; SEL=/etc/nv-egpu-buddy/driver-dir
+PAY=/home/deck/.local/share/steamos-egpu-buddy/packaging; OLD=$PAY/nvidia-open-egpu; NEW=$PAY/nvidia-open-egpu-615
+PERSIST=/home/deck/.local/share/steamos-egpu-buddy; U=deck
+DETACH=/usr/local/sbin/egpu-gamemode-detach; REATTACH=/usr/local/sbin/egpu-reattach
+PKGS="nvidia-utils lib32-nvidia-utils nvidia-open-egpu-dkms"
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+mkdir -p "$(dirname "$STATE")" /etc/nv-egpu-buddy
+log(){ printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; sync -d "$LOG" 2>/dev/null || true; }
+get(){ sed -n "s/^$1=//p" "$STATE" 2>/dev/null | tail -1; }
+# state + one line for the plugin; written and flushed at every step so a hard reset leaves the true last step on disk
+put(){ local st=$1; shift; { echo "state=$st"; echo "message=$*"; echo "target=${TPV:-}"; echo "prev=$(get prev)"; echo "started=$(get started)"; echo "time=$(date +%s)"; } > "$STATE.new"
+  mv -f "$STATE.new" "$STATE"; sync -f "$STATE" 2>/dev/null || sync; log "[$st] $*"; }
+steamos(){ command -v steamos-readonly >/dev/null 2>&1; }
+TPV=$(sed -n 's/^pkgver=//p' "$NEW/PKGBUILD" 2>/dev/null); OPV=$(sed -n 's/^pkgver=//p' "$OLD/PKGBUILD" 2>/dev/null)
+modver(){ modinfo -F version nvidia 2>/dev/null | head -1; }
+gpu_on_bus(){ lspci -Dn 2>/dev/null | grep -qE ' 0300: 10de:'; }
+gamescope(){ pgrep -n -x 'gamescope(-wl)?'; }
+on_egpu(){ local g o; g=$(gamescope) || return 1; o=$(tr '\0' '\n' </proc/$g/environ 2>/dev/null | sed -n 's/^OUTPUT_CONNECTOR=//p' | cut -d, -f1); [ -n "$o" ] && [ "$o" != "*" ] && [ "$o" != eDP-1 ]; }
+
+detach(){   # the plugin's Safe Detach; afterwards the driver must be unloaded or nothing may be swapped
+  [ -d /sys/module/nvidia ] || return 0
+  log "Safe Detach (the same one the plugin button runs)"
+  "$DETACH" >>"$LOG" 2>&1 || { log "Safe Detach failed (rc $?)"; return 1; }
+  for _ in $(seq 1 15); do [ -d /sys/module/nvidia ] || return 0; sleep 1; done
+  log "the NVIDIA driver is still loaded after Safe Detach"; return 1; }
+
+attach(){   # the plugin's Attach after a Safe Detach (rescan, fresh driver, Game Mode onto the eGPU display)
+  log "Attach (the same one the plugin button runs)"; "$REATTACH" >>"$LOG" 2>&1; local rc=$?; log "attach rc=$rc"; return $rc; }
+
+healthy(){  # the driver that answers is the one we installed, and Game Mode came up on the eGPU display
+  local v; for _ in $(seq 1 60); do
+    v=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)
+    [ "$v" = "$1" ] && on_egpu && return 0; sleep 3; done
+  log "health check: nvidia-smi says '${v:-no answer}', Game Mode on the eGPU display: $(on_egpu && echo yes || echo no)"; return 1; }
+
+report(){   # what the beta driver looks like on this machine, for the user and for bug reports
+  { echo "---- report $(date '+%F %T') ----"
+    nvidia-smi --query-gpu=name,driver_version,pcie.link.gen.current,pcie.link.width.current,memory.total,power.limit --format=csv 2>&1
+    nvidia-smi -q -d MEMORY 2>/dev/null | sed -n '/BAR1/,/Free/p'
+    echo "kernel messages since the trial started:"; journalctl -k --since "@$(get started)" --no-pager 2>/dev/null | grep -iE 'nvidia|nvrm|xid|drm|pcie|aer' | tail -40
+  } >>"$LOG" 2>&1; sync -d "$LOG" 2>/dev/null || true; }
+
+# ---- 610 package files (CachyOS/Arch): find the exact installed files in a cache before anything changes ----
+cached_file(){ local n=$1 v=$2 d f; for d in "$PERSIST/pkgcache" /var/cache/pacman/pkg; do
+    for f in "$d/$n-$v"-*.pkg.tar.*; do case "$f" in *.sig|*'*'*) continue ;; esac; [ -s "$f" ] && { echo "$f"; return 0; }; done; done; return 1; }
+remember_prev(){ local p v f list=""
+  for p in $PKGS; do v=$(pacman -Q "$p" 2>/dev/null | awk '{print $2}') || true; [ -n "$v" ] || continue
+    f=$(cached_file "$p" "$v") || { log "no cached package file for $p $v: a revert could not be guaranteed, so the trial does not start"; return 1; }
+    mkdir -p "$PERSIST/pkgcache"; case "$f" in "$PERSIST/pkgcache/"*) ;; *) cp -f "$f" "$PERSIST/pkgcache/" && f="$PERSIST/pkgcache/$(basename "$f")" ;; esac
+    list="$list $f"; done
+  [ -n "$list" ] || { log "no NVIDIA packages installed: install the tested driver first"; return 1; }
+  sed -i '/^prev=/d' "$STATE" 2>/dev/null; echo "prev=${list# }" >> "$STATE"; sync -f "$STATE" 2>/dev/null; }
+
+pacman_u(){ local conf=() tc; if ! pacman-conf LocalFileSigLevel 2>/dev/null | grep -qiE 'Optional|Never'; then
+    tc=$(mktemp); sed 's/^\[options\]/[options]\nLocalFileSigLevel = Optional/' /etc/pacman.conf > "$tc"; conf=(--config "$tc"); fi
+  rm -f /var/lib/pacman/db.lck 2>/dev/null   # only ever reached with no other pacman of ours running (flock below)
+  pacman "${conf[@]}" -U --noconfirm --ask 4 "$@" >>"$LOG" 2>&1; }
+
+install_new(){
+  if steamos; then bash "$NEW/install-steamos-sysext.sh" >>"$LOG" 2>&1
+  else EGPU_TARGET_USER=$U bash "$NEW/install-patched-nvidia.sh" >>"$LOG" 2>&1; fi; }
+
+restore_old(){   # put 610 back; offline on both systems
+  if steamos; then
+    bash "$NEW/install-steamos-sysext.sh" --remove >>"$LOG" 2>&1 || true   # first: it unlinks the extension name
+    bash "$OLD/install-steamos-sysext.sh" --activate >>"$LOG" 2>&1 || return 1
+  else
+    local prev; prev=$(get prev); [ -n "$prev" ] || { log "no recorded 610 package files"; return 1; }
+    # shellcheck disable=SC2086
+    pacman_u $prev || return 1
+    rm -f "$PERSIST"/pkgcache/*"$TPV"-*.pkg.tar.* 2>/dev/null   # the 615 packages (about 500 MB); a new trial rebuilds them
+  fi
+  rm -f "$SEL"; [ "$(modver)" = "$OPV" ] || { log "after the revert the installed module is '$(modver)', not $OPV"; return 1; }
+  log "the tested driver $OPV is back"; }
+
+revert_and_attach(){ # <reason>
+  put reverting "$1 Putting the tested driver $OPV back."
+  detach || true
+  if restore_old; then
+    on_egpu || attach || true   # an eGPU that was unplugged meanwhile simply is not attached
+    put reverted "$1 The tested driver $OPV is back."
+  else put failed "$1 The tested driver could not be put back automatically. Details: $LOG"; fi; }
+
+exec 9>/run/egpu-driver-trial.lock; flock -n 9 || { echo "a driver trial is already running"; exit 3; }
+
+case "${1:-status}" in
+  status) cat "$STATE" 2>/dev/null || echo "state=none"; echo "installed=$(modver)"; exit 0 ;;
+
+  boot)
+    st=$(get state); case "$st" in building|attempting|reverting)
+      log "boot: the machine restarted during the driver trial (last step: $st)"
+      if restore_old; then put reverted "The machine restarted during the beta driver trial (last step: $st). The tested driver $OPV was put back before the eGPU was used."
+      else put failed "The machine restarted during the beta driver trial and the tested driver could not be put back automatically. Details: $LOG"; fi ;;
+    esac; exit 0 ;;
+
+  start)
+    [ -n "$TPV" ] && [ -n "$OPV" ] || { echo "the beta driver files are not installed"; exit 2; }
+    [ "$(modver)" = "$TPV" ] && [ "$(get state)" = kept ] && { echo "the beta driver $TPV is already in use"; exit 0; }
+    gamescope >/dev/null || { echo "start it from Game Mode"; exit 2; }
+    pgrep -x reaper >/dev/null && { echo "close the running game first"; exit 2; }
+    gpu_on_bus || [ -d /sys/module/nvidia ] || { echo "connect the eGPU first: the trial attaches it to test the driver"; exit 2; }
+    free=$(df -Pm /home | awk 'NR==2{print $4}'); [ "${free:-0}" -ge 6000 ] || { echo "not enough space on /home: ${free} MB free, 6000 MB needed while building"; exit 2; }
+    : > "$STATE"; echo "started=$(date +%s)" >> "$STATE"
+    log "==== beta driver trial: $OPV -> $TPV ($(steamos && echo SteamOS || echo pacman)) ===="
+    steamos || remember_prev || { put failed "Nothing was changed: the tested driver's package files are not in the package cache, so a revert could not be guaranteed."; exit 4; }
+    steamos && { bash "$OLD/install-steamos-sysext.sh" --status >/dev/null 2>&1 || { put failed "Nothing was changed: the tested driver's image is not in place."; exit 4; }; }
+    put building "Safe Detach, then downloading and building the beta driver $TPV (10-20 minutes)."
+    detach || { put failed "Nothing was changed: Safe Detach did not finish."; attach >/dev/null 2>&1; exit 5; }
+    if ! install_new || [ "$(modver)" != "$TPV" ]; then
+      revert_and_attach "The beta driver $TPV did not build or install (installed module: '$(modver)')."; exit 6; fi
+    put attempting "Beta driver $TPV installed; attaching the eGPU with it."
+    attach; if healthy "$TPV"; then
+      echo "nvidia-open-egpu-615" > "$SEL"; put kept "The beta driver $TPV is running the eGPU. Return to $OPV at any time."; report; exit 0; fi
+    report; revert_and_attach "The eGPU did not come up with the beta driver $TPV."; exit 7 ;;
+
+  revert)
+    [ "$(modver)" = "$OPV" ] && [ ! -e "$SEL" ] && { echo "already on the tested driver $OPV"; exit 0; }
+    gamescope >/dev/null || { echo "start it from Game Mode"; exit 2; }
+    pgrep -x reaper >/dev/null && { echo "close the running game first"; exit 2; }
+    revert_and_attach "Return to the tested driver requested."; exit 0 ;;
+
+  *) echo "usage: egpu-driver-trial start|revert|boot|status"; exit 1 ;;
+esac

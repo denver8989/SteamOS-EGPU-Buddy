@@ -76,7 +76,7 @@ if command -v steamos-readonly >/dev/null 2>&1 && grep -q '^sysext /usr ' /proc/
 fi
 userctl disable --now egpu-display-failover.service egpu-wake-guard.service egpu-buddy-tray.service 2>/dev/null
 cd "$ROOT"; find user -type f | while read -r f; do restore_or_remove "$(map_dest "$f")"; done
-sudo bash -c "$(declare -f restore_or_remove); systemctl disable egpu-mount.service egpu-boot-enumerate.service egpu-conditional-session.service egpu-buddy-selfheal.service egpu-buddy-resume.service egpu-buddy-shutdown.service 2>/dev/null; $(cd "$ROOT" && find system -type f | while read -r f; do printf 'restore_or_remove %q\n' "$(map_dest "$f")"; done); udevadm control --reload; systemctl daemon-reload"
+sudo bash -c "$(declare -f restore_or_remove); systemctl disable egpu-mount.service egpu-boot-enumerate.service egpu-conditional-session.service egpu-buddy-selfheal.service egpu-buddy-resume.service egpu-buddy-shutdown.service egpu-driver-trial-boot.service 2>/dev/null; $(cd "$ROOT" && find system -type f | while read -r f; do printf 'restore_or_remove %q\n' "$(map_dest "$f")"; done); udevadm control --reload; systemctl daemon-reload"
 [ "${EGPU_KEEP_PLUGIN:-0}" = 1 ] || sudo rm -rf "$USER_HOME/homebrew/plugins/EGPU-Buddy"
 [ "${EGPU_KEEP_PLUGIN:-0}" = 1 ] || rm -rf "$USER_HOME/.local/share/steamos-egpu-buddy"; rm -f "$USER_HOME/.local/share/applications/egpu-safe-detach.desktop" "$USER_HOME/.config/autostart/egpu-buddy-tray.desktop" "$USER_HOME/Desktop/egpu-buddy.desktop" "$USER_HOME/Desktop/egpu-safe-detach.desktop"; rm -rf "$USER_HOME/.local/share/egpu-buddy" "$USER_HOME/.local/bin/egpu-buddy" "$USER_HOME/.local/share/applications/egpu-buddy.desktop"
 # SteamOS: the driver extension and build root on /home, the OS-update keep-list, the GRUB drop-in (+ regenerate GRUB)
@@ -85,6 +85,8 @@ if [ -d /home/.egpu-buddy ] || [ -L /etc/extensions/egpu-nvidia ] || [ -L /etc/e
   if [ -x "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" ]; then sudo bash "$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh" --remove
   else sudo rm -f /etc/extensions/egpu-nvidia /etc/extensions/egpu-nvidia.raw; sudo systemd-sysext refresh >/dev/null 2>&1 || true; sudo ldconfig 2>/dev/null || true; sudo rm -rf /home/.egpu-buddy; fi
 fi
+# beta driver trial: its own image + build root (SteamOS, /home/.egpu-buddy-615) and its records
+sudo rm -rf /home/.egpu-buddy-615 /var/lib/nvegpu/driver-trial /etc/nv-egpu-buddy/driver-dir
 sudo /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1 || sudo rm -f /etc/plasmalogin.conf.d/zz-egpu-buddy-session.conf /etc/sddm.conf.d/zz-egpu-buddy-session.conf /etc/plasmalogin.conf.d/zz-steamos-autologin.conf
 sudo rm -f /etc/sudoers.d/steamos-egpu-buddy /etc/sudoers.d/zz-steamos-egpu-buddy
 sudo rm -f /etc/atomic-update.conf.d/egpu-buddy.conf

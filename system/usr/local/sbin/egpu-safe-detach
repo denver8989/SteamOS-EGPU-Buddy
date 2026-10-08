@@ -19,7 +19,9 @@ set -u
 export HOME=/home/deck   # NOPASSWD sudo calls this directly
 TEARDOWN_ONLY=0
 [ "${1:-}" = "--teardown-only" ] && TEARDOWN_ONLY=1
-HIDE_LIST="/usr/lib/libnvidia-ml.so.1 /usr/lib/libnvidia-ml.so.610.57.04 /usr/lib32/libnvidia-ml.so.1 /usr/lib32/libnvidia-ml.so.610.57.04 /usr/share/glvnd/egl_vendor.d/10_nvidia.json /usr/lib/gbm/nvidia-drm_gbm.so /usr/share/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/implicit_layer.d/nvidia_layers.json /usr/share/egl/egl_external_platform.d/10_nvidia_wayland.json /usr/share/egl/egl_external_platform.d/15_nvidia_gbm.json"
+# the installed userspace version (610 tested, 615 beta), read from the library itself whether hidden (.egpu-off) or not
+NVV=$(ls /usr/lib/libnvidia-ml.so.* 2>/dev/null | sed -n 's/.*libnvidia-ml\.so\.\([0-9][0-9.]*[0-9]\)\(\.egpu-off\)\{0,1\}$/\1/p' | grep -F . | head -1); NVV=${NVV:-610.57.04}
+HIDE_LIST="/usr/lib/libnvidia-ml.so.1 /usr/lib/libnvidia-ml.so.$NVV /usr/lib32/libnvidia-ml.so.1 /usr/lib32/libnvidia-ml.so.$NVV /usr/share/glvnd/egl_vendor.d/10_nvidia.json /usr/lib/gbm/nvidia-drm_gbm.so /usr/share/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/implicit_layer.d/nvidia_layers.json /usr/share/egl/egl_external_platform.d/10_nvidia_wayland.json /usr/share/egl/egl_external_platform.d/15_nvidia_gbm.json"
 nv_drm_nodes(){ g=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'); [ -n "$g" ] || return 0
   for n in /sys/class/drm/card[0-9]* /sys/class/drm/renderD*; do [ "$(basename "$(readlink -f "$n/device" 2>/dev/null)")" = "$g" ] && echo "/dev/dri/$(basename "$n")"; done; }
 panel_bl(){ for b in /sys/class/backlight/*; do echo "$1" > "$b/bl_power" 2>/dev/null; done; }   # 0 = on, 4 = FB_BLANK_POWERDOWN

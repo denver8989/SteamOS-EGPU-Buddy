@@ -24,3 +24,21 @@ The nine patches from `../nvidia-open-egpu/` (610.57.04) ported to the open kern
 
 ## Not checked
 Nothing has run on hardware: cable yank, safe detach, standby, shutdown, attach and BAR resize all need a device test.
+
+## How a device gets it: Decky → Setup → "Try beta driver" (`/usr/local/sbin/egpu-driver-trial`)
+Nothing of the driver is shipped in the plugin or the release. On the device: Safe Detach, then NVIDIA's own files are
+downloaded from download.nvidia.com (installer ~530 MB, module source ~26 MB; makepkg checks them against the sha512 pinned
+in `PKGBUILD` and `userspace/`), patched and built, then the eGPU is attached with the result and health-checked
+(`nvidia-smi` answers with 615.78.08 and Game Mode is on the eGPU display). Healthy → kept
+(`/etc/nv-egpu-buddy/driver-dir`, read by install.sh and the self-heal). Anything else → 610 is put back and attached.
+A trial that never reached "kept" (hard reset, hang) is reverted at the next boot by `egpu-driver-trial-boot.service`,
+before any eGPU bring-up. Log: `/var/log/egpu-driver-trial.log`.
+- **Userspace**: no distribution ships 615.78.08 yet (Arch is at 615.71.09), so it is built from Arch's own recipe in
+  `userspace/` with only the version and NVIDIA's checksums changed, plus three CachyOS extras that suit every distro
+  (CUDA idle power, two per-app profiles). Not CachyOS's `nvidia-sleep.conf` (`/var/tmp` is on SteamOS's 256 MB /var) nor
+  its `modules-load.d` (the eGPU driver must never autoload). One build for every distro.
+- **CachyOS/Arch**: pacman packages. The exact installed 610 package files are copied to the package cache before anything
+  changes; a revert installs them again (offline, DKMS rebuilds 610 in a few minutes). Disk: ~6 GB free while building;
+  afterwards ~500 MB of 615 packages, deleted again by a revert.
+- **SteamOS**: a second build root + image in `/home/.egpu-buddy-615`, next to 610's; a revert links 610's image back and
+  deletes the 615 one. Untested on SteamOS hardware.

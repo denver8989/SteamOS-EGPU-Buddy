@@ -248,9 +248,21 @@ def _spawn_root_job(name, cmd):
     return unit
 
 
+TRIAL = "/usr/local/sbin/egpu-driver-trial"; TRIAL_STATE = "/var/lib/nvegpu/driver-trial"; TRIAL_LOG = "/var/log/egpu-driver-trial.log"
+
+
+def _trial():
+    """The beta driver trial as the system records it (survives Decky restarts and reboots)."""
+    d = {}
+    for line in _read(TRIAL_STATE).splitlines():
+        if "=" in line: k, v = line.split("=", 1); d[k] = v
+    d["running"] = d.get("state", "") in ("building", "attempting", "reverting")
+    return d
+
+
 def _operation_in_progress():
     st = _json(GM_STATUS).get("state", "")
-    return os.path.exists(GM_PENDING) or st in ("DETACHING", "SWITCHING") or _setup["busy"] or _game_running()
+    return os.path.exists(GM_PENDING) or st in ("DETACHING", "SWITCHING") or _setup["busy"] or _game_running() or _trial()["running"]
 
 
 def _slog(msg, progress=None):
@@ -685,6 +697,34 @@ class Plugin:
             return {"ok": False, "message": "Close the running game first, then Safe Detach."}
         _spawn_root_job("detach", [DETACH])
         return {"ok": True, "message": "Detaching: the screen goes dark for a moment while Game Mode moves to the handheld screen. Reopen this menu afterwards; it says when it is safe to unplug."}
+
+    async def get_driver_trial(self):
+        t = _trial()
+        beta = _read(f"{SYSDIR}/packaging/nvidia-open-egpu-615/PKGBUILD"); tested = _read(f"{SYSDIR}/packaging/nvidia-open-egpu/PKGBUILD")
+        pv = lambda txt: next((l.split("=", 1)[1] for l in txt.splitlines() if l.startswith("pkgver=")), "")
+        tail = ""
+        try:
+            with open(TRIAL_LOG) as f: tail = "".join(f.readlines()[-12:])
+        except OSError: pass
+        return {"available": bool(pv(beta)) and os.path.exists(TRIAL) and _installed_vendor() == "nvidia",
+                "beta": pv(beta), "tested": pv(tested), "installed": _sh(["modinfo", "-F", "version", "nvidia"], 5)[1],
+                "state": t.get("state", ""), "message": t.get("message", ""), "running": t["running"], "log": tail}
+
+    async def start_driver_trial(self):
+        if _trial()["running"]: return {"ok": False, "message": "A driver trial is already running."}
+        if not _gamescope_running(): return {"ok": False, "message": "Start it from Game Mode."}
+        if _game_running(): return {"ok": False, "message": "Close the running game first."}
+        if not _gpu_bdf() and not os.path.exists("/sys/module/nvidia"):
+            return {"ok": False, "message": "Connect the eGPU first: the trial attaches it to test the beta driver."}
+        _spawn_root_job("driver-trial", [TRIAL, "start"])
+        return {"ok": True, "message": "Beta driver trial started: Safe Detach, then the build (10-20 minutes), then the eGPU is attached with it. You can close this menu."}
+
+    async def revert_driver_trial(self):
+        if _trial()["running"]: return {"ok": False, "message": "A driver trial is running; it reverts by itself if the beta driver fails."}
+        if not _gamescope_running(): return {"ok": False, "message": "Start it from Game Mode."}
+        if _game_running(): return {"ok": False, "message": "Close the running game first."}
+        _spawn_root_job("driver-trial", [TRIAL, "revert"])
+        return {"ok": True, "message": "Returning to the tested driver: Safe Detach, the tested driver is put back, then the eGPU is attached again."}
 
     async def set_power_limit(self, watts: int):
         rc, out, err = _sh([PRIV, "set-gpu-power-limit", str(int(watts))], 20)

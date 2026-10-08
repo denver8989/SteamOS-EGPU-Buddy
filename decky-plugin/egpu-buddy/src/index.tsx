@@ -30,6 +30,10 @@ const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
 const popNotice = callable<[], string>("pop_notice");
+type Trial = { available: boolean; beta: string; tested: string; installed: string; state: string; message: string; running: boolean; log: string };
+const getTrial = callable<[], Trial>("get_driver_trial");
+const startTrial = callable<[], Result>("start_driver_trial");
+const revertTrial = callable<[], Result>("revert_driver_trial");
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
 const PLUGIN_VERSION = "0.7.73";
@@ -63,6 +67,7 @@ function Content() {
   const [tab, setTab] = useState<"main" | "details" | "setup">("main");
   const [su, setSu] = useState<Setup | null>(null);
   const [up, setUp] = useState<Upd | null>(null);
+  const [tr, setTr] = useState<Trial | null>(null);
   const staleChecked = useRef(false);
   const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall" | "amd">("");
   const [s, setS] = useState<Status | null>(null);
@@ -71,7 +76,7 @@ function Content() {
   const [pl, setPl] = useState<number | null>(null);
   const [off, setOff] = useState(0);
 
-  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); const u = await getUpdate(); setUp(u);
+  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); const u = await getUpdate(); setUp(u); setTr(await getTrial());
     // the hourly check only counts awake time: after a night of sleep the status is stale, so re-check on open (wall clock)
     if (!staleChecked.current && (!u.checked || Date.now() / 1000 - u.checked > 600)) { staleChecked.current = true; checkUpdate(false); }
   } catch (e) { setMsg(`status error: ${e}`); } };
@@ -170,6 +175,7 @@ function Content() {
             <ButtonItem layout="below" disabled={busy || !s?.game_mode || !s?.present || gameUp} onClick={() => showModal(<ConfirmModal strTitle="Safe Detach" strDescription="Game Mode moves to the handheld screen and the eGPU is removed from the bus: the screen goes dark for a few seconds and the monitor loses signal. Do not unplug yet. When the handheld screen is back, reopen this menu: it says when it is safe to unplug the cable." strOKButtonText="Detach" bDestructiveWarning onOK={() => run(safeDetach)} />)}>Safe Detach</ButtonItem>
           </PanelSectionRow>
           {s?.gm_status?.state && s.gm_status.state !== "ATTACHED" && s.gm_status.state !== "IDLE" && <PanelSectionRow><div style={{ fontSize: "13px", fontWeight: 600, color: s.gm_status.state === "SAFE_COMPLETE" || s.gm_status.state === "DETACHED" ? "#4caf50" : s.gm_status.state.includes("DO_NOT") || s.gm_status.state === "FAILED" ? "#ff6b6b" : "#f0b429" }}>{s.gm_status.state === "SAFE_COMPLETE" || s.gm_status.state === "DETACHED" ? "Safe to unplug the cable." : s.gm_status.message}</div></PanelSectionRow>}
+          {tr?.message && (tr.running || tr.state === "reverted" || tr.state === "failed") && <PanelSectionRow><div style={{ fontSize: "12px", color: tr.state === "failed" ? "#ff6b6b" : "#f0b429" }}>Beta driver: {tr.message}</div></PanelSectionRow>}
           {msg && <PanelSectionRow><div style={{ fontSize: "12px" }}>{msg}</div></PanelSectionRow>}
           {/* Install and uninstall run as background jobs. Without their progress and result HERE, the
               main page said "uninstall started" and never changed, and the only way to learn whether it
@@ -318,6 +324,26 @@ function Content() {
           </PanelSectionRow>
           {egpuMounted && su?.installed_version && <PanelSectionRow><div style={{ fontSize: "11px", opacity: 0.7 }}>Safe Detach the eGPU first: the system files cannot be removed while its driver is running.</div></PanelSectionRow>}
           {su?.log && <PanelSectionRow><div style={{ fontSize: "10px", whiteSpace: "pre-wrap", opacity: 0.8 }}>{su.log}</div></PanelSectionRow>}
+        </PanelSection>
+      )}
+      {tab === "setup" && tr?.available && (
+        <PanelSection title="Beta driver (advanced)">
+          <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.85 }}>
+            Tested driver: {tr.tested}. Beta: {tr.beta}, with the same eGPU patches ported to it. Running now: {tr.installed || "not installed"}.
+          </div></PanelSectionRow>
+          {tr.message && <PanelSectionRow><div style={{ fontSize: "12px", color: tr.state === "failed" ? "#ff6b6b" : tr.state === "kept" ? "#4caf50" : "#f0b429" }}>{tr.message}</div></PanelSectionRow>}
+          {tr.state !== "kept" && (
+            <PanelSectionRow><ButtonItem layout="below" disabled={busy || tr.running || !!su?.busy || gameUp || !s?.game_mode}
+              onClick={() => showModal(<ConfirmModal strTitle={`Try beta driver ${tr.beta}`}
+                strDescription={`For testers. The eGPU is safely detached, the beta NVIDIA driver ${tr.beta} is downloaded from NVIDIA (about 530 MB) and built on this device (10-20 minutes, about 6 GB free space needed while building), then the eGPU is attached with it and checked. If it does not come up, the tested driver ${tr.tested} is put back and attached again by itself. If the machine resets or hangs during the test, the tested driver is put back at the next boot, before the eGPU is used. Keep the charger and the eGPU connected. Everything is logged to /var/log/egpu-driver-trial.log.`}
+                strOKButtonText="Try the beta driver" bDestructiveWarning onOK={() => run(startTrial)} />)}>Try beta driver {tr.beta}</ButtonItem></PanelSectionRow>
+          )}
+          {(tr.state === "kept" || (tr.installed && tr.installed !== tr.tested)) && (
+            <PanelSectionRow><ButtonItem layout="below" disabled={busy || tr.running || gameUp || !s?.game_mode}
+              onClick={() => showModal(<ConfirmModal strTitle={`Return to ${tr.tested}`} strDescription={`The eGPU is safely detached, the tested driver ${tr.tested} is put back (offline, a few minutes) and the eGPU is attached again.`}
+                strOKButtonText="Return" onOK={() => run(revertTrial)} />)}>Return to the tested driver {tr.tested}</ButtonItem></PanelSectionRow>
+          )}
+          {tr.log && <PanelSectionRow><div style={{ fontSize: "10px", whiteSpace: "pre-wrap", opacity: 0.8 }}>{tr.log}</div></PanelSectionRow>}
         </PanelSection>
       )}
       {tab === "setup" && (

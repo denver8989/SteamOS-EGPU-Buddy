@@ -33,7 +33,8 @@ if [ $need = 1 ]; then
 fi
 # SteamOS: the driver is a system extension on /home (the 5 GB system partition cannot hold it). Re-activate it now;
 # when the OS update brought a new kernel, rebuild the modules for it in the background (needs the network, minutes).
-SX="$HERE/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
+DRVDIR="$HERE/packaging/$(cat /etc/nv-egpu-buddy/driver-dir 2>/dev/null || echo nvidia-open-egpu)"; [ -f "$DRVDIR/PKGBUILD" ] || DRVDIR="$HERE/packaging/nvidia-open-egpu"   # 610 unless a beta trial was kept
+SX="$DRVDIR/install-steamos-sysext.sh"
 if [ -n "$ro" ] && [ -x "$SX" ] && [ -d /home/.egpu-buddy ]; then
   if bash "$SX" --activate >>/tmp/egpu-buddy-selfheal.log 2>&1; then log "driver extension active"
   else
@@ -49,9 +50,9 @@ if [ -n "$ro" ] && [ -x "$SX" ] && [ -d /home/.egpu-buddy ]; then
   fi
 fi
 # patched driver package: restore from cache (done above) or rebuild from the payload's PKGBUILD (source cached)
-if [ -z "$ro" ] && command -v pacman >/dev/null 2>&1 && ! pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1 && [ -x "$HERE/packaging/nvidia-open-egpu/install-patched-nvidia.sh" ] && [ -f "/usr/lib/modules/$(uname -r)/build/Makefile" ]; then
+if [ -z "$ro" ] && command -v pacman >/dev/null 2>&1 && ! pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1 && [ -x "$DRVDIR/install-patched-nvidia.sh" ] && [ -f "/usr/lib/modules/$(uname -r)/build/Makefile" ]; then
   log "patched driver package missing: rebuilding from the payload"; [ -n "$ro" ] && $ro disable >/dev/null 2>&1
-  EGPU_TARGET_USER=$USER_NAME bash "$HERE/packaging/nvidia-open-egpu/install-patched-nvidia.sh" >>/tmp/egpu-buddy-selfheal.log 2>&1 && log "driver package rebuilt" || log "driver rebuild failed (see /tmp/egpu-buddy-selfheal.log)"
+  EGPU_TARGET_USER=$USER_NAME bash "$DRVDIR/install-patched-nvidia.sh" >>/tmp/egpu-buddy-selfheal.log 2>&1 && log "driver package rebuilt" || log "driver rebuild failed (see /tmp/egpu-buddy-selfheal.log)"
   [ -n "$ro" ] && $ro enable >/dev/null 2>&1
 fi
 # kernel modules for the running kernel: DKMS rebuild if possible, else the cached modules of this exact kernel
