@@ -18,6 +18,10 @@ Attach, standby, a real cable yank, Return to 610 and install again. **Not teste
 - Fixed: after a boot with the eGPU connected, re-plugging it later could fail with "its display driver did not start".
   The boot bring-up and the plug-in hook both pause the kernel's automatic driver binding while they resize the eGPU's
   memory window; when they overlapped, the pause was never lifted. It is now always lifted.
+- Fixed: a boot with the eGPU connected could end in a minute of dark screens while Game Mode restarted over and over.
+  The plug-in hook and the boot bring-up worked on the card at the same time; it dropped off the bus for a moment and the
+  cable-pull recovery took that for an unplug and closed the running session. Now only the boot bring-up touches the card
+  at boot, and the recovery checks that the card is really gone before it closes anything.
 
 0.7.73 — the machine powers off with the eGPU connected.
 

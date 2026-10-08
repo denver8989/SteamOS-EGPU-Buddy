@@ -43,6 +43,8 @@ pgrep -f '/usr/local/sbin/egpu-safe-detach' >/dev/null && { log "skip: safe-deta
 [ -e /run/nvegpu/gm-detach-pending ] && { log "skip: Game Mode safe-detach in progress"; exit 0; }
 # the boot-time tunnel re-enumeration removes a bridge on purpose; that is not a cable pull
 [ -e /run/nvegpu/deliberate-removal ] && { log "skip: deliberate re-enumeration in progress"; exit 0; }
+# the boot bring-up resets and re-pins the card; a moment off the bus then is not a cable pull (see egpu-hotplug-mount.sh)
+[ "$(systemctl show -p ActiveState --value egpu-boot-enumerate.service 2>/dev/null)" = activating ] && { log "skip: boot bring-up in progress"; exit 0; }
 lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { log "skip: GPU still on the bus"; exit 0; }
 exec 9>/run/egpu-surprise-recover.lock; flock -n 9 || { log "skip: already running"; exit 0; }
 log "SURPRISE removal detected (GPU gone from bus)"
@@ -115,6 +117,9 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 log "kwin=$(pgrep -x kwin_wayland | head -1) on $(k=$(pgrep -x kwin_wayland|head -1); tr '\0' '\n' </proc/$k/environ 2>/dev/null | grep -oE 'KWIN_DRM_DEVICES=.*')"
+# Last check before anything is killed: if the card is back on the bus, the removal was a transient (a reset or re-pin),
+# not a cable pull, and the processes below are using a healthy GPU. Stop here.
+lspci -Dn 2>/dev/null | grep -qE '0300: 10de:' && { rm -f /run/nvegpu/surprise-pending; log "GPU is back on the bus: transient removal, not a cable pull - nothing killed"; exit 0; }
 # 3. unload the orphaned nvidia stack (no device behind it) once nothing holds it; retry up to 60s, kill respawners
 systemctl stop nvidia-persistenced 2>/dev/null; systemctl stop lactd 2>/dev/null
 # old-session Go Hub (python3 WebKit) survives the session end and keeps dmabufs exported by the removed card -> pins nvidia_drm

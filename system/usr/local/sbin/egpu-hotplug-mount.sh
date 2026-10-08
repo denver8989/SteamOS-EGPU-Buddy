@@ -116,6 +116,15 @@ if dmesg 2>/dev/null | grep -qi 'data fabric sync flood'; then
 fi
 
 log "=== hotplug-mount triggered ==="
+# ONE owner at boot: the dock's "add" fires this hook while egpu-boot-enumerate is still bringing the same card up. Both
+# then reset / re-pin / resize it at once, the card drops off the bus for a moment, and egpu-surprise-recover took that
+# for a cable pull and killed the healthy Game Mode 90 s later (crash loop after boot, Legion Go 2, 2026-10-08).
+# Wait for the boot bring-up to finish (it has a 90 s limit); afterwards this finds the card up and only checks it.
+for _ in $(seq 1 95); do
+  [ "$(systemctl show -p ActiveState --value egpu-boot-enumerate.service 2>/dev/null)" = activating ] || break
+  [ "$_" = 1 ] && log "boot bring-up still running — waiting for it before touching the card"
+  sleep 1
+done
 # A Thunderbolt/USB4 "add" is not an eGPU: docks, displays and storage enclosures
 # fire the same event. We cannot tell them apart before the PCIe tunnel forms, so
 # we try once per device and then remember the answer. A device that has already
