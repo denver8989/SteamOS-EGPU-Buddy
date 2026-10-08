@@ -321,13 +321,11 @@ use_ultrawide_nested_canvas() {
     *) return 1 ;;
   esac
 
-  for output in $(connected_egpu_outputs); do
-    for node in /sys/class/drm/card*-"$output"; do
-      [ -r "$node/modes" ] || continue
-      if grep -Fxq "5120x1440" "$node/modes"; then
-        return 0
-      fi
-    done
+  # only the screen gamescope will drive (first in the order, the plugin's choice first) - not any connected one:
+  # with an ultrawide AND a TV plugged in, Game Mode on the TV got the ultrawide's 32:9 canvas
+  output=$(connector_order | cut -d, -f1)
+  for node in /sys/class/drm/card*-"$output"; do
+    [ -r "$node/modes" ] && grep -Fxq "5120x1440" "$node/modes" && return 0
   done
   return 1
 }
@@ -340,7 +338,8 @@ best_sysfs_mode() {
       match($0, /^([0-9]+)x([0-9]+)$/, m) {
         width = m[1] + 0
         height = m[2] + 0
-        score = (width * 1000000000) + (width * height)
+        rank = (width == 4096 && height == 2160) ? 3839 : width   # cinema DCI 4K ranks under a TV panel 3840x2160
+        score = (rank * 1000000000) + (width * height)
         if (score > best_score) {
           best_score = score
           best_width = width
@@ -352,7 +351,7 @@ best_sysfs_mode() {
           print best_width " " best_height
         }
       }
-    ' "$node")
+    ' "$node/modes")
     [ -n "$mode" ] || continue
     printf '%s\n' "$mode"
     return 0
@@ -378,7 +377,8 @@ best_egpu_drm_mode() {
       if (max_refresh != "" && (max_refresh + 0) > 0 && refresh > (max_refresh + 0.5)) {
         next
       }
-      score = (width * 1000000000) + (width * height * 1000) + refresh
+      rank = (width == 4096 && height == 2160) ? 3839 : width   # cinema DCI 4K ranks under a TV panel 3840x2160
+      score = (rank * 1000000000) + (width * height * 1000) + refresh
       if (score > best_score) {
         best_score = score
         best_width = width
@@ -396,7 +396,8 @@ best_egpu_drm_mode() {
 
 stage_gamescope_native_mode() {
   local output mode width height refresh
-  for output in $(connected_egpu_outputs); do
+  # in Game Mode's own order (the plugin's choice first): the mode must be the screen gamescope drives
+  for output in $(connector_order | tr , '\n' | grep -vxE '\*|eDP-[0-9]+'); do
     mode=$(best_egpu_drm_mode "$output" || true)
     if [ -z "$mode" ]; then
       mode=$(best_sysfs_mode "$output" || true)
