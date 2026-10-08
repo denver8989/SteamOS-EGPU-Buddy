@@ -1,8 +1,11 @@
 [Unit]
 Description=SteamOS EGPU Buddy: take the eGPU down cleanly at power-off / reboot
-# Stop order is the reverse of start order: being "After" these means our ExecStop runs once they have stopped —
-# the session (gamescope / Steam / PipeWire), Decky (it polls nvidia-smi) and bolt are gone, the USB4 tunnel is still up.
-After=display-manager.service plasmalogin.service systemd-user-sessions.service user.slice plugin_loader.service bolt.service egpu-mount.service egpu-boot-enumerate.service
+# Stop order is the REVERSE of start order, so a unit stops BEFORE everything it is "After" and AFTER everything it is
+# "Before". The teardown must run once the session (gamescope / KWin / Steam / PipeWire+WirePlumber in user@1000),
+# Decky (it polls nvidia-smi) and bolt are gone, while the USB4 tunnel is still up: that is Before= these, not After=.
+# (0.7.73 had After= and the teardown ran while WirePlumber still held the eGPU sound card -> aborted on its audio guard;
+#  seen on a Legion Go 2, 2026-10-08.)
+Before=display-manager.service plasmalogin.service user@1000.service plugin_loader.service bolt.service egpu-mount.service egpu-boot-enumerate.service
 ConditionPathExists=/usr/local/sbin/egpu-shutdown-teardown
 
 [Service]
