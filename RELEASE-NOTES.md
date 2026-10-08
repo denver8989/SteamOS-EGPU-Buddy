@@ -15,6 +15,9 @@ Attach, standby, a real cable yank, Return to 610 and install again. **Not teste
 - The power-off teardown from 0.7.73 now runs at the right moment: after the session and its sound server have stopped
   (in 0.7.73 it ran before them and stopped at its own sound-card safety check). Still untested on SteamOS.
 - eGPU details: one line per row, shorter names ("RTX 5060 Ti", "eGPU HDMI 1").
+- Fixed: after a boot with the eGPU connected, re-plugging it later could fail with "its display driver did not start".
+  The boot bring-up and the plug-in hook both pause the kernel's automatic driver binding while they resize the eGPU's
+  memory window; when they overlapped, the pause was never lifted. It is now always lifted.
 
 0.7.73 — the machine powers off with the eGPU connected.
 

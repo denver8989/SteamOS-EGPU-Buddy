@@ -317,7 +317,10 @@ _bar1_bytes(){ stat -c %s "$GDEV/resource1" 2>/dev/null || echo 0; }
 # the re-enumeration into no-ops (the tell is kernel messages reading "nvidia 0000:..: BAR 1 ..."
 # instead of "pci 0000:..."). Restored by trap as well as inline: leaving this at 0 would stop the
 # kernel binding a driver to ANY pci device.
-_autoprobe_was=$(cat /sys/bus/pci/drivers_autoprobe 2>/dev/null || echo 1)
+# ponytail: always restore 1 (the kernel default; nothing else turns it off). Restoring "what it was" left the whole PCI
+# bus without automatic driver binding when the boot bring-up and the hot-plug hook overlapped at boot (each saw the
+# other's 0): the next replug then could not load the NVIDIA driver ("probe routine was not called"), 2026-10-08.
+_autoprobe_was=1
 trap 'echo "${_autoprobe_was:-1}" > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true' EXIT HUP INT TERM
 echo 0 > /sys/bus/pci/drivers_autoprobe 2>/dev/null || true
 if [ "${EGPU_SKIP_REBAR:-0}" = 1 ]; then
