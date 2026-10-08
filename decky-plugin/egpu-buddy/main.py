@@ -170,6 +170,19 @@ def _nvidia_query(bdf):
     return dict(zip(keys, vals))
 
 
+GAME_SCREEN = "/var/lib/nvegpu/game-screen"   # connector Game Mode goes to first (nv-egpu-gamescope-session)
+_seen_screens = None
+
+
+def _edid_name(path):
+    try:
+        e = open(path, "rb").read()[:128]
+    except OSError:
+        return ""
+    i = e.find(b"\0\0\0\xfc\0")
+    return e[i + 5:i + 18].split(b"\n")[0].decode(errors="ignore").strip() if i >= 0 else ""
+
+
 def _displays(bdf):
     outs = []
     base = f"/sys/bus/pci/devices/{bdf}/drm"
@@ -179,7 +192,8 @@ def _displays(bdf):
                 continue
             for c in os.listdir(f"/sys/class/drm"):
                 if c.startswith(card + "-") and _read(f"/sys/class/drm/{c}/status") == "connected":
-                    outs.append({"name": c.split("-", 1)[1], "enabled": _read(f"/sys/class/drm/{c}/enabled") == "enabled"})
+                    outs.append({"name": c.split("-", 1)[1], "enabled": _read(f"/sys/class/drm/{c}/enabled") == "enabled",
+                                 "model": _edid_name(f"/sys/class/drm/{c}/edid")})
     except OSError:
         pass
     return outs
@@ -709,6 +723,32 @@ class Plugin:
     async def wake_screens(self):
         rc, out, err = _sh(["/usr/local/sbin/egpu-screen", "wake", "--input"], 20)
         return {"ok": rc == 0, "message": out.replace("\n", "; ") or err or "No external screens connected."}
+
+    async def get_screen_offer(self):
+        """A screen newly connected to the eGPU while Game Mode is on another one -> offer to move."""
+        global _seen_screens
+        bdf = _gpu_bdf()
+        if not bdf or not _gamescope_running():
+            _seen_screens = None; return {}
+        now = {d["name"]: d["model"] for d in _displays(bdf)}
+        new = [c for c in now if _seen_screens is not None and c not in _seen_screens]
+        _seen_screens = set(now)
+        cur = _gamescope_env("OUTPUT_CONNECTOR").split(",")[0]
+        for c in new:
+            # a TV that is on another input is not being looked at: don't offer it
+            if c != cur and _sh(["/usr/local/sbin/egpu-screen", "state", c], 15)[1] != "other-input":
+                return {"connector": c, "name": now[c] or c, "game": _game_running()}
+        return {}
+
+    async def set_game_screen(self, connector: str):
+        if not re.fullmatch(r"[A-Za-z]+(-[A-Za-z0-9]+)+", connector or ""):
+            return {"ok": False, "message": "Unknown screen."}
+        if _game_running():
+            return {"ok": False, "message": "Close the running game first: switching screens restarts Game Mode."}
+        os.makedirs(os.path.dirname(GAME_SCREEN), exist_ok=True)
+        open(GAME_SCREEN, "w").write(connector + "\n")
+        _spawn_root_job("switch", [SWITCH])
+        return {"ok": True, "message": f"Moving Game Mode to {connector}: the screen goes dark for a few seconds."}
 
     async def attach(self, force: bool = False):
         decky.logger.info(f"attach pressed (force={force})")

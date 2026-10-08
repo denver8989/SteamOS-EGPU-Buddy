@@ -7,7 +7,7 @@ type Status = {
   present: boolean; bdf: string; driver_loaded: boolean; game_mode: boolean; game_running: boolean;
   attach_pending: boolean; on_egpu: boolean; output: string;
   gm_status: { state?: string; message?: string }; desktop_status: { state?: string; message?: string };
-  link: { speed: string; width: string }; displays: { name: string; enabled: boolean }[]; audio_sink: string;
+  link: { speed: string; width: string }; displays: { name: string; enabled: boolean; model: string }[]; audio_sink: string;
   telemetry: Record<string, string>; ts: number; resets?: { count: number; last: string };
 };
 type Result = { ok: boolean; message: string; rc?: number };
@@ -38,6 +38,18 @@ const ackTrial = callable<[], Result>("ack_driver_trial");
 type Screen = { connector: string; name: string; state: string; ddc: boolean };
 const getScreens = callable<[], Screen[]>("get_screens");
 const wakeScreens = callable<[], Result>("wake_screens");
+const getScreenOffer = callable<[], { connector?: string; name?: string; game?: boolean }>("get_screen_offer");
+const setGameScreen = callable<[string], Result>("set_game_screen");
+// a screen plugged into the eGPU while Game Mode runs on another one: offer to move (one screen at a time)
+const maybeOfferScreen = async () => {
+  const o = await getScreenOffer();
+  if (!o.connector) return;
+  showModal(<ConfirmModal strTitle={`${o.name} connected`}
+    strDescription={o.game ? `Close the running game first, then use "Show Game Mode on ${o.name}" in EGPU Buddy.`
+      : `Show Game Mode on ${o.name}? Game Mode restarts on it (the screen goes dark for a few seconds). You can switch back from EGPU Buddy.`}
+    strOKButtonText={o.game ? "OK" : "Switch"} strCancelButtonText="Stay here"
+    onOK={async () => { if (o.game) return; const r = await setGameScreen(o.connector!); toaster.toast({ title: "EGPU Buddy", body: r.message }); }} />);
+};
 const screenState: Record<string, string> = { "in-use": "on", "other-input": "other input", standby: "asleep", off: "off" };
 const vt = (v: string) => (v.match(/\d+/g) ?? ["0"]).slice(0, 3).reduce((a, x) => a * 1000 + Number(x), 0);
 
@@ -217,6 +229,11 @@ function Content() {
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy || !s?.game_mode || gameUp || (s?.present && s?.on_egpu)} onClick={() => showModal(<ConfirmModal strTitle="Attach the eGPU" strDescription="Game Mode restarts on the eGPU display: the screen goes dark for a few seconds. When it is back, reopen this menu to see the result." strOKButtonText="Attach" onOK={() => run(() => attach(false))} />)}>Attach eGPU</ButtonItem>
           </PanelSectionRow>
+          {s?.game_mode && s.on_egpu && s.displays.filter((d) => d.name !== s.output).map((d) => (
+            <PanelSectionRow key={d.name}><ButtonItem layout="below" disabled={busy || gameUp}
+              onClick={() => showModal(<ConfirmModal strTitle={`Show Game Mode on ${d.model || d.name}`} strDescription="Game Mode restarts on that screen: this one goes dark. Switch back the same way."
+                strOKButtonText="Switch" onOK={() => run(() => setGameScreen(d.name))} />)}>Show Game Mode on {d.model || d.name}</ButtonItem></PanelSectionRow>
+          ))}
           {gameUp && s?.game_mode && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>A game is running. Close it before attaching or detaching (both restart Game Mode).</div></PanelSectionRow>}
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy || !s?.game_mode || !s?.present || gameUp} onClick={() => showModal(<ConfirmModal strTitle="Safe Detach" strDescription="Game Mode moves to the handheld screen and the eGPU is removed from the bus: the screen goes dark for a few seconds and the monitor loses signal. Do not unplug yet. When the handheld screen is back, reopen this menu: it says when it is safe to unplug the cable." strOKButtonText="Detach" bDestructiveWarning onOK={() => run(safeDetach)} />)}>Safe Detach</ButtonItem>
@@ -408,7 +425,8 @@ function Content() {
 export default definePlugin(() => {
   // the finish line must reach the user even when the menu was closed or Decky restarted (plugin update) meanwhile
   const notices = setInterval(async () => { try { const t = await popNotice(); if (t) toaster.toast({ title: "EGPU Buddy", body: t, duration: 15000 }); } catch { /* backend not up yet */ }
-    try { await maybeShowTrial(); } catch { /* backend not up yet */ } }, 5000);
+    try { await maybeShowTrial(); } catch { /* backend not up yet */ }
+    try { await maybeOfferScreen(); } catch { /* backend not up yet */ } }, 5000);
   return {
   name: "EGPU Buddy",
   title: <div className={staticClasses.Title}>EGPU Buddy</div>,

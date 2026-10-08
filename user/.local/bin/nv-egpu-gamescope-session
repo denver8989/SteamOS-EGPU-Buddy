@@ -148,7 +148,10 @@ bar1_note() {
 
 connector_order() {
   local output first=1
-  for output in $(connected_egpu_outputs); do
+  # the screen picked in the plugin ("Show Game Mode on ...") goes first while it is connected
+  local pref outs; pref=$(cat /var/lib/nvegpu/game-screen 2>/dev/null); outs=$(connected_egpu_outputs)
+  if [ -n "$pref" ] && printf '%s\n' $outs | grep -qx "$pref"; then outs="$pref $(printf '%s\n' $outs | grep -vx "$pref")"; fi
+  for output in $outs; do
     if [ "$first" -eq 1 ]; then
       printf '%s' "$output"
       first=0
