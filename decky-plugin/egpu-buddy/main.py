@@ -822,7 +822,9 @@ class Plugin:
             return {"ok": False, "message": "Close the running game first: switching screens restarts Game Mode."}
         os.makedirs(os.path.dirname(GAME_SCREEN), exist_ok=True)
         open(GAME_SCREEN, "w").write(connector + "\n")
-        _spawn_root_job("switch", [SWITCH])
+        # once Game Mode is up there, ask the screen to turn on and select our input (HDMI-CEC / DDC/CI, where the
+        # connection carries them; a screen that answers neither is simply left as it is)
+        _spawn_root_job("switch", ["/bin/bash", "-c", f'{SWITCH}; /usr/local/sbin/egpu-screen wake --input {connector}'])
         return {"ok": True, "message": f"Moving Game Mode to {connector}: the screen goes dark for a few seconds."}
 
     async def attach(self, force: bool = False):
