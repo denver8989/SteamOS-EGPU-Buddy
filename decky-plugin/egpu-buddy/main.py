@@ -283,12 +283,14 @@ def _trial_progress():
     except OSError:
         return 0, ""
     start = max((i for i, l in enumerate(lines) if "==== beta driver trial" in l), default=0)
-    table, pct, label, span, base, n = TRIAL_STAGES, 0, "Starting", None, 0, 0
+    table, pct, label, span, base, n, driver = TRIAL_STAGES, 0, "Starting", None, 0, 0, False
     for l in lines[start:]:
         body = l[20:] if l[:4].isdigit() else l   # strip the "YYYY-MM-DD HH:MM:SS " prefix the trial adds
         if body.startswith("[reverting]"): table, pct, span = TRIAL_REVERT, 0, None
+        if body.startswith("==> Making package: nvidia-open-egpu"): driver = True
         for marker, p, lab in table:
-            if body.startswith(marker):
+            # makepkg's generic markers also appear while the NVIDIA libraries are packaged: count them for the driver only
+            if body.startswith(marker) and (driver or marker not in ("==> Starting prepare()", "==> Starting build()")):
                 pct, label, span, base, n = max(pct, p), lab, TRIAL_SPAN.get(marker), p, 0; break
         else:
             if span: n += 1; pct = max(pct, base + (span[1] - base) * min(n / span[0], 1.0))

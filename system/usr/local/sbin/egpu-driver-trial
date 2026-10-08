@@ -38,11 +38,17 @@ detach(){   # the plugin's Safe Detach; afterwards the driver must be unloaded o
   [ -d /sys/module/nvidia ] || return 0
   log "Safe Detach (the same one the plugin button runs)"
   "$DETACH" >>"$LOG" 2>&1 || { log "Safe Detach failed (rc $?)"; return 1; }
-  for _ in $(seq 1 15); do [ -d /sys/module/nvidia ] || return 0; sleep 1; done
+  for _ in $(seq 1 15); do [ -d /sys/module/nvidia ] || { decky_up; return 0; }; sleep 1; done
   log "the NVIDIA driver is still loaded after Safe Detach"; return 1; }
 
+# Decky shows the trial's progress screen. The same check egpu-surprise-recover uses, only at points where the eGPU driver
+# is not being unloaded (Decky's backend holds /dev/nvidia*; starting it mid-detach would make the unload fail).
+# Seen once (2026-10-08, right after a Decky Loader update): Decky stopped ~20 s after a Game Mode restart and stayed down.
+decky_up(){ systemctl is-active plugin_loader.service >/dev/null 2>&1 || { systemctl start plugin_loader.service >/dev/null 2>&1 && log "Decky plugin loader restarted"; }; }
+finish(){ sleep 30; decky_up; }   # once more after the session settles (the stop above came ~20 s after the restart); in the foreground: systemd ends the job's leftover processes
+
 attach(){   # the plugin's Attach after a Safe Detach (rescan, fresh driver, Game Mode onto the eGPU display)
-  log "Attach (the same one the plugin button runs)"; "$REATTACH" >>"$LOG" 2>&1; local rc=$?; log "attach rc=$rc"; return $rc; }
+  log "Attach (the same one the plugin button runs)"; "$REATTACH" >>"$LOG" 2>&1; local rc=$?; log "attach rc=$rc"; decky_up; return $rc; }
 
 healthy(){  # the driver that answers is the one we installed, and Game Mode came up on the eGPU display
   local v; for _ in $(seq 1 60); do
@@ -124,17 +130,18 @@ case "${1:-status}" in
     put building "Safe Detach, then downloading and building the beta driver $TPV (10-20 minutes)."
     detach || { put failed "Nothing was changed: Safe Detach did not finish."; attach >/dev/null 2>&1; exit 5; }
     if ! install_new || [ "$(modver)" != "$TPV" ]; then
-      revert_and_attach "The beta driver $TPV did not build or install (installed module: '$(modver)')."; exit 6; fi
+      revert_and_attach "The beta driver $TPV did not build or install (installed module: '$(modver)')."; finish; exit 6; fi
     put attempting "Beta driver $TPV installed; attaching the eGPU with it."
     attach; if healthy "$TPV"; then
-      echo "nvidia-open-egpu-615" > "$SEL"; put kept "The beta driver $TPV is running the eGPU. Return to $OPV at any time."; report; exit 0; fi
-    report; revert_and_attach "The eGPU did not come up with the beta driver $TPV."; exit 7 ;;
+      echo "nvidia-open-egpu-615" > "$SEL"; put kept "The beta driver $TPV is running the eGPU. Return to $OPV at any time."; report; finish; exit 0; fi
+    report; revert_and_attach "The eGPU did not come up with the beta driver $TPV."; finish; exit 7 ;;
 
   revert)
     [ "$(modver)" = "$OPV" ] && [ ! -e "$SEL" ] && { echo "already on the tested driver $OPV"; exit 0; }
     gamescope >/dev/null || { echo "start it from Game Mode"; exit 2; }
     pgrep -x reaper >/dev/null && { echo "close the running game first"; exit 2; }
-    revert_and_attach "Return to the tested driver requested."; exit 0 ;;
+    sed -i '/^started=/d' "$STATE" 2>/dev/null; echo "started=$(date +%s)" >> "$STATE"   # a new operation: the plugin shows its result once
+    revert_and_attach "Return to the tested driver requested."; finish; exit 0 ;;
 
   *) echo "usage: egpu-driver-trial start|revert|boot|status"; exit 1 ;;
 esac
