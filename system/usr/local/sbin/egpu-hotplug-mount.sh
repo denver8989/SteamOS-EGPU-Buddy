@@ -746,6 +746,10 @@ gpu_healthy(){
 if pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1; then
   # GAME MODE: keep the gamescope autologin; restart gamescope onto the eGPU output (the
   # nv-egpu-gamescope-session wrapper does the routing). Deferred while a game runs.
+  # Already on an eGPU screen: leave it. Restarting anyway looped - a TV drops HDMI hotplug on every mode set, so
+  # each restart fired the next one (and Decky gave up). Moving between eGPU screens is the plugin's prompt's job.
+  _oc=$(tr '\0' '\n' </proc/"$(pgrep -n -x 'gamescope(-wl)?')"/environ 2>/dev/null | sed -n 's/^OUTPUT_CONNECTOR=//p' | cut -d, -f1)
+  case "$_oc" in ""|"*"|eDP-*) ;; *) log "Game Mode already on the eGPU display ($_oc) - nothing to switch"; exit 0 ;; esac
   log "eGPU display up + Game Mode -> gamescope switch onto the eGPU"; sleep 2
   gpu_healthy && { /usr/local/sbin/egpu-gamemode-switch >/dev/null 2>&1; log "gamemode-switch rc=$?"; egpu_audio_follow; }
   exit 0
