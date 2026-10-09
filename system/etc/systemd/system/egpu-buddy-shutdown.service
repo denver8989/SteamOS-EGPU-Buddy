@@ -6,6 +6,11 @@ Description=SteamOS EGPU Buddy: take the eGPU down cleanly at power-off / reboot
 # (0.7.73 had After= and the teardown ran while WirePlumber still held the eGPU sound card -> aborted on its audio guard;
 #  seen on a Legion Go 2, 2026-10-08.)
 Before=display-manager.service plasmalogin.service user@1000.service plugin_loader.service bolt.service egpu-mount.service egpu-boot-enumerate.service
+# The power-off / reboot splash: plymouthd (shutdown mode) opens every DRM device, the eGPU's included, so the teardown's
+# "/dev/nvidia* still held" guard aborted on it and the GPU stayed live into power-off, which then came back up as a
+# reboot (Legion Go 1, SteamOS, 2026-10-10). An ordering dependency between a stopping and a starting unit puts the
+# stop first whichever way round it is written, so this runs the teardown before the splash appears.
+Before=plymouth-poweroff.service plymouth-reboot.service plymouth-halt.service plymouth-kexec.service
 ConditionPathExists=/usr/local/sbin/egpu-shutdown-teardown
 
 [Service]

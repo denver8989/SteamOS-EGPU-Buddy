@@ -7,7 +7,9 @@
 set -u
 want=gamescope
 [ -e /etc/nv-egpu-buddy/boot-desktop ] && want=plasma
-if command -v steamosctl >/dev/null 2>&1 && [ ! -e /etc/nv-egpu-buddy/boot-desktop ]; then
+# SteamOS is told apart by os-release, not by the steamosctl binary: CachyOS Deckify ships steamosctl too, so the test
+# below used to skip CachyOS as well, and a reboot from the desktop stayed on the desktop (seen on the Legion Go 2).
+if grep -qsE '^ID=steamos' /etc/os-release && [ ! -e /etc/nv-egpu-buddy/boot-desktop ]; then
   logger -t egpu-cond-session "SteamOS: boot session left to the system (steamosctl); no pin"
   /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1
   exit 0
