@@ -1,5 +1,5 @@
 #!/bin/bash
-# nv-egpu-buddy boot policy: ALWAYS boot into Game Mode, whether the eGPU is attached or not. "Switch to Desktop" persists
+# nv-egpu-buddy boot policy: without the eGPU, ALWAYS boot into Game Mode; with it, the last session used. "Switch to Desktop" persists
 # the desktop session on CachyOS, so without this a reboot from the desktop stays on the desktop.
 # Opt-out: touch /etc/nv-egpu-buddy/boot-desktop
 # On SteamOS the desktop/Game Mode switch is the system's own (steamosctl); there it is left alone unless the user opted in,
@@ -12,6 +12,13 @@ want=gamescope
 if grep -qsE '^ID=steamos' /etc/os-release && [ ! -e /etc/nv-egpu-buddy/boot-desktop ]; then
   logger -t egpu-cond-session "SteamOS: boot session left to the system (steamosctl); no pin"
   /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1
+  exit 0
+fi
+# eGPU attached at boot: come back to the session the user was last in (Desktop restarts to Desktop, Game Mode to Game
+# Mode); the system remembers it, so just take our pin away. Game Mode is forced only when booting without the eGPU.
+if [ ! -e /etc/nv-egpu-buddy/boot-desktop ] && /usr/local/sbin/egpu-detect >/dev/null 2>&1; then
+  /usr/local/sbin/egpu-dm-session unpin >/dev/null 2>&1
+  logger -t egpu-cond-session "eGPU attached: boot session left at the last one used"
   exit 0
 fi
 out=$(/usr/local/sbin/egpu-dm-session pin "$want" 2>&1) || { logger -t egpu-cond-session "could not pin $want: $out"; exit 0; }
