@@ -51,8 +51,10 @@ if [ -n "$ro" ] && [ -x "$SX" ] && [ -d /home/.egpu-buddy ]; then
     fi
   else
     log "driver extension has no modules for $(uname -r): rebuilding in the background"
+    # The network wait accepts ANY HTTP answer: the package server's front page answers 401, and with curl -f that counted
+    # as offline, so every boot waited the full 20 minutes before building (seen on a Legion Go 1 after SteamOS 3.8.28).
     systemd-run --quiet --collect --unit=egpu-buddy-driver-build --property=TimeoutStartSec=5400 /bin/bash -c \
-      "for i in \$(seq 1 40); do curl -fsI --max-time 8 https://steamdeck-packages.steamos.cloud/ >/dev/null 2>&1 && break; sleep 30; done; EGPU_DEFER_SWAP=1 bash '$SX' --boot >>$SLOG 2>&1; \
+      "for i in \$(seq 1 40); do curl -sI -o /dev/null --max-time 8 https://steamdeck-packages.steamos.cloud/ 2>/dev/null && break; sleep 30; done; EGPU_DEFER_SWAP=1 bash '$SX' --boot >>$SLOG 2>&1; \
        # the eGPU may have been plugged in WHILE the driver was building: the attach hook refused it \
        # then, and the user should not have to unplug and replug to finish what is now possible. \
        if modinfo -n nvidia >/dev/null 2>&1 && lspci -Dn 2>/dev/null | grep -qE '0300: 10de:'; then \

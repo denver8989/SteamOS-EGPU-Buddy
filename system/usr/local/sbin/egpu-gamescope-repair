@@ -39,7 +39,7 @@ done
 for _ in $(seq 1 240); do
   systemctl is-active --quiet egpu-buddy-driver-build.service egpu-buddy-driver-repack.service || break; sleep 30
 done
-for _ in $(seq 1 40); do curl -fsI --max-time 8 https://steamdeck-packages.steamos.cloud/ >/dev/null 2>&1 && break; sleep 30; done
+for _ in $(seq 1 40); do curl -sI -o /dev/null --max-time 8 https://steamdeck-packages.steamos.cloud/ 2>/dev/null && break; sleep 30; done
 
 echo "$OS" > "$DONE"    # recorded BEFORE building: a build that hangs or fails is not retried in a loop on this OS build
 if ! bash "$BUILD" "$(stat -c %U "$UH")" >> "$LOG" 2>&1; then
