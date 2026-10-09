@@ -65,11 +65,14 @@ def status():
 # (Re-attach used to discard all output, so a refused attach looked like a dead button).
 LAST = {}
 SHOW = [0]   # bumped by the launcher when the app is opened again while it already runs (window hidden in the tray)
+# Detach and attach restart the compositor, which takes the tray (a Wayland client) down with it, and systemd then
+# kills everything in the tray's service. Run them in their own unit so they finish anyway.
+OWN_UNIT = ["systemd-run", "--user", "--collect", "--quiet"]
 def run_bg(name, cmd, timeout=300):
     import threading
     def work():
         LAST.update(action=name, state="running", rc=None, out="")
-        rc, o, e = sh(cmd, timeout)
+        rc, o, e = sh(OWN_UNIT + ["--wait", "--pipe"] + cmd, timeout)
         LAST.update(state="ok" if rc == 0 else "failed", rc=rc, out="\n".join((o + "\n" + e).strip().splitlines()[-6:]))
     threading.Thread(target=work, daemon=True).start()
 
@@ -81,10 +84,10 @@ def action(p):
     if a == "safe-detach":
         if not s["present"]: return {"ok": False, "error": "no eGPU on the bus"}
         if s["vendor"] != "nvidia":
-            subprocess.Popen(["sudo", "-n", "/usr/local/sbin/egpu-generic", "detach"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); return {"ok": True, "started": "safe-detach"}
+            subprocess.Popen(OWN_UNIT + ["sudo", "-n", "/usr/local/sbin/egpu-generic", "detach"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); return {"ok": True, "started": "safe-detach"}
         if s["game_mode"]: rc, o, e = sh(["sudo", "-n", "/usr/local/sbin/egpu-gamemode-detach"], 120); return {"ok": rc == 0, "out": o or e}
         if not os.access(UI_DETACH, os.X_OK): return {"ok": False, "error": "egpu-safe-detach-ui is not installed"}
-        subprocess.Popen([UI_DETACH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); return {"ok": True, "started": "safe-detach"}
+        subprocess.Popen(OWN_UNIT + [UI_DETACH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); return {"ok": True, "started": "safe-detach"}
     if a == "attach":
         if s["present"] and s["driver_loaded"]: return {"ok": False, "error": "already attached"}
         run_bg("attach", ["sudo", "-n", "/usr/local/sbin/egpu-reattach"]); return {"ok": True, "started": "attach"}
