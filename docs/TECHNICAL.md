@@ -24,8 +24,8 @@ not listed here has not been tried.
 **GPU support.** Ampere (RTX 30) and Blackwell (RTX 50) both work on the same open driver, with no
 separate build and no per-card configuration by the user. The Ampere-specific bring-up is selected by
 PCI device id (`0x22xx`–`0x25xx`, the GA10x desktop line), so the mechanism covers the family — but one
-card from each family has actually been tested, the RTX 3080 and the RTX 5060 Ti. Ada (RTX 40) has never
-been on the bench; it falls through to the default path, which may or may not suit it.
+card from each family has actually been tested, the RTX 3080 and the RTX 5060 Ti. Ada (RTX 40) has not been on
+the bench here; it takes the default path, and a user has reported it working on an RTX 4070.
 
 ### AMD / Intel eGPUs — the beta part of this app
 

@@ -4,9 +4,12 @@
 
 # SteamOS EGPU Buddy
 
-Use an NVIDIA eGPU with a Linux gaming handheld in **Game Mode**, the way it works on Windows: plug it in and Game
-Mode moves to your monitor or TV; unplug it, safely or by pulling the cable, and it goes back to the handheld
-screen; plug it in again and it comes back. It's all controlled from a Decky plugin in the Quick Access menu.
+Use an eGPU with a Linux gaming handheld in **Game Mode**, the way it works on Windows: plug it in and Game Mode
+moves to your monitor or TV; unplug it, safely or by pulling the cable, and it goes back to the handheld screen;
+plug it in again and it comes back. It's all controlled from a Decky plugin in the Quick Access menu.
+
+NVIDIA eGPUs are fully supported, including the fix for NVIDIA's Game Mode display glitches. AMD and Intel eGPUs
+are supported in beta.
 
 > **Use at your own risk.** This changes the NVIDIA driver, boot settings and the Game Mode session. It has been
 > tested on two machines (below) and nothing else. Read [TESTED.md](TESTED.md) first, and keep a way to boot without
@@ -14,13 +17,14 @@ screen; plug it in again and it comes back. It's all controlled from a Decky plu
 
 ## Features
 
+- **Fixes NVIDIA's Game Mode display glitches:** no more striping, flicker or corrupted picture in Game Mode on
+  NVIDIA cards (a gamescope fix built and shipped with the plugin).
 - **Plug and play in Game Mode:** the eGPU is picked up automatically and Game Mode moves to its screen.
 - **Safe Detach:** one button moves Game Mode back to the handheld screen; then unplug.
 - **Cable pulls survive:** the handheld recovers to its own screen within seconds, and plugging in again re-attaches.
 - **Multiple displays:** switch Game Mode between connected screens from the plugin. A new screen brings up a prompt,
   and each screen shows its name, port, resolution and refresh rate.
-- **Best picture by default:** each screen's native resolution at its highest refresh rate, with no NVIDIA
-  striping or corruption in Game Mode.
+- **Best picture by default:** each screen's native resolution at its highest refresh rate.
 - **Screens wake and switch input** where they support it (DDC/CI or HDMI-CEC).
 - **GPU details and controls:** temperature, power, clocks, VRAM, power limit and clock offset.
 - **Beta driver button:** try NVIDIA's newest driver, with an automatic return to the tested one if it fails.
@@ -35,8 +39,8 @@ screen; plug it in again and it comes back. It's all controlled from a Decky plu
 | eGPU | Gigabyte AORUS AI Box, RTX 5060 Ti | AOOSTAR AG03, RTX 3080 |
 | Screens | Acer X49 ultrawide (DisplayPort), LG TV (HDMI) | Acer X49 ultrawide (DisplayPort) |
 
-RTX 30 and RTX 50 cards are supported; RTX 40 is untested. AMD and Intel eGPUs are a beta, untested on real
-hardware. Details: [docs/TECHNICAL.md](docs/TECHNICAL.md).
+**NVIDIA:** RTX 30 and RTX 50 tested here; RTX 40 reported working by a user (RTX 4070). **AMD and Intel eGPUs:**
+beta, not yet tested on real hardware. Reports are welcome. Details: [docs/TECHNICAL.md](docs/TECHNICAL.md).
 
 ## Install
 
