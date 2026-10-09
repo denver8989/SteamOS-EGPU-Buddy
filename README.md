@@ -40,6 +40,14 @@ are supported in beta.
 </p>
 <p align="center"><em>Main page (switch screens, Safe Detach) and details (GPU, screens, telemetry, power controls).</em></p>
 
+<p align="center">
+  <img src="docs/assets/nvidia-before-after.png" alt="Before: Steam Game Mode interface corrupted on an NVIDIA GPU. After: clean Game Mode." width="100%">
+</p>
+<p align="center"><em>The NVIDIA Game Mode bug EGPU Buddy fixes. Before: photo by bernhard.berger,
+<a href="https://forums.developer.nvidia.com/t/display-modes-above-2560x1440p-120hz-with-hdr-enabled-cause-flickering-corruption-within-gamescope-session/295314">NVIDIA developer forum</a>.
+After: image by Valve, <a href="https://www.steamdeck.com/en/software">steamdeck.com</a>.
+Fix: gamescope GBM scan-out route by NightHammer1000 and antheas; root cause found by matt-schwartz (see <a href="CREDITS.md">CREDITS.md</a>).</em></p>
+
 ## Tested hardware
 
 | | Legion Go 2 | Legion Go 1 |
