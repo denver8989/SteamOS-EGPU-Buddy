@@ -281,7 +281,11 @@ function Content() {
               <Row k="Driver" v={s.driver_loaded ? `nvidia ${tel["driver_version"] ?? ""}` : "not loaded"} />
               <Row k="PCIe" v={s.present ? `${s.link.speed} x${s.link.width}` : ""} />
               <Row k="Session" v={s.game_mode ? (s.on_egpu ? `Game Mode on ${s.output}` : "Game Mode on panel") : "Desktop"} />
-              <Row k="Displays" v={scr?.length ? scr.map((x) => `${x.name || x.connector}${screenState[x.state] ? ` (${screenState[x.state]})` : ""}`).join(", ") : s.displays.map((d) => `${d.name}${d.enabled ? "" : " (off)"}`).join(", ")} />
+              {/* one row per screen: a joined list got cut off on the panel */}
+              {(scr?.length ? scr : s.displays.map((d) => ({ connector: d.name, name: d.model, state: d.enabled ? "" : "off" }))).map((x) => (
+                <Row key={x.connector} k={x.name || x.connector}
+                  v={[screenState[x.state], x.connector.startsWith("HDMI") ? "HDMI" : x.connector.startsWith("DP") ? "DisplayPort" : x.connector].filter(Boolean).join(" · ")} />
+              ))}
               {scr?.some((x) => x.ddc) && <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => run(async () => { const r = await wakeScreens(); getScreens().then(setScr).catch(() => {}); return r; })}>Wake screens</ButtonItem></PanelSectionRow>}
               <Row k="Audio" v={audioName(s.audio_sink, s.bdf)} />
               <Row k="Temp" v={tel["temperature.gpu"] ? `${tel["temperature.gpu"]} °C` : ""} />
