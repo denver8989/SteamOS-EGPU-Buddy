@@ -88,3 +88,11 @@ say where it came from.
 - **NVIDIA** — nvidia-open, and the engineers who acknowledged the scan-out bug and escalated it.
 
 If your work is used here and is not credited, open an issue and it will be fixed.
+
+## Images in the README
+
+- **bernhard.berger**: the "before" photo of the corrupted Game Mode interface, from
+  [NVIDIA developer forum thread 295314](https://forums.developer.nvidia.com/t/display-modes-above-2560x1440p-120hz-with-hdr-enabled-cause-flickering-corruption-within-gamescope-session/295314).
+- **Valve**: the "after" Game Mode screenshot, from [steamdeck.com](https://www.steamdeck.com/en/software).
+
+If you own one of these images and want it credited differently or removed, open an issue.
