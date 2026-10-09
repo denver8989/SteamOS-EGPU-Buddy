@@ -1,3 +1,11 @@
+0.7.77 — shutdown with the eGPU attached fixed.
+
+**Fixed**
+- Shutting down with the eGPU attached now powers off properly, instead of hanging with the screens on or rebooting (issue #1).
+- CachyOS: a restart from the desktop goes back to Game Mode again.
+- Desktop tray: Safe Detach no longer stops half-way.
+- Game Mode status shows the screen's name instead of its port.
+
 0.7.76 — Decky always comes back; better handling of SteamOS updates.
 
 **New**
