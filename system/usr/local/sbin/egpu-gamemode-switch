@@ -31,9 +31,6 @@ as_deck systemctl --user reset-failed gamescope-mangoapp.service 2>/dev/null; as
   case "${oc%%,*}" in ""|"*"|eDP-1) printf '{"state":"ATTACHED","message":"Game Mode is on the handheld screen."}\n' > $ST/gm-status.json ;;
                      *) printf '{"state":"ATTACHED","message":"Game Mode is on %s."}\n' "${oc%%,*}" > $ST/gm-status.json ;; esac
   case "${oc%%,*}" in ""|"*"|eDP-1) ;; *) /usr/local/sbin/egpu-panel off >/dev/null 2>&1 ;; esac   # handheld panel fully off while on the eGPU display
-  # Decky can give up re-injecting into the restarted Steam and stop itself (seen 20-60 s after the restart); a self-stop is
-  # not restarted by systemd. Watch it for 2 minutes in its own unit (callers like Attach do not wait for this).
-  systemd-run --collect --quiet --unit "egpu-decky-watch-$$" /bin/bash -c 'for _ in $(seq 1 24); do sleep 5; systemctl is-active -q plugin_loader.service || { systemctl start plugin_loader.service; logger -t egpu-gamemode-switch "Decky had stopped itself after the Game Mode restart - started again"; }; done' >/dev/null 2>&1 || true
   exit 0
 fi
 log "gamescope did not come back"; echo '{"state":"FAILED","message":"Game Mode did not restart. Switch to Desktop and back."}' > $ST/gm-status.json; exit 4

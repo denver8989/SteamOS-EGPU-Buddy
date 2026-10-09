@@ -1,0 +1,11 @@
+[Unit]
+Description=SteamOS EGPU Buddy: keep Decky running while Game Mode is up
+After=plugin_loader.service
+
+[Service]
+ExecStart=/usr/local/sbin/egpu-decky-guard
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+#!/bin/bash
+# Keeps Decky up while Game Mode runs: its plugins are how you switch screens and detach, so it must never stay down.
+# Decky can stop itself after a Steam restart (it gives up re-injecting), and systemd does not undo a self-stop.
+# Stays out of the way while a detach, attach, cable-pull recovery, driver trial or power-off teardown runs: Decky's
+# backend must be stopped there so the NVIDIA driver can unload; those paths start it again themselves.
+set -u
+BUSY='/usr/local/sbin/egpu-(safe-detach|gamemode-detach|reattach|surprise-recover|driver-trial|shutdown-teardown)'
+down=0
+while sleep 10; do
+  systemctl cat plugin_loader.service >/dev/null 2>&1 || continue          # Decky not installed
+  if ! pgrep -x 'gamescope(-wl)?' >/dev/null || pgrep -f "$BUSY" >/dev/null || systemctl is-active -q plugin_loader.service; then
+    down=0; continue
+  fi
+  # down on two checks in a row (~20 s): a Decky self-update restarts it in between, leave that alone
+  down=$((down + 1)); [ "$down" -ge 2 ] || continue
+  systemctl start plugin_loader.service && logger -t egpu-decky-guard "Decky was down in Game Mode - started again"
+  down=0
+done
