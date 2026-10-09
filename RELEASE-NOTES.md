@@ -1,3 +1,37 @@
+0.7.75 — pick which screen Game Mode uses, and the plugin now reads and wakes TVs and monitors.
+
+**Game Mode screen selection.** Game Mode shows on one screen at a time. Plug a second screen into the eGPU while Game Mode
+runs and a prompt offers to move Game Mode there ("LG TV SSCR2 connected · HDMI · 3840x2160 @ 120 Hz · 72"" → Switch /
+Stay here). The main page has a "Show Game Mode on …" button for every other connected screen, with its model, port,
+native resolution and refresh rate underneath, so you know which screen you are switching to. The choice is remembered
+while that screen is connected. Switching is refused while a game runs (it restarts Game Mode). Game Mode uses the chosen
+screen's native resolution at its highest refresh rate. After a switch, the screen is asked to turn on and select the
+eGPU's input, over HDMI-CEC or DDC/CI where the connection carries them.
+
+**Screens: read and wake, any brand.** New helper `egpu-screen` reads each external screen over the cable's own standards:
+DDC/CI (most monitors, some TVs; no ddcutil needed) and HDMI-CEC (TVs, wherever the connection exposes it). It knows
+when a screen is on, asleep, or set to another input. Details → Displays shows it; "Wake screens" turns them on and back
+to the eGPU's input. A screen that answers neither standard is always treated as in use, never hidden on a guess.
+NVIDIA cards expose no HDMI-CEC on Linux, so a TV on the eGPU's own HDMI port can only be switched by its remote (or its
+own auto-input setting); a USB-CEC adapter adds it.
+- Only one external screen at attach or plug-in: it is turned on and switched to the eGPU's input.
+- Desktop (KDE Plasma): with a monitor and a TV connected, a TV that is on another input is left out of the desktop until
+  you select the eGPU's input on it. Only its own changes are ever undone; a change you make in KDE is never fought.
+
+**Fixed:**
+- Game Mode on a TV next to an ultrawide got the ultrawide's 32:9 layout: the ultrawide canvas and the output mode were
+  taken from any connected screen instead of the one Game Mode drives. A TV's cinema 4096x2160 mode no longer wins over
+  its 3840x2160 panel mode. Without `modetest`, the fallback mode check never returned a mode; it works now.
+- A TV on the eGPU could put Game Mode into a restart loop (a TV drops HDMI hotplug on every mode change, and each one
+  restarted Game Mode again). Game Mode already on an eGPU screen is now left alone.
+- Decky could stop itself after Game Mode restarted, and stayed stopped. Every Game Mode restart by EGPU Buddy now makes
+  sure Decky comes back.
+- The login screen's own compositor (plasmalogin / SDDM) was taken for the desktop session: if an autologin ever failed,
+  the plug-in hook "fixed" the login screen and pinned the next login to the desktop instead of Game Mode.
+
+Tested on a Legion Go 2 (CachyOS) with an RTX 5060 Ti, an Acer X49 (DisplayPort) and an LG TV (HDMI): switching Game
+Mode between both screens from the plugin, both directions. CEC is untested (no CEC hardware on this setup).
+
 0.7.74 — try NVIDIA's newest driver (615.78.08) from Game Mode, and go back to the tested one with one button.
 
 **Beta driver (advanced).** Decky → Setup & updates → "Try beta driver 615.78.08". The eGPU is safely detached, NVIDIA's own
