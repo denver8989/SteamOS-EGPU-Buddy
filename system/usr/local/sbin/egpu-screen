@@ -6,6 +6,7 @@
   egpu-screen wake [CONNECTOR]  power on screens still on our input (all if none given)
   egpu-screen wake --input ...  also switch screens on another input back to us
   egpu-screen settle            the only external screen? turn it on and onto our input
+  egpu-screen replug [CONNECTOR] desktop only: software unplug + replug, for a monitor stuck on "no signal"
   egpu-screen watch             desktop session: settle on plug-in; with 2+ screens, leave a TV that is
                                 on another input (or off) out of the desktop until it is switched to us
 
@@ -272,6 +273,18 @@ def main(argv):
     if cmd == "wake":
         for s in found:
             print(s[0], wake(*s, take_input=take_input))
+        return 0
+    if cmd == "replug":
+        # Software unplug + replug: the screen drops out of the compositor and comes back with a fresh link training.
+        # Brings back a DisplayPort monitor that sits in "no signal" while the GPU is scanning out to it (seen on the
+        # NVIDIA eGPU after a desktop re-login; before, only pulling the cable fixed it). Desktop only: what gamescope
+        # does when its screen vanishes is untested.
+        if os.system("pgrep -x 'gamescope(-wl)?' >/dev/null") == 0:
+            print("Game Mode is running: replug is desktop-only"); return 1
+        for conn, _, _ in found:
+            for st in glob.glob(f"/sys/class/drm/card*-{conn}/status"):
+                open(st, "w").write("off"); time.sleep(3); open(st, "w").write("detect")
+            print(conn, "replugged")
         return 0
     if cmd == "settle":
         settle(); return 0
