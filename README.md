@@ -31,6 +31,15 @@ are supported in beta.
 - **Keeps itself working:** Decky restarts if it stops, and the setup repairs itself after OS updates.
 - **Desktop app** with the same controls for the docked desktop.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/assets/plugin-main.png" alt="EGPU Buddy main page: attached, switch Game Mode to the TV, Safe Detach" width="300">
+  &nbsp;&nbsp;
+  <img src="docs/assets/plugin-details.png" alt="EGPU Buddy details: GPU, driver, PCIe link, screens, telemetry and power controls" width="300">
+</p>
+<p align="center"><em>Main page (switch screens, Safe Detach) and details (GPU, screens, telemetry, power controls).</em></p>
+
 ## Tested hardware
 
 | | Legion Go 2 | Legion Go 1 |

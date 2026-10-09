@@ -74,6 +74,8 @@ const Progress = ({ pct, title, step, started, expect }: { pct: number; title: s
 const Row = ({ k, v }: { k: string; v: string }) => (
   <PanelSectionRow><Field label={k} focusable={false} bottomSeparator="none"><span style={{ fontSize: "12px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block", maxWidth: "100%" }}>{v || "—"}</span></Field></PanelSectionRow>
 );
+// the screen's own name ("X49 V") instead of its connector ("DP-7") where the EDID gives one
+const screenName = (s: Status) => s.displays.find((d) => d.name === s.output)?.model || s.output;
 const gpuName = (n?: string) => (n ?? "").replace(/^NVIDIA\s+(GeForce\s+)?/i, "");
 // "alsa_output.pci-0000_03_00.1.HiFi__HDMI1__sink" -> "eGPU HDMI 1"; the built-in card -> "Built-in"
 const audioName = (sink: string, bdf: string) => {
@@ -89,7 +91,7 @@ const audioName = (sink: string, bdf: string) => {
 
 function stateLine(s: Status): string {
   if (!s.present) return s.driver_loaded ? "eGPU off the bus (driver still loaded)" : "No eGPU attached";
-  if (s.game_mode) return s.on_egpu ? `Attached — Game Mode on ${s.output}` : "eGPU present — Game Mode on the handheld screen";
+  if (s.game_mode) return s.on_egpu ? `Attached — Game Mode on ${screenName(s)}` : "eGPU present — Game Mode on the handheld screen";
   return "eGPU present (Desktop)";
 }
 
@@ -280,7 +282,7 @@ function Content() {
               <Row k="GPU" v={gpuName(tel["name"]) || (s.present ? s.bdf : "absent")} />
               <Row k="Driver" v={s.driver_loaded ? `nvidia ${tel["driver_version"] ?? ""}` : "not loaded"} />
               <Row k="PCIe" v={s.present ? `${s.link.speed} x${s.link.width}` : ""} />
-              <Row k="Session" v={s.game_mode ? (s.on_egpu ? `Game Mode on ${s.output}` : "Game Mode on panel") : "Desktop"} />
+              <Row k="Session" v={s.game_mode ? (s.on_egpu ? `Game Mode on ${screenName(s)}` : "Game Mode on panel") : "Desktop"} />
               {/* one row per screen: a joined list got cut off on the panel */}
               {(scr?.length ? scr : s.displays.map((d) => ({ connector: d.name, name: d.model, state: d.enabled ? "" : "off" }))).map((x) => (
                 <Row key={x.connector} k={x.name || x.connector}
