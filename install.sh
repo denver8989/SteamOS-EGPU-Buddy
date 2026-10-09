@@ -357,7 +357,7 @@ fi
 uown "$PERSIST"
 if [ "${CMDLINE_MISSING:-0}" = 1 ]; then
   yes=${EGPU_AUTO_YES:-}; if [ -z "$yes" ] && [ -t 0 ]; then read -rp "Write the missing kernel parameters into the bootloader configuration now? (backup kept) [y/N] " r; [ "${r,,}" = y ] && yes=1; fi
-  if [ "$yes" = 1 ]; then say "== writing the kernel parameters"; sudo /usr/local/sbin/egpu-kernel-cmdline --apply || echo "warning: could not write the kernel parameters; see README 'Kernel command line'"; fi
+  if [ "$yes" = 1 ]; then say "== writing the kernel parameters"; sudo /usr/local/sbin/egpu-kernel-cmdline --apply || echo "warning: could not write the kernel parameters; see docs/TECHNICAL.md 'Kernel command line'"; fi
 fi
 # SteamOS has no NVIDIA driver of its own: without the extension the eGPU cannot work at all, so this is not a "done"
 if [ "${DRIVER_FAILED:-0}" = 1 ]; then say "== NOT finished: the NVIDIA driver was not built. Keep the eGPU unplugged and run the install again (needs internet)."; exit 20; fi

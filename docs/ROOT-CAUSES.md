@@ -70,7 +70,7 @@ tunnel to the NVIDIA connector. The copy saturates the tunnel and the NVIDIA sid
 
 **Fix here.** The whole docked session is made NVIDIA-only:
 `KWIN_DRM_DEVICES`/`OUTPUT_CONNECTOR` restricted to the NVIDIA card, Vulkan/GL pinned to the NVIDIA ICD, and the
-session restarted on hot plug because a running compositor cannot be re-routed. See README, *How it works*.
+session restarted on hot plug because a running compositor cannot be re-routed. See [TECHNICAL.md](TECHNICAL.md), *How it works*.
 
 ## 7. Handheld panel stays dark after a re-login into Game Mode
 
