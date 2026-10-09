@@ -141,7 +141,7 @@ if [ "$GM" = 1 ]; then
   case "$st" in
     active|activating) log "gamescope-session is relaunching by itself ($st); not restarting it" ;;
     *) runuser -u deck -- env $RUNENV systemctl --user reset-failed gamescope-session.service gamescope-session.target 2>/dev/null
-       runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+       rm -f /run/user/1000/nv-egpu-buddy-gamescope-starts; runuser -u deck -- env $RUNENV systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
        log "gamescope-session restart issued (panel, was $st) before the driver unload" ;;
   esac
 fi

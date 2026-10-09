@@ -114,7 +114,7 @@ detach)
   date +%s > $PENDING; as_deck touch $DMODE; status DETACHING "Moving the session to the handheld screen. Do not unplug."
   clear_boot_vga; user_env_igpu
   if game_mode; then
-    G0=$(pgrep -n -x 'gamescope(-wl)?'); as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+    rm -f /run/user/1000/nv-egpu-buddy-gamescope-starts; G0=$(pgrep -n -x 'gamescope(-wl)?'); as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
     for _ in $(seq 1 45); do sleep 2; g=$(pgrep -n -x 'gamescope(-wl)?'); [ -n "$g" ] && [ "$g" != "$G0" ] && break; done
   elif pgrep -U 1000 -x kwin_wayland >/dev/null; then
     K0=$(pgrep -U 1000 -x kwin_wayland | head -1); pin_plasma; logout_plasma
@@ -141,7 +141,7 @@ surprise)
   # starts Steam once, then clears the "Unable to open a connection to X" dialog if one appears.
   [ -x /usr/local/sbin/egpu-surprise-recover ] && systemd-run --no-block --collect --quiet \
     --unit="egpu-steam-watch-$(date +%s)" /usr/local/sbin/egpu-surprise-recover --steam-watch >/dev/null 2>&1 || true
-  if game_mode; then sleep 3; as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1; status IDLE "eGPU unplugged. Game Mode is back on the handheld screen."
+  if game_mode; then sleep 3; rm -f /run/user/1000/nv-egpu-buddy-gamescope-starts; as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1; status IDLE "eGPU unplugged. Game Mode is back on the handheld screen."
   else pin_plasma; fi                                      # KWin exits when its primary GPU vanishes; autologin brings Plasma back on the panel
   ;;
 *) echo "usage: egpu-generic attach|detach|surprise"; exit 2 ;;

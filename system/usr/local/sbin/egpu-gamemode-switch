@@ -21,7 +21,8 @@ gpu=$(lspci -Dn 2>/dev/null | awk '$2=="0300:" && $3 ~ /^10de:/{print $1; exit}'
 log "restarting gamescope-session (eGPU=${gpu:-absent}, force=$force)"
 echo '{"state":"SWITCHING","message":"Restarting Game Mode onto the eGPU display..."}' > $ST/gm-status.json
 G0=$(pgrep -n -x 'gamescope(-wl)?')
-as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
+# a deliberate restart is not a crash: reset the gamescope shim's crash-loop counter first
+rm -f /run/user/1000/nv-egpu-buddy-gamescope-starts; as_deck systemctl --user restart gamescope-session.target >/dev/null 2>&1 &
 for _ in $(seq 1 60); do sleep 2; g=$(pgrep -n -x 'gamescope(-wl)?'); [ -n "$g" ] && [ "$g" != "$G0" ] && pgrep -x steam >/dev/null && break; done; sleep 3
 g=$(pgrep -n -x 'gamescope(-wl)?'); oc=$(tr '\0' '\n' </proc/${g:-0}/environ 2>/dev/null | grep -oE '^OUTPUT_CONNECTOR=.*' | cut -d= -f2)
 if [ -n "$g" ]; then

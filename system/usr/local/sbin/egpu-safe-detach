@@ -84,7 +84,7 @@ else
     # GAME MODE: gamescope owns card0. Unlike KWin it can release the device, so we
     # simply stop the session rather than doing the iGPU-repoint dance.
     say "[1/5] Game Mode detected — stopping the gamescope session to release the eGPU…"
-    runuser -u deck -- env $RUNENV systemctl --user stop gamescope-session.target >/dev/null 2>&1
+    rm -f /run/user/1000/nv-egpu-buddy-gamescope-starts; runuser -u deck -- env $RUNENV systemctl --user stop gamescope-session.target >/dev/null 2>&1
     runuser -u deck -- env $RUNENV systemctl --user stop cachyos-gamescope-autologin.service >/dev/null 2>&1
     for _ in $(seq 1 20); do
       pgrep -f '[s]tart-gamescope-session' >/dev/null 2>&1 || pgrep -x 'gamescope(-wl)?' >/dev/null 2>&1 || break

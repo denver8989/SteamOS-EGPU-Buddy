@@ -25,7 +25,7 @@ log "start (gpu=$gpu, gamescope=$(gs))"; status DETACHING "Moving Game Mode to t
 touch "$MARK"; chown deck:deck "$MARK" 2>/dev/null; date +%s > $ST/gm-detach-pending
 $HELPER --prep >/dev/null 2>&1 || finish_fail "Could not hide the NVIDIA userspace." 5
 as_deck bash -c 'pactl set-default-sink "$(pactl list short sinks | awk "!/pci-0000_0[0-9a-f]_00.1/ && /alsa_output/{print \$2; exit}")" >/dev/null 2>&1; p=$(printf %s "'"${gpu%.*}"'" | tr : _); for c in $(pactl list short cards | awk -v p="$p" "index(\$2,p){print \$2}"); do pactl set-card-profile "$c" off; done; systemctl --user stop wireplumber' >/dev/null 2>&1
-G0=$(gs); as_deck systemctl --user stop gamescope-session.target >/dev/null 2>&1 &
+rm -f /run/user/1000/nv-egpu-buddy-gamescope-starts; G0=$(gs); as_deck systemctl --user stop gamescope-session.target >/dev/null 2>&1 &
 for _ in $(seq 1 60); do sleep 2; g=$(gs); [ -n "$g" ] && [ "$g" != "$G0" ] && gs_on_panel && break; done
 gs_on_panel || finish_fail "Game Mode did not come back on the handheld screen; the eGPU is still attached." 6
 # the MangoHud overlay (gamescope-mangoapp.service) opens /dev/nvidia* through NVML -> stop it for the teardown
