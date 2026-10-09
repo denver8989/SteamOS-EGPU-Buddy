@@ -1,74 +1,30 @@
-0.7.76 — Decky always comes back, and staying working through SteamOS updates and channel switches (the SteamOS parts are untested — please report issues).
+0.7.76 — Decky always comes back; better handling of SteamOS updates.
 
-**Decky is kept running.** EGPU Buddy's buttons (switching screens, detaching) live in Decky, so it must never stay down.
-Decky can stop itself after Steam restarts, and nothing started it again. A small service now starts it whenever it is
-down while Game Mode runs (within about 20 seconds). It stays out of the way while a detach, attach, cable-pull
-recovery, driver trial or power-off is in progress, since Decky has to be stopped there for the driver to unload.
-Tested on a Legion Go 2 (CachyOS): Decky stopped by hand came back after 14 seconds.
+**New**
+- Decky is restarted automatically if it stops while Game Mode is running.
+- SteamOS updates and Beta channel: the display fix, the driver and Decky now repair themselves after an update.
 
-**eGPU details:** one Displays row per screen (name, state, port) instead of one line that got cut off.
+**Fixed**
+- eGPU details: each display on its own line, no more cut-off names.
 
-**Through SteamOS updates and channel switches (untested on SteamOS).** An audit of what happens when SteamOS updates,
-or Game Mode is switched from Stable to Beta, found these ways it could quietly stop working:
-- **The display fix can no longer crash-loop Game Mode.** The GBM-scanout gamescope was only replaced by Valve's when
-  it could not start at all. One that starts and exits at once (an OS or Steam update it does not fit) made Game Mode
-  restart over and over. Three restarts within 40 s now mark it as crashing on that OS build, and Valve's gamescope is
-  used instead, so Game Mode comes back.
-- **...and it repairs itself.** When the private gamescope cannot run on a new OS, or was marked as crashing,
-  `egpu-gamescope-repair` rebuilds it in the background with the existing on-device build (once per OS build), then
-  reloads Game Mode onto it through the existing Attach path, only when no game is running. Before, a self-heal after
-  an update could run that 10-15 minute build at BOOT, in front of the login screen.
-- **The driver's NVIDIA libraries follow the OS.** The driver extension carries the NVIDIA libraries SteamOS does not
-  have, worked out when it was packed, but it was only re-packed when the kernel changed. It now records which OS it was
-  packed for and re-packs in the background when that changes (about a minute, nothing to download). A new image is
-  never swapped in while the eGPU is in use; it waits for the next boot. Existing installs adopt the current OS as-is.
-- **New kernels get a current compiler.** Before building the driver for a new kernel, the build environment's toolchain
-  is brought level with SteamOS's repositories (driver packages and kernel headers excluded). If that fails, the build
-  goes ahead as before.
-- **No unprotected bring-up after an update.** Plug-in attach already refused without the eGPU kernel parameters; the
-  boot-time bring-up now does too, on machines where they were active on an earlier boot. The handheld says why.
-- **Decky on SteamOS Beta.** A Steam beta client often stops stable Decky's UI from loading. When Decky's backend runs
-  but its UI has not loaded for 10 minutes of Game Mode, on a non-stable SteamOS channel, the plugin installs Decky's
-  newest pre-release with Decky's own installer: at most once a day, only if there is a newer one, with a full backup
-  that is put back if the new loader does not come up. `"decky_prerelease_repair": true/false` in
-  `~/.config/egpu-buddy/plugin.json` turns it on or off regardless of channel.
-- The self-heal log moved from `/tmp` (emptied at every reboot) to `/var/log/egpu-buddy-selfheal.log`. New logs:
-  `/var/log/egpu-gamescope-repair.log`, `/var/log/egpu-decky-repair.log`.
-- Deliberate Game Mode restarts (screen switch, detach, attach) are never counted as gamescope crashing.
+The SteamOS update handling is untested on SteamOS — please report any issues.
 
-0.7.75 — pick which screen Game Mode uses, and the plugin now reads and wakes TVs and monitors.
+0.7.75 — multiple displays and Game Mode display switching.
 
-**Game Mode screen selection.** Game Mode shows on one screen at a time. Plug a second screen into the eGPU while Game Mode
-runs and a prompt offers to move Game Mode there ("LG TV SSCR2 connected · HDMI · 3840x2160 @ 120 Hz · 72"" → Switch /
-Stay here). The main page has a "Show Game Mode on …" button for every other connected screen, with its model, port,
-native resolution and refresh rate underneath, so you know which screen you are switching to. The choice is remembered
-while that screen is connected. Switching is refused while a game runs (it restarts Game Mode). Game Mode uses the chosen
-screen's native resolution at its highest refresh rate. After a switch, the screen is asked to turn on and select the
-eGPU's input, over HDMI-CEC or DDC/CI where the connection carries them.
+**New**
+- Multiple displays: switch Game Mode between connected screens from the plugin.
+- A prompt offers to switch when a new screen is plugged in.
+- Each screen shows its name, port, resolution and refresh rate.
+- Game Mode uses each screen's native resolution at its highest refresh rate.
+- Screens are woken and switched to the eGPU's input where they support it (DDC/CI or HDMI-CEC).
 
-**Screens: read and wake, any brand.** New helper `egpu-screen` reads each external screen over the cable's own standards:
-DDC/CI (most monitors, some TVs; no ddcutil needed) and HDMI-CEC (TVs, wherever the connection exposes it). It knows
-when a screen is on, asleep, or set to another input. Details → Displays shows it; "Wake screens" turns them on and back
-to the eGPU's input. A screen that answers neither standard is always treated as in use, never hidden on a guess.
-NVIDIA cards expose no HDMI-CEC on Linux, so a TV on the eGPU's own HDMI port can only be switched by its remote (or its
-own auto-input setting); a USB-CEC adapter adds it.
-- Only one external screen at attach or plug-in: it is turned on and switched to the eGPU's input.
-- Desktop (KDE Plasma): with a monitor and a TV connected, a TV that is on another input is left out of the desktop until
-  you select the eGPU's input on it. Only its own changes are ever undone; a change you make in KDE is never fought.
+**Fixed**
+- Game Mode on a TV next to an ultrawide no longer uses the ultrawide layout.
+- Game Mode no longer restarts in a loop with a TV connected.
+- Decky no longer stays stopped after Game Mode restarts.
+- A failed login no longer switches the next login to the desktop.
 
-**Fixed:**
-- Game Mode on a TV next to an ultrawide got the ultrawide's 32:9 layout: the ultrawide canvas and the output mode were
-  taken from any connected screen instead of the one Game Mode drives. A TV's cinema 4096x2160 mode no longer wins over
-  its 3840x2160 panel mode. Without `modetest`, the fallback mode check never returned a mode; it works now.
-- A TV on the eGPU could put Game Mode into a restart loop (a TV drops HDMI hotplug on every mode change, and each one
-  restarted Game Mode again). Game Mode already on an eGPU screen is now left alone.
-- Decky could stop itself after Game Mode restarted, and stayed stopped. Every Game Mode restart by EGPU Buddy now makes
-  sure Decky comes back.
-- The login screen's own compositor (plasmalogin / SDDM) was taken for the desktop session: if an autologin ever failed,
-  the plug-in hook "fixed" the login screen and pinned the next login to the desktop instead of Game Mode.
-
-Tested on a Legion Go 2 (CachyOS) with an RTX 5060 Ti, an Acer X49 (DisplayPort) and an LG TV (HDMI): switching Game
-Mode between both screens from the plugin, both directions. CEC is untested (no CEC hardware on this setup).
+HDMI-CEC is untested (NVIDIA cards don't expose it on Linux).
 
 0.7.74 — try NVIDIA's newest driver (615.78.08) from Game Mode, and go back to the tested one with one button.
 
