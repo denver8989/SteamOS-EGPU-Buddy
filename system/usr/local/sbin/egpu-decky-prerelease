@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# egpu-decky-prerelease — install Decky Loader's latest PRE-RELEASE with Decky's own official installer, the build that
+# follows Steam beta clients. Started by the EGPU Buddy backend only when Decky's backend runs but its UI never loaded
+# (what a Steam beta does to a stable Decky). Everything Decky had is backed up first and put back if the new loader does
+# not come up, so this can never leave Decky worse off than it found it.
+set -u
+U=$(stat -c %U /home/deck 2>/dev/null || echo deck); UH=/home/deck; H=$UH/homebrew/services
+LOG=/var/log/egpu-decky-repair.log; BK=/var/lib/nvegpu/decky-backup; UNIT=/etc/systemd/system/plugin_loader.service
+log(){ printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+[ -d "$H" ] && [ -f "$UNIT" ] || { log "Decky Loader is not installed here; nothing done"; exit 0; }
+log "=== Decky Loader pre-release (installed: $(cat "$H/.loader.version" 2>/dev/null || echo ?)) ==="
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+curl -fsSL --max-time 60 -o "$T/install.sh" https://github.com/SteamDeckHomebrew/decky-installer/releases/latest/download/install_prerelease.sh \
+  || { log "could not download Decky's installer; nothing changed"; exit 0; }
+head -1 "$T/install.sh" | grep -q '^#!' || { log "the downloaded installer is not a script; nothing changed"; exit 0; }
+rm -rf "$BK"; mkdir -p "$BK"; cp -a "$H" "$BK/services" && cp -a "$UNIT" "$BK/plugin_loader.service" || { log "backup failed; nothing changed"; exit 0; }
+# Decky's installer takes the user from SUDO_USER (it is normally run through sudo)
+SUDO_USER=$U bash "$T/install.sh" >> "$LOG" 2>&1; rc=$?
+ok=0
+for _ in $(seq 1 30); do
+  [ "$(stat -c %s "$H/PluginLoader" 2>/dev/null || echo 0)" -gt 1000000 ] && systemctl is-active --quiet plugin_loader && { ok=1; break; }; sleep 2
+done
+if [ "$ok" = 1 ]; then
+  [ "$(cat "$H/.loader.version" 2>/dev/null)" = "$(cat "$BK/services/.loader.version" 2>/dev/null)" ] \
+    && log "Decky Loader unchanged (installer rc $rc), still running" \
+    || log "Decky Loader $(cat "$H/.loader.version" 2>/dev/null) installed and running (installer rc $rc)"
+  exit 0
+fi
+log "the new Decky Loader did not come up (installer rc $rc): restoring the previous one"
+systemctl stop plugin_loader 2>/dev/null
+rm -rf "$H"; cp -a "$BK/services" "$H"; cp -a "$BK/plugin_loader.service" "$UNIT"
+systemctl daemon-reload; systemctl enable plugin_loader >/dev/null 2>&1; systemctl restart plugin_loader
+log "previous Decky Loader restored ($(systemctl is-active plugin_loader))"

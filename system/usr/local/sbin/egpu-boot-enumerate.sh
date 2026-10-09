@@ -68,6 +68,22 @@ clear_dpc_status(){   # clear any latched DPC containment status on the USB4 roo
 [ -e /etc/nv-egpu-buddy/skip-boot-enumerate ] && { log "skip flag present — bypassing"; exit 0; }
 log "=== boot-enumerate (lean) start ==="
 dock_present || { log "no TB dock — iGPU boot"; exit 0; }
+# The fabric-flood protections are kernel parameters. Plug-in attach already refuses without them; the boot path did not,
+# so a first boot after an OS update that reset the bootloader brought the eGPU up unprotected. Only on a machine where
+# they WERE active on an earlier boot (the marker): anything that boots today without them keeps doing exactly that.
+CMDOK=/var/lib/nvegpu/cmdline-ok
+if [ -x /usr/local/sbin/egpu-kernel-cmdline ]; then
+  if /usr/local/sbin/egpu-kernel-cmdline --check >/dev/null 2>&1; then
+    [ -e "$CMDOK" ] || { mkdir -p /var/lib/nvegpu; touch "$CMDOK"; }
+  elif [ -e "$CMDOK" ]; then
+    log "the eGPU kernel parameters were active before and are missing on this boot (OS update?): eGPU left alone this boot"
+    mkdir -p /run/nvegpu 2>/dev/null
+    if /usr/local/sbin/egpu-kernel-cmdline --pending >/dev/null 2>&1; then _m="The eGPU protections (kernel parameters) were missing after a system update and have been restored. Reboot once and the eGPU comes up as usual."
+    else _m="The eGPU protections (kernel parameters) are missing after a system update and could not be restored automatically. Open Setup & updates in EGPU Buddy."; fi
+    printf '{"state":"IDLE","message":"%s"}\n' "$_m" > /run/nvegpu/gm-status.json 2>/dev/null
+    exit 0
+  fi
+fi
 "$PRIV" pin-tunnel-ports on 2>/dev/null | while read -r _l; do log "tunnel port: $_l"; done
 "$PRIV" mask-tunnel-ports 2>/dev/null | while read -r _l; do log "tunnel port: $_l"; done
 

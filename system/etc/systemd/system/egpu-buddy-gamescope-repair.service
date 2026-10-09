@@ -1,0 +1,10 @@
+[Unit]
+Description=SteamOS EGPU Buddy: rebuild the GBM-scanout gamescope for this OS build and reload Game Mode onto it
+ConditionPathExists=/usr/local/sbin/egpu-gamescope-repair
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/egpu-gamescope-repair
+# it builds (10-15 min) and then may wait hours for a game to close before reloading Game Mode
+TimeoutStartSec=infinity
+Nice=10
