@@ -604,6 +604,7 @@ relogin_session(){
     runuser -u deck -- env $runenv systemctl --user restart plasma-kwin_wayland.service 2>/dev/null \
       && log "KWin restarted on NVIDIA-only" || log "KWin restart failed"
   fi
+  force_logout_if_blocked "$runenv" &
 
   # 2026-08-20 EXTERNAL-ONLY. Leaving eDP-1 enabled makes KWin composite two
   # outputs across two GPUs (panel on AMD + external on NVIDIA); that multi-GPU
@@ -614,10 +615,32 @@ relogin_session(){
   egpu_external_only &
 }
 
+# An app that does not answer KDE's "close now" (seen: the ChatGPT/Codex desktop app, DeckCraft) cancels the logout, and the
+# desktop stays on the iGPU with every eGPU screen dark. The attach must win: after 20 s, close the apps the user started
+# (KDE runs each one in its own app-*.scope or app-*@<id>.service; autostart entries and D-Bus services are left alone,
+# login starts them again), kill what is still there 5 s later, and log out again.
+force_logout_if_blocked(){
+  local runenv=$1 k u t
+  k=$(pgrep -U 1000 -x kwin_wayland | head -1); [ -n "$k" ] || return 0
+  for t in $(seq 1 20); do sleep 1; kill -0 "$k" 2>/dev/null || return 0; done
+  local apps
+  apps=$(runuser -u deck -- env $runenv systemctl --user list-units --no-legend --plain --state=running 'app-*' 2>/dev/null \
+    | awk '{print $1}' | grep -E '\.scope$|@[0-9a-f]{32}\.service$' | grep -vE '@autostart\.service$|^app-dbus' | grep -viE 'egpu')
+  [ -n "$apps" ] || { log "logout still pending after 20s and no user apps to close"; return 0; }
+  log "logout blocked after 20s - closing the user's apps: $(printf '%s' "$apps" | tr '\n' ' ')"
+  for u in $apps; do runuser -u deck -- env $runenv systemctl --user kill --signal=TERM "$u" 2>/dev/null; done
+  sleep 5
+  for u in $apps; do runuser -u deck -- env $runenv systemctl --user kill --signal=KILL "$u" 2>/dev/null; done
+  sleep 1
+  runuser -u deck -- env $runenv qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout 2>/dev/null \
+    || runuser -u deck -- env $runenv qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout 2>/dev/null
+  log "logout issued again after closing the apps"
+}
+
 egpu_external_only(){
   local ext="" t k
-  # wait for the NVIDIA-only KWin of the relogin (up to 60s); before that kscreen talks to the dying session
-  for t in $(seq 1 30); do
+  # wait for the NVIDIA-only KWin of the relogin (up to 90s: a blocked logout adds ~30s); before that kscreen talks to the dying session
+  for t in $(seq 1 45); do
     k=$(pgrep -U 1000 -x kwin_wayland | head -1)
     [ -n "$k" ] && tr '\0' '\n' </proc/"$k"/environ 2>/dev/null | grep -q "KWIN_DRM_DEVICES=/dev/dri/$nvcard\$" && break
     sleep 2
