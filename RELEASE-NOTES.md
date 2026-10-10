@@ -1,3 +1,10 @@
+0.7.80 — update resilience: CachyOS terminal updates can't break the eGPU driver.
+
+**Fixed**
+- CachyOS: an update that would swap or re-version the NVIDIA driver packages is stopped, with nothing changed.
+- CachyOS: after an update, a broken eGPU driver is repaired before you restart, and you're told the result.
+- The eGPU now stays powered while in use, as intended (NVIDIA's own rule was overriding ours).
+
 0.7.79 — update resilience: driver ready before the SteamOS restart.
 
 **New**
