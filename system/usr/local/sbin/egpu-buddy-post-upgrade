@@ -33,14 +33,16 @@ fi
 command -v dkms >/dev/null && pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1 || exit 0
 [ "${1:-}" != --repair ] && [ -e /run/nvegpu/driver-change-ok ] && exit 0   # our installer/repair is mid-change and reports itself
 
-newest=$(ls -1 /usr/lib/modules | sort -V | tail -1)
-kpkg=$(pacman -Qqo "/usr/lib/modules/$newest/vmlinuz" 2>/dev/null)
+kernels=$(ls -1 /usr/lib/modules | sort -V)   # every installed kernel: the one that boots is not always the newest
+kpkg(){ pacman -Qqo "/usr/lib/modules/$newest/vmlinuz" 2>/dev/null; }
 HERE=$(getent passwd 1000 | cut -d: -f6)/.local/share/steamos-egpu-buddy; CACHE=$HERE/pkgcache
 # the driver line this machine uses (610 / 615 beta): its packages are the ones to put back
 PV=$(sed -n 's/^pkgver=//p' "$HERE/packaging/$(cat /etc/nv-egpu-buddy/driver-dir 2>/dev/null || echo nvidia-open-egpu)/PKGBUILD" 2>/dev/null)
 mod(){ modinfo -k "$newest" -n "$1" 2>/dev/null; }
 has(){ local f; f=$(mod "$1") && [ -f "$f" ] && { case "$f" in *.zst) zstd -dcq "$f";; *.xz) xz -dc "$f";; *) cat "$f";; esac; } | grep -aqF "$2"; }
-check(){ # sets $bad to the first problem found, empty when all is well
+check(){ # sets $bad to the first problem found on any kernel ($newest is then that kernel), empty when all is well
+  for newest in $kernels; do check1; [ -n "$bad" ] && return; done; }
+check1(){
   bad=""
   dkms status 2>/dev/null | grep -q "nvidia/.*$newest.*installed" || { bad="no eGPU driver is built for kernel $newest"; return; }
   has nvidia RmForceExternalGpu || { bad="the NVIDIA driver for kernel $newest is not the eGPU-patched build"; return; }
@@ -57,7 +59,7 @@ if [ "${1:-}" = --repair ]; then
   for _ in $(seq 1 120); do [ -e /var/lib/pacman/db.lck ] || break; sleep 5; done
   [ -e /var/lib/pacman/db.lck ] && { tell "eGPU driver repair after the update could not start: pacman stayed busy. Re-run the installer before restarting."; exit 1; }
   touch /run/nvegpu/driver-change-ok; trap 'rm -f /run/nvegpu/driver-change-ok' EXIT
-  [ -n "$kpkg" ] && [ ! -e "/usr/lib/modules/$newest/build" ] && pacman -S --needed --noconfirm "$kpkg-headers"
+  for newest in $kernels; do k=$(kpkg); [ -n "$k" ] && [ ! -e "/usr/lib/modules/$newest/build" ] && pacman -S --needed --noconfirm "$k-headers"; done
   check
   case "$bad" in *"not the eGPU-patched"*|*"does not match"*)
     pk=(); for p in nvidia-open-egpu-dkms nvidia-utils lib32-nvidia-utils; do

@@ -1,3 +1,9 @@
+0.7.81 — after the first real kernel update: two small fixes.
+
+**Fixed**
+- The post-update driver check now covers every installed kernel, not only the newest one.
+- CachyOS: NVIDIA's persistence daemon no longer shows as "failed" at boot (the eGPU driver loads later, on attach).
+
 0.7.80 — update resilience: CachyOS terminal updates can't break the eGPU driver.
 
 **Fixed**
