@@ -1,3 +1,9 @@
+0.7.82 — TV control tricks (optional, off by default).
+
+**New**
+- Setup > Extras (testing) > TV control tricks: choosing the TV for Game Mode turns it on and switches it to the eGPU's HDMI input. LG webOS TVs, over the network; pair once with "Find and pair TV".
+- With it on, a TV showing live TV or another input is left out of the desktop until it is switched back.
+
 0.7.81 — after the first real kernel update: two small fixes.
 
 **Fixed**
