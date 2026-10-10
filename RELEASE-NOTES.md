@@ -1,3 +1,14 @@
+0.7.78 — SteamOS updates: the driver rebuild works again; smoother attach.
+
+**Fixed**
+- After a SteamOS update with a new kernel, the NVIDIA driver is rebuilt right away instead of after a 20-minute wait.
+- A SteamOS update no longer tries to install the wrong NVIDIA driver.
+- Desktop attach: an app that refuses to close no longer leaves the eGPU screens dark.
+- Booting with the eGPU attached returns to the last session used; without it, Game Mode.
+
+**New**
+- `sudo egpu-screen replug` brings back a DisplayPort monitor stuck on "no signal" without unplugging the cable (desktop).
+
 0.7.77 — shutdown with the eGPU attached fixed.
 
 **Fixed**
