@@ -1,11 +1,22 @@
 #!/bin/bash
-# Runs after every pacman transaction (hook). Keeps the two update-sensitive pieces honest:
+# Runs after every pacman transaction (hook), so an update from a desktop terminal is caught BEFORE the reboot:
 #  1. the private GBM-scanout gamescope links against system libraries; if an update broke it, rebuild it from the
 #     kept source tree (toolchain present) or log that the session shim will fall back to the distro gamescope;
-#  2. the patched driver is a DKMS package; report if the newest kernel has no module, a stock (unpatched) one, or one
-#     whose version differs from nvidia-utils.
+#  2. the patched driver is a DKMS package: the newest kernel must have a module, it must be OUR build (text only
+#     patches 170 and 160 add) and match nvidia-utils;
+#  3. the kernel parameters must still be in the bootloader config.
+# What can be fixed is fixed: a missing DKMS build is retried here; anything that needs pacman (kernel headers, the
+# matching driver packages, which the installer keeps in ~/.local/share/steamos-egpu-buddy/pkgcache) runs from
+# `--repair` once this transaction has released the pacman lock. The result is shown in the terminal, as a desktop
+# notification and in the Decky plugin. egpu-buddy-pre-upgrade stops an update from swapping the NVIDIA packages.
 set -u
 log(){ logger -t egpu-buddy-post-upgrade "$*"; echo "egpu-buddy: $*"; }
+tell(){ # <message>: log, plugin notice, desktop notification for every graphical session
+  log "$1"; mkdir -p /run/nvegpu && echo "$1" > /run/nvegpu/notice
+  for b in /run/user/*/bus; do u=$(stat -c %U "$b") || continue
+    runuser -u "$u" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$b" notify-send -a "EGPU Buddy" "EGPU Buddy" "$1" >/dev/null 2>&1 &
+  done; }
+if [ "${1:-}" != --repair ]; then
 for home in $(getent passwd | awk -F: '$3>=1000 && $3<60000 {print $6}'); do
   gs="$home/.local/gamescope-gbm/usr/bin/gamescope"; [ -x "$gs" ] || continue
   if ldd "$gs" 2>/dev/null | grep -q 'not found'; then
@@ -18,20 +29,60 @@ for home in $(getent passwd | awk -F: '$3>=1000 && $3<60000 {print $6}'); do
     fi
   fi
 done
-if command -v dkms >/dev/null && pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1; then
-  newest=$(ls -1 /usr/lib/modules | sort -V | tail -1)
-  dkms status 2>/dev/null | grep -q "nvidia/.*$newest.*installed" || log "patched NVIDIA modules are NOT installed for kernel $newest (dkms status); the eGPU will not attach on that kernel until 'dkms autoinstall -k $newest' succeeds"
-  # the modules the next boot loads must be OUR build: text only patches 170 and 160 add, and the userspace version
-  mod(){ modinfo -k "$newest" -n "$1" 2>/dev/null; }
-  has(){ local f; f=$(mod "$1") && [ -f "$f" ] && { case "$f" in *.zst) zstd -dcq "$f";; *.xz) xz -dc "$f";; *) cat "$f";; esac; } | grep -aqF "$2"; }
+fi
+command -v dkms >/dev/null && pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1 || exit 0
+[ "${1:-}" != --repair ] && [ -e /run/nvegpu/driver-change-ok ] && exit 0   # our installer/repair is mid-change and reports itself
+
+newest=$(ls -1 /usr/lib/modules | sort -V | tail -1)
+kpkg=$(pacman -Qqo "/usr/lib/modules/$newest/vmlinuz" 2>/dev/null)
+HERE=$(getent passwd 1000 | cut -d: -f6)/.local/share/steamos-egpu-buddy; CACHE=$HERE/pkgcache
+# the driver line this machine uses (610 / 615 beta): its packages are the ones to put back
+PV=$(sed -n 's/^pkgver=//p' "$HERE/packaging/$(cat /etc/nv-egpu-buddy/driver-dir 2>/dev/null || echo nvidia-open-egpu)/PKGBUILD" 2>/dev/null)
+mod(){ modinfo -k "$newest" -n "$1" 2>/dev/null; }
+has(){ local f; f=$(mod "$1") && [ -f "$f" ] && { case "$f" in *.zst) zstd -dcq "$f";; *.xz) xz -dc "$f";; *) cat "$f";; esac; } | grep -aqF "$2"; }
+check(){ # sets $bad to the first problem found, empty when all is well
   bad=""
-  has nvidia RmForceExternalGpu || bad="the NVIDIA driver for kernel $newest is not the eGPU-patched build"
-  [ -z "$bad" ] && { has nvidia-drm "GPU removal detected" || bad="nvidia-drm for kernel $newest is not the eGPU-patched build"; }
-  kv=$(modinfo -k "$newest" -F version nvidia 2>/dev/null); uv=$(pacman -Q nvidia-utils 2>/dev/null | awk '{sub(/-[0-9]+$/,"",$2); print $2}')
-  [ -z "$bad" ] && [ -n "$uv" ] && [ "$kv" != "$uv" ] && bad="NVIDIA driver $kv does not match nvidia-utils $uv"
-  if [ -n "$bad" ]; then
-    log "$bad; the eGPU may not attach after a restart. Re-run the installer before restarting."
-    mkdir -p /run/nvegpu && echo "eGPU driver check after the update: $bad. Re-run the installer before restarting." > /run/nvegpu/notice
-  fi
+  dkms status 2>/dev/null | grep -q "nvidia/.*$newest.*installed" || { bad="no eGPU driver is built for kernel $newest"; return; }
+  has nvidia RmForceExternalGpu || { bad="the NVIDIA driver for kernel $newest is not the eGPU-patched build"; return; }
+  has nvidia-drm "GPU removal detected" || { bad="nvidia-drm for kernel $newest is not the eGPU-patched build"; return; }
+  local kv uv; kv=$(modinfo -k "$newest" -F version nvidia 2>/dev/null); uv=$(pacman -Q nvidia-utils 2>/dev/null | awk '{sub(/-[0-9]+$/,"",$2); print $2}')
+  [ -n "$uv" ] && [ "$kv" != "$uv" ] && bad="NVIDIA driver $kv does not match nvidia-utils $uv"; }
+cmdline_fix(){ [ -x /usr/local/sbin/egpu-kernel-cmdline ] || return 0
+  /usr/local/sbin/egpu-kernel-cmdline --written >/dev/null 2>&1 && return 0
+  /usr/local/sbin/egpu-kernel-cmdline --apply >/dev/null 2>&1 && log "the eGPU kernel parameters were missing from the bootloader config after the update; written again" \
+    || tell "The eGPU kernel parameters are missing from the bootloader config and could not be written again. Re-run the installer before restarting."; }
+
+if [ "${1:-}" = --repair ]; then
+  # after the transaction: wait for the pacman lock, then put the matching pieces back
+  for _ in $(seq 1 120); do [ -e /var/lib/pacman/db.lck ] || break; sleep 5; done
+  [ -e /var/lib/pacman/db.lck ] && { tell "eGPU driver repair after the update could not start: pacman stayed busy. Re-run the installer before restarting."; exit 1; }
+  touch /run/nvegpu/driver-change-ok; trap 'rm -f /run/nvegpu/driver-change-ok' EXIT
+  [ -n "$kpkg" ] && [ ! -e "/usr/lib/modules/$newest/build" ] && pacman -S --needed --noconfirm "$kpkg-headers"
+  check
+  case "$bad" in *"not the eGPU-patched"*|*"does not match"*)
+    pk=(); for p in nvidia-open-egpu-dkms nvidia-utils lib32-nvidia-utils; do
+      [ "$p" = lib32-nvidia-utils ] && ! pacman -Q "$p" >/dev/null 2>&1 && continue
+      f=$(ls -1 "$CACHE/$p-$PV"-*.pkg.tar.zst "$CACHE/$p-1:$PV"-*.pkg.tar.zst 2>/dev/null | head -1); [ -n "$PV" ] && [ -n "$f" ] && pk+=("$f"); done
+    [ ${#pk[@]} -gt 0 ] && pacman -U --noconfirm --ask 4 "${pk[@]}";;
+  esac
+  check; [ -z "$bad" ] || { dkms autoinstall -k "$newest" >/dev/null 2>&1; check; }
+  if [ -z "$bad" ]; then tell "The update broke the eGPU driver; it has been repaired. Restarting is safe."
+  else tell "eGPU driver after the update: $bad, and the automatic repair did not fix it. Re-run the installer before restarting."; fi
+  exit 0
+fi
+
+cmdline_fix
+check
+if [ -n "$bad" ] && [ "${bad#no eGPU driver}" != "$bad" ] && [ -e "/usr/lib/modules/$newest/build" ]; then
+  dkms autoinstall -k "$newest" >/dev/null 2>&1; check   # headers are there: the build just needs another go
+fi
+[ -z "$bad" ] && exit 0
+if [ -e /run/nvegpu/update-repair-tried ]; then
+  tell "eGPU driver after the update: $bad. Re-run the installer before restarting."   # already tried once this boot
+else
+  mkdir -p /run/nvegpu; touch /run/nvegpu/update-repair-tried
+  log "$bad; repairing as soon as this update finishes"
+  systemd-run --quiet --collect --unit=egpu-buddy-update-repair --on-active=10 /usr/local/sbin/egpu-buddy-post-upgrade --repair >/dev/null 2>&1 \
+    || tell "eGPU driver after the update: $bad. Re-run the installer before restarting."
 fi
 exit 0

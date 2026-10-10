@@ -174,7 +174,14 @@ not the default.
 - The private GBM-scanout gamescope links against system libraries. After every pacman transaction a hook runs
   `egpu-buddy-post-upgrade`: if a library update broke the binary it rebuilds it from the kept source tree
   (toolchain present) or logs that the session shim will fall back to the distro gamescope until you re-run the
-  installer. The same hook reports when no patched module is installed for the newest kernel.
+  installer. The same hook checks that the newest kernel has the eGPU-patched modules (built, patched, matching
+  `nvidia-utils`) and that the kernel parameters are still in the bootloader config. What it can fix it fixes before
+  you restart: a failed DKMS build is retried, and once the update has finished a repair step installs missing kernel
+  headers or puts the matching driver packages back from the installer's cache. The outcome shows in the terminal, as
+  a desktop notification and in the Decky plugin.
+- A second hook (`egpu-buddy-pre-upgrade`, before the transaction) stops any update that would replace, remove or
+  re-version the NVIDIA packages, with nothing changed. The installer and the driver trial pass it; to change the
+  driver by hand, `sudo touch /run/nvegpu/driver-change-ok` first.
 - If a new kernel refuses to build the pinned 610.57.04 modules, hold the kernel (`IgnorePkg`) until a release
   with a newer driver exists; `dkms status` and the system journal (`egpu-buddy-post-upgrade`) tell you.
 

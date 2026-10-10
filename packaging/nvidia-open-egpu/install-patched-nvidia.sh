@@ -5,6 +5,8 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 if [ "$(id -u)" = 0 ]; then U=${EGPU_TARGET_USER:-${SUDO_USER:-}}; [ -n "$U" ] && [ "$U" != root ] || { echo "running as root: set EGPU_TARGET_USER=<login user>"; exit 1; }; R=""; else U=$USER; R=sudo; fi
+# tells egpu-buddy-pre-upgrade (pacman hook) that this NVIDIA package change is ours
+$R mkdir -p /run/nvegpu; $R touch /run/nvegpu/driver-change-ok; trap '$R rm -f /run/nvegpu/driver-change-ok' EXIT
 command -v makepkg >/dev/null && command -v pacman >/dev/null || { echo "makepkg/pacman not found: the patched driver is Arch-based only"; exit 1; }
 PV=$(sed -n 's/^pkgver=//p' "$HERE/PKGBUILD"); ALA=https://archive.archlinux.org/packages
 UH=$(getent passwd "$U" | cut -d: -f6); PERSIST=$UH/.local/share/steamos-egpu-buddy; mkdir -p "$PERSIST/pkgcache"

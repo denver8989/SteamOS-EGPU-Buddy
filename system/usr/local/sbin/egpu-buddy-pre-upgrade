@@ -1,0 +1,16 @@
+#!/bin/bash
+# pacman PreTransaction hook (AbortOnFail): an update must not swap or change the NVIDIA packages under the eGPU-patched
+# driver, or the eGPU stops working after the next restart. Our own tools (installer, driver trial, update repair)
+# mark their change with /run/nvegpu/driver-change-ok and pass. Targets arrive on stdin.
+[ -e /run/nvegpu/driver-change-ok ] && exit 0
+pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1 || exit 0          # the patched driver is not installed: not ours to guard
+t=$(tr '\n' ' ')
+v=$(pacman -Q nvidia-open-egpu-dkms | awk '{print $2}')
+cat >&2 <<MSG
+EGPU Buddy: this update would change $t
+That breaks the eGPU-patched NVIDIA driver ($v) at the next restart, so the update was stopped. Nothing was changed.
+ - to update everything else: run it again (these packages are already in IgnorePkg; answer "n" if pacman asks about them)
+ - to change the NVIDIA driver on purpose: use the EGPU Buddy installer, or run once:
+     sudo touch /run/nvegpu/driver-change-ok
+MSG
+exit 1

@@ -77,7 +77,8 @@ remember_prev(){ local p v f list=""
 pacman_u(){ local conf=() tc; if ! pacman-conf LocalFileSigLevel 2>/dev/null | grep -qiE 'Optional|Never'; then
     tc=$(mktemp); sed 's/^\[options\]/[options]\nLocalFileSigLevel = Optional/' /etc/pacman.conf > "$tc"; conf=(--config "$tc"); fi
   rm -f /var/lib/pacman/db.lck 2>/dev/null   # only ever reached with no other pacman of ours running (flock below)
-  pacman "${conf[@]}" -U --noconfirm --ask 4 "$@" >>"$LOG" 2>&1; }
+  mkdir -p /run/nvegpu; touch /run/nvegpu/driver-change-ok   # ours: egpu-buddy-pre-upgrade lets it through
+  pacman "${conf[@]}" -U --noconfirm --ask 4 "$@" >>"$LOG" 2>&1; local rc=$?; rm -f /run/nvegpu/driver-change-ok; return $rc; }
 
 install_new(){
   if steamos; then bash "$NEW/install-steamos-sysext.sh" >>"$LOG" 2>&1

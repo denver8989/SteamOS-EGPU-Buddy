@@ -1,0 +1,23 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = nvidia-open-egpu-dkms
+Target = nvidia-utils
+Target = lib32-nvidia-utils
+Target = opencl-nvidia
+Target = lib32-opencl-nvidia
+Target = nvidia-open-dkms
+Target = nvidia-open
+Target = nvidia-dkms
+Target = nvidia
+Target = nvidia-lts
+Target = nvidia-open-lts
+
+[Action]
+Description = SteamOS EGPU Buddy: keeping the eGPU-patched NVIDIA driver and its userspace together
+When = PreTransaction
+Exec = /usr/local/sbin/egpu-buddy-pre-upgrade
+AbortOnFail
+NeedsTargets
