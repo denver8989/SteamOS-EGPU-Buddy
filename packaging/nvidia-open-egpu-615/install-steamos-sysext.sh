@@ -23,6 +23,9 @@
 #   install-steamos-sysext.sh --host-check  exit 1 when the OS changed since the image was packed (self-heal re-packs)
 #   install-steamos-sysext.sh --status   what is in place for the running kernel (exit 0 = driver usable)
 #   install-steamos-sysext.sh --remove   deactivate and delete everything this created
+# Building ahead for the NEXT OS image (egpu-driver-prebuild, before the reboot into a staged SteamOS update):
+#   EGPU_KERNEL=<release> EGPU_KPKG=<kernel package> EGPU_KVER=<its version> EGPU_MODROOT=<image>/usr/lib/modules
+#   EGPU_STAGE_ONLY=1   -> the image is left as $IMG.new and swapped in at the next boot (--activate / --boot)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
@@ -84,9 +87,9 @@ need=4000; free=$(df -Pm "$BASE" | awk 'NR==2{print $4}')
 
 # ---- 0. keyring + the exact kernel package of the RUNNING kernel ---------------------------------------------------
 pacman-key --list-keys >/dev/null 2>&1 || { say "initialising the pacman keyring"; pacman-key --init >/dev/null 2>&1 && pacman-key --populate >/dev/null 2>&1; }
-kpkg=$(pacman -Qqo "/usr/lib/modules/$K/vmlinuz" 2>/dev/null || true); [ -n "$kpkg" ] || kpkg=$(pacman -Qqo "/usr/lib/modules/$K" 2>/dev/null | head -1 || true)
+kpkg=${EGPU_KPKG:-}; [ -n "$kpkg" ] || kpkg=$(pacman -Qqo "/usr/lib/modules/$K/vmlinuz" 2>/dev/null || true); [ -n "$kpkg" ] || kpkg=$(pacman -Qqo "/usr/lib/modules/$K" 2>/dev/null | head -1 || true)
 [ -n "$kpkg" ] || { echo "cannot tell which package owns kernel $K"; exit 5; }
-kver=$(pacman -Q "$kpkg" | awk '{print $2}'); say "running kernel $K = package $kpkg $kver"
+kver=${EGPU_KVER:-$(pacman -Q "$kpkg" | awk '{print $2}')}; say "running kernel $K = package $kpkg $kver"
 # the host's repositories, minus its DBPath (it points into the read-only system)
 grep -vE '^\s*DBPath' /etc/pacman.conf > "$BASE/pacman.conf"
 
@@ -175,10 +178,11 @@ printf 'ID=_any\n' > "$SX.new/usr/lib/extension-release.d/extension-release.$NAM
 
 # ---- 4. module dependency data INTO the extension: depmod over (system modules + ours) -------------------------------
 # The overlay's writable layer is on tmpfs (/run), never on /home: overlayfs refuses a case-folding ext4 (see the header).
-if [ -d "/usr/lib/modules/$K" ]; then
+MODROOT=${EGPU_MODROOT:-/usr/lib/modules}   # the next OS image's modules when building ahead of a reboot
+if [ -d "$MODROOT/$K" ]; then
   m=$(mktemp -d /run/egpu-depmod.XXXXXX); mkdir -p "$m/root/usr/lib/modules/$K" "$m/upper" "$m/work"; ln -s usr/lib "$m/root/lib"
   cp -a "$SX.new/usr/lib/modules/$K/." "$m/upper/"
-  mount -t overlay overlay -o "lowerdir=/usr/lib/modules/$K,upperdir=$m/upper,workdir=$m/work" "$m/root/usr/lib/modules/$K"
+  mount -t overlay overlay -o "lowerdir=$MODROOT/$K,upperdir=$m/upper,workdir=$m/work" "$m/root/usr/lib/modules/$K"
   depmod -b "$m/root" "$K" || { umount "$m/root/usr/lib/modules/$K"; rm -rf "$m"; echo "depmod failed"; exit 8; }
   umount "$m/root/usr/lib/modules/$K"; cp -a "$m/upper"/modules.* "$SX.new/usr/lib/modules/$K/"; rm -rf "$m"
 fi
@@ -188,6 +192,7 @@ say "packing the extension image"
 { echo "userspace $PV"; for kd in "$SX.new"/usr/lib/modules/*/; do echo "kernel $(basename "$kd")"; done; echo "host $(host_fp)"; } > "$MANIFEST.new"
 rm -f "$IMG.new"; mksquashfs "$SX.new" "$IMG.new" -noappend -comp zstd -quiet -no-progress >/dev/null
 rm -rf "$SX.new"
+[ "${EGPU_STAGE_ONLY:-0}" = 1 ] && { say "staged for the next boot: $IMG.new"; exit 0; }
 if [ "${EGPU_DEFER_SWAP:-0}" = 1 ] && nv_loaded; then
   say "the NVIDIA driver is in use: the new extension is staged and swapped in at the next boot"; exit 0
 fi

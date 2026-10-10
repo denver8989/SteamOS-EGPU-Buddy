@@ -1,0 +1,57 @@
+#!/bin/bash
+# egpu-driver-prebuild — SteamOS: build the NVIDIA driver for the kernel of a SteamOS update BEFORE the reboot into it.
+#
+# A SteamOS update writes the new OS image to the other A/B slot, then waits for a restart. When that image brings a new
+# kernel, the driver extension has no modules for it, and without this the first boot after the update had to download
+# the kernel headers and build them (minutes, network needed, eGPU unusable meanwhile). Here the staged image is mounted
+# read-only, its kernel read, and the modules built while the old OS is still running. The result is left as the
+# extension's ".new" image, which the self-heal swaps in at the next boot, before the eGPU is brought up.
+# Run by egpu-driver-prebuild.timer every 10 minutes; the check is cheap and does nothing unless an update is staged.
+# The boot-time rebuild in selfheal.sh stays as the fallback (restarted before this finished, no network, ...).
+set -u
+LOG=/var/log/egpu-buddy-selfheal.log
+log(){ logger -t egpu-driver-prebuild "$*"; echo "$(date '+%F %T') prebuild: $*" >> "$LOG"; }
+command -v steamos-readonly >/dev/null 2>&1 || exit 0          # SteamOS only: elsewhere DKMS builds at kernel install
+[ -d /home/.egpu-buddy ] || exit 0                               # no driver extension installed
+pgrep -x 'rauc|steamos-atomupd-client' >/dev/null && exit 0      # an update is still being written: look next time
+
+HERE=/home/$(id -nu 1000 2>/dev/null || echo deck)/.local/share/steamos-egpu-buddy
+DRVDIR="$HERE/packaging/$(cat /etc/nv-egpu-buddy/driver-dir 2>/dev/null || echo nvidia-open-egpu)"; [ -f "$DRVDIR/PKGBUILD" ] || DRVDIR="$HERE/packaging/nvidia-open-egpu"
+SX="$DRVDIR/install-steamos-sysext.sh"; [ -f "$SX" ] || exit 0
+BASE=$(sed -n 's/^BASE=\${EGPU_SYSEXT_BASE:-\([^}]*\)}.*/\1/p' "$SX" | head -1); MANIFEST=$BASE/sysext/egpu-nvidia.manifest
+
+# the slot we are NOT running from
+other=""
+if [ -e /dev/disk/by-partsets/other/rootfs ]; then other=$(readlink -f /dev/disk/by-partsets/other/rootfs)
+else root=$(readlink -f "$(findmnt -no SOURCE / | sed 's/\[.*//')")
+  for s in A B; do d=$(readlink -f /dev/disk/by-partsets/$s/rootfs 2>/dev/null) || continue; [ "$d" != "$root" ] && other=$d; done; fi
+[ -b "$other" ] || exit 0
+
+M=/run/egpu-nextos; mkdir -p "$M"; mountpoint -q "$M" || mount -o ro "$other" "$M" 2>/dev/null || exit 0
+trap 'umount "$M" 2>/dev/null; rmdir "$M" 2>/dev/null' EXIT
+# only an image NEWER than the running one is a staged update (after a rollback the other slot is the older one)
+new=$(sed -n 's/^BUILD_ID=//p' "$M/etc/os-release" 2>/dev/null | tr -d '"'); cur=$(sed -n 's/^BUILD_ID=//p' /etc/os-release | tr -d '"')
+[ -n "$new" ] && [ "$new" \> "$cur" ] || exit 0
+K=$(cd "$M/usr/lib/modules" 2>/dev/null && for d in */; do [ -e "$d/vmlinuz" ] && echo "${d%/}"; done | head -1)
+[ -n "$K" ] || exit 0
+[ "$K" = "$(uname -r)" ] && exit 0                                                  # same kernel: nothing to build
+grep -qxF "kernel $K" "$MANIFEST" "$MANIFEST.new" 2>/dev/null && exit 0             # already built (or staged)
+STAMP=/var/lib/nvegpu/prebuild-failed-$K; [ "$(cat "$STAMP" 2>/dev/null || echo 0)" -ge 3 ] && exit 0   # tried enough; boot rebuild takes over
+
+# which package the new kernel is, and its exact version (the headers must match it to the letter)
+kpkg=$(cat "$M/usr/lib/modules/$K/pkgbase" 2>/dev/null)
+db=$(find "$M/var/lib/pacman" "$M/usr/share/factory/var/lib/pacman" "$M/usr/lib/holo/pacmandb" -maxdepth 2 -type d -name "${kpkg}-[0-9]*" -path '*/local/*' 2>/dev/null | head -1)
+kver=$(sed -n '/^%VERSION%$/{n;p}' "$db/desc" 2>/dev/null)
+[ -n "$kpkg" ] && [ -n "$kver" ] || { log "SteamOS $new is staged with kernel $K, but its package name/version could not be read; the driver is built after the reboot instead"; exit 0; }
+
+log "SteamOS $new is staged with kernel $K ($kpkg $kver): building the NVIDIA driver for it before the reboot"
+mkdir -p /run/nvegpu /var/lib/nvegpu
+echo "SteamOS update ready: preparing the eGPU driver for it (about 5-10 minutes). Restart after it says it is done." > /run/nvegpu/notice
+if EGPU_KERNEL=$K EGPU_KPKG=$kpkg EGPU_KVER=$kver EGPU_MODROOT=$M/usr/lib/modules EGPU_STAGE_ONLY=1 bash "$SX" >> "$LOG" 2>&1; then
+  rm -f "$STAMP"; log "driver for $K built and staged; it is used from the first boot of SteamOS $new"
+  echo "The eGPU driver for the SteamOS update is ready. You can restart now." > /run/nvegpu/notice
+else
+  echo $(( $(cat "$STAMP" 2>/dev/null || echo 0) + 1 )) > "$STAMP"
+  log "building ahead for $K failed (see above); it is built after the reboot instead"
+  echo "The eGPU driver could not be prepared ahead of the SteamOS update; it is built after the restart instead (a few minutes)." > /run/nvegpu/notice
+fi

@@ -766,7 +766,10 @@ class Plugin:
     async def pop_notice(self):
         _decky_ui["seen"] = time.time()   # the plugin's UI polls this every 5 s from the moment Decky loads it
         d = _settings(); text = d.pop("notice", "")
-        if text: _save_settings(d)
+        if text: _save_settings(d); return text
+        # root services leave a one-line notice here (e.g. the driver being built ahead of a staged SteamOS update)
+        try: text = open("/run/nvegpu/notice").read().strip(); os.remove("/run/nvegpu/notice")
+        except OSError: text = ""
         return text
 
     async def apply_kernel_cmdline(self):

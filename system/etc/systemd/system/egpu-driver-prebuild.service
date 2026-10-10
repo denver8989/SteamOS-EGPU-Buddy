@@ -1,0 +1,9 @@
+[Unit]
+Description=SteamOS EGPU Buddy: build the NVIDIA driver for a staged SteamOS update before the reboot
+ConditionPathExists=/usr/local/sbin/egpu-driver-prebuild
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/egpu-driver-prebuild
+TimeoutStartSec=3600
+Nice=10

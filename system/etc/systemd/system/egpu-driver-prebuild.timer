@@ -1,0 +1,9 @@
+[Unit]
+Description=SteamOS EGPU Buddy: look for a staged SteamOS update that needs the NVIDIA driver built ahead
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+
+[Install]
+WantedBy=timers.target
