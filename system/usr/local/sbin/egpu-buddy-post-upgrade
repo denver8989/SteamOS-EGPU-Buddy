@@ -2,7 +2,8 @@
 # Runs after every pacman transaction (hook). Keeps the two update-sensitive pieces honest:
 #  1. the private GBM-scanout gamescope links against system libraries; if an update broke it, rebuild it from the
 #     kept source tree (toolchain present) or log that the session shim will fall back to the distro gamescope;
-#  2. the patched driver is a DKMS package; report if no module is installed for the newest kernel.
+#  2. the patched driver is a DKMS package; report if the newest kernel has no module, a stock (unpatched) one, or one
+#     whose version differs from nvidia-utils.
 set -u
 log(){ logger -t egpu-buddy-post-upgrade "$*"; echo "egpu-buddy: $*"; }
 for home in $(getent passwd | awk -F: '$3>=1000 && $3<60000 {print $6}'); do
@@ -20,5 +21,17 @@ done
 if command -v dkms >/dev/null && pacman -Q nvidia-open-egpu-dkms >/dev/null 2>&1; then
   newest=$(ls -1 /usr/lib/modules | sort -V | tail -1)
   dkms status 2>/dev/null | grep -q "nvidia/.*$newest.*installed" || log "patched NVIDIA modules are NOT installed for kernel $newest (dkms status); the eGPU will not attach on that kernel until 'dkms autoinstall -k $newest' succeeds"
+  # the modules the next boot loads must be OUR build: text only patches 170 and 160 add, and the userspace version
+  mod(){ modinfo -k "$newest" -n "$1" 2>/dev/null; }
+  has(){ local f; f=$(mod "$1") && [ -f "$f" ] && { case "$f" in *.zst) zstd -dcq "$f";; *.xz) xz -dc "$f";; *) cat "$f";; esac; } | grep -aqF "$2"; }
+  bad=""
+  has nvidia RmForceExternalGpu || bad="the NVIDIA driver for kernel $newest is not the eGPU-patched build"
+  [ -z "$bad" ] && { has nvidia-drm "GPU removal detected" || bad="nvidia-drm for kernel $newest is not the eGPU-patched build"; }
+  kv=$(modinfo -k "$newest" -F version nvidia 2>/dev/null); uv=$(pacman -Q nvidia-utils 2>/dev/null | awk '{sub(/-[0-9]+$/,"",$2); print $2}')
+  [ -z "$bad" ] && [ -n "$uv" ] && [ "$kv" != "$uv" ] && bad="NVIDIA driver $kv does not match nvidia-utils $uv"
+  if [ -n "$bad" ]; then
+    log "$bad; the eGPU may not attach after a restart. Re-run the installer before restarting."
+    mkdir -p /run/nvegpu && echo "eGPU driver check after the update: $bad. Re-run the installer before restarting." > /run/nvegpu/notice
+  fi
 fi
 exit 0

@@ -198,6 +198,7 @@ sudo bash -c "
 set -e; TS=$TS
 cd '$SYS_TMP'; find . -type f | while read -r f; do d=\"\${f#.}\"; mkdir -p \"\$(dirname \"\$d\")\"; if [ -e \"\$d\" ] && ! cmp -s \"\$f\" \"\$d\"; then cp -a \"\$d\" \"\$d.bak-egpu-buddy-\$TS\"; fi; install -m \"\$(stat -c %a \"\$f\")\" \"\$f\" \"\$d\"; done
 rm -f /etc/sudoers.d/steamos-egpu-buddy   # pre-0.7.23 name: sorted BEFORE /etc/sudoers.d/wheel, which then outranked it
+rm -f /etc/udev/rules.d/60-egpu-nvidia-powerpin.rules   # pre-0.7.80 name: ran BEFORE 71-nvidia.rules, which set the GPU back to auto
 [ -f /etc/sudoers.d/zz-steamos-egpu-buddy ] && { chmod 0440 /etc/sudoers.d/zz-steamos-egpu-buddy; visudo -cf /etc/sudoers.d/zz-steamos-egpu-buddy >/dev/null; }
 chmod 0755 /usr/local/sbin/egpu-* /usr/local/sbin/nv-egpu-buddy-* /usr/local/bin/nv-egpu-offset-helper 2>/dev/null || true
 mkdir -p /etc/nv-egpu-buddy /var/lib/nvegpu; echo '$VER' > /etc/nv-egpu-buddy/version; echo '$GPU_VENDOR' > /etc/nv-egpu-buddy/gpu-vendor

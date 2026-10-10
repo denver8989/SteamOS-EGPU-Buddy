@@ -1,3 +1,4 @@
 # eGPU marginal-TB-link timeout mitigation (2026-08-19): keep NVIDIA eGPU out of PCIe runtime PM.
+# Named 99-: NVIDIA's own 71-nvidia.rules sets power/control=auto on bind; this must run after it.
 # Reversible: delete this file. See ACTIVE_TASK memory.
 ACTION=="add|bind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{power/control}="on"
