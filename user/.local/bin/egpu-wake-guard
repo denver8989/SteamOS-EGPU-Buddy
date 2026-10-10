@@ -11,6 +11,7 @@ SIGUSR1 counts as activity (used by the test path). Runs as the user; no LACT, n
 import glob, os, select, signal, subprocess, syslog, time
 
 GRACE = 4.0        # seconds of "user active but connector still off" before we intervene
+RESUME_HOLD = 20.0 # seconds after a wake from sleep: the compositor brings its outputs back by itself
 COOLDOWN = 120.0   # seconds between interventions
 PRIV = "/usr/local/sbin/nv-egpu-buddy-privileged"
 RUN = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
@@ -29,10 +30,12 @@ def nvidia_connectors():
     return out
 
 def output_off(c): return read(c + "/enabled") == "disabled" or read(c + "/dpms") == "Off"
+def slept(): return time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()   # grows by the time spent asleep
 
 class Guard:
     def __init__(self):
         self.last_input = 0.0; self.last_fix = 0.0; self.off_since = None; self.first_input_off = None; self.fds = {}
+        self.slept = slept(); self.hold_until = 0.0
         signal.signal(signal.SIGUSR1, lambda *_: self.mark())
     def mark(self): self.last_input = time.monotonic()
     def open_inputs(self):
@@ -53,7 +56,14 @@ class Guard:
         cons = nvidia_connectors()
         if not cons: self.off_since = None; return
         now = time.monotonic()
-        if any(output_off(c) for c in cons):
+        # just woke from sleep: hold off while the compositor resumes (a VT round-trip right at resume left Game Mode
+        # paused for hours, 2026-10-11)
+        if slept() - self.slept > 1.0: self.slept = slept(); self.hold_until = now + RESUME_HOLD; self.off_since = None; self.first_input_off = None
+        if now < self.hold_until: return
+        # stuck = NO eGPU screen lit. A screen that is off while another is on is off on purpose (Game Mode drives one
+        # screen; the TV rule and the display settings turn screens off).
+        # ponytail: one stuck screen next to a working one is not recovered; needs the compositor's intended outputs.
+        if all(output_off(c) for c in cons):
             if self.off_since is None: self.off_since = now; self.first_input_off = None
             # first user input seen while the output is off: the compositor should turn it on within a moment
             if self.last_input > self.off_since and self.first_input_off is None: self.first_input_off = self.last_input

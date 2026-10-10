@@ -783,6 +783,10 @@ case "$action" in
     [ "$#" -eq 0 ] || die "vt-bounce takes no arguments"
     cur=$(cat /sys/class/tty/tty0/active 2>/dev/null); cur=${cur#tty}
     chvt 2; sleep 1; chvt "${cur:-1}"
+    # make sure the user's graphical session is the active one again: the VT read above can be wrong right at a resume,
+    # and Game Mode then stayed paused for hours (2026-10-11). Activating an already active session changes nothing.
+    sleep 1; s=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$6=="user" && $7 ~ /^tty/ {print $1; exit}')
+    [ -n "$s" ] && loginctl activate "$s" 2>/dev/null || true
     ;;
   emergency-console)
     # eGPU yank lifeboat: switch the foreground VT to tty3 (fbcon deferred-takeover fires on

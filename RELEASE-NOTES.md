@@ -1,3 +1,8 @@
+0.7.84 — waking from sleep with two screens.
+
+**Fixed**
+- Game Mode could stay paused after waking from sleep when a second screen (such as a TV) was connected but not in use; the TV then showed noise.
+
 0.7.83 — updating with the eGPU in use; the beta driver stays after an update.
 
 **New**
