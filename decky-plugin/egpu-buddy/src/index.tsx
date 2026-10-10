@@ -40,6 +40,9 @@ const getScreens = callable<[], Screen[]>("get_screens");
 const wakeScreens = callable<[], Result>("wake_screens");
 const getScreenOffer = callable<[], { connector?: string; name?: string; detail?: string; game?: boolean }>("get_screen_offer");
 const setGameScreen = callable<[string], Result>("set_game_screen");
+const getTvControl = callable<[], { enabled: boolean; paired: string[] }>("get_tv_control");
+const setTvControl = callable<[boolean], Result>("set_tv_control");
+const pairTv = callable<[], Result>("pair_tv");
 // a screen plugged into the eGPU while Game Mode runs on another one: offer to move (one screen at a time)
 const maybeOfferScreen = async () => {
   const o = await getScreenOffer();
@@ -125,6 +128,7 @@ function Content() {
   const [tab, setTab] = useState<"main" | "details" | "setup">("main");
   const [su, setSu] = useState<Setup | null>(null);
   const [up, setUp] = useState<Upd | null>(null);
+  const [tv, setTv] = useState<{ enabled: boolean; paired: string[] } | null>(null);
   const [tr, setTr] = useState<Trial | null>(null);
   const staleChecked = useRef(false);
   const [confirmSetup, setConfirmSetup] = useState<"" | "install" | "uninstall" | "amd">("");
@@ -135,7 +139,7 @@ function Content() {
   const [pl, setPl] = useState<number | null>(null);
   const [off, setOff] = useState(0);
 
-  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); const u = await getUpdate(); setUp(u); setTr(await getTrial());
+  const refresh = async () => { try { setS(await getStatus()); setSu(await getSetup()); const u = await getUpdate(); setUp(u); setTv(await getTvControl()); setTr(await getTrial());
     // the hourly check only counts awake time: after a night of sleep the status is stale, so re-check on open (wall clock)
     if (!staleChecked.current && (!u.checked || Date.now() / 1000 - u.checked > 600)) { staleChecked.current = true; checkUpdate(false); }
   } catch (e) { setMsg(`status error: ${e}`); } };
@@ -422,6 +426,15 @@ function Content() {
           <PanelSectionRow><ToggleField label="Automatic updates" description="Off (default): a new release is only announced here and you decide when to install it. On: it installs by itself when no game is running." checked={!!up?.auto_update} onChange={(v) => run(() => setAutoUpdate(v))} /></PanelSectionRow>
           <PanelSectionRow><ButtonItem layout="below" disabled={busy || !!su?.busy} onClick={() => run(() => checkUpdate(false))}>Check for updates now</ButtonItem></PanelSectionRow>
           <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>{up ? (up.available ? `Available: ${up.available}` : (up.checked ? "Up to date." : "Not checked yet.")) + (up.last_error ? ` ${up.last_error}` : "") : "…"}</div></PanelSectionRow>
+        </PanelSection>
+      )}
+      {tab === "setup" && (
+        <PanelSection title="Extras (testing)">
+          <PanelSectionRow><ToggleField label="TV control tricks" description="Off by default. Choosing the TV for Game Mode turns it on and switches it to the eGPU's HDMI input; while it shows live TV or another input, the desktop leaves it out. LG webOS TVs over the network for now." checked={!!tv?.enabled} onChange={(v) => run(() => setTvControl(v))} /></PanelSectionRow>
+          {tv?.enabled && (<>
+            <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>{tv.paired.length ? `Paired: ${tv.paired.join(", ")}` : "No TV paired yet."}</div></PanelSectionRow>
+            <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => { setMsg("Choose Allow on the TV's prompt…"); run(pairTv); }}>{tv.paired.length ? "Pair again" : "Find and pair TV"}</ButtonItem></PanelSectionRow>
+          </>)}
         </PanelSection>
       )}
     </>

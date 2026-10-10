@@ -9,13 +9,17 @@
   egpu-screen replug [CONNECTOR] desktop only: software unplug + replug, for a monitor stuck on "no signal"
   egpu-screen watch             desktop session: settle on plug-in; with 2+ screens, leave a TV that is
                                 on another input (or off) out of the desktop until it is switched to us
+  egpu-screen find              LG webOS TVs on the local network (one IP per line)
+  egpu-screen pair IP CONNECTOR pair that TV with the screen on CONNECTOR (the TV asks to allow it)
 
 Two cable standards, any brand: DDC/CI (monitors, some TVs; read directly, no ddcutil) and
 HDMI-CEC (TVs) through the kernel's /dev/cec* when the connection exposes it (AMD/Intel DP-CEC
 tunnelling on USB-C/DP->HDMI adapters, USB-CEC adapters; NVIDIA exposes none) via cec-ctl.
-A screen that answers neither reads "unknown" and is treated as in use - never hidden on a guess.
+Optional third route, the "TV control tricks" extra (off by default): an LG webOS TV paired over the
+network - read its input, wake it (wake-on-LAN), switch it to our HDMI. Used before CEC/DDC when set up.
+A screen that answers none reads "unknown" and is treated as in use - never hidden on a guess.
 """
-import fcntl, glob, json, os, re, subprocess, sys, time
+import base64, concurrent.futures, fcntl, glob, json, os, re, socket, ssl, struct, subprocess, sys, time
 
 I2C_SLAVE = 0x0703
 STORE = "/var/lib/nvegpu/screen-inputs.json"  # EDID -> input code seen while in use
@@ -160,8 +164,156 @@ def cec_wake(dev, take_input):
     return "woken (CEC)"
 
 
+NET = "/var/lib/nvegpu/screen-net.json"  # {"enabled": bool, "tvs": {EDID hex: {ip, mac, key, input}}}
+FOREGROUND = "ssap://com.webos.applicationManager/getForegroundAppInfo"
+
+
+def _net(edid):
+    """The paired network TV for this screen, only while the TV control extra is switched on."""
+    try:
+        d = json.load(open(NET))
+    except (OSError, ValueError):
+        return None
+    return d.get("tvs", {}).get(edid.hex()) if d.get("enabled") else None
+
+
+def webos(ip, uri, payload=None, key=None, wait=5):
+    """One LG webOS (SSAP) call over its websocket -> (client key, response payload); (None, None) if the TV
+    is not answering (standby). Without a key the TV shows an "allow" prompt and `wait` must cover it."""
+    try:
+        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE  # self-signed TV cert
+        s = ctx.wrap_socket(socket.create_connection((ip, 3001), timeout=wait), server_hostname=ip)
+    except OSError:
+        return None, None
+    try:
+        s.sendall(f"GET / HTTP/1.1\r\nHost: {ip}:3001\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: "
+                  f"{base64.b64encode(os.urandom(16)).decode()}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            head += s.recv(1) or b"\r\n\r\n"
+        if b" 101 " not in head.split(b"\r\n")[0]:
+            return None, None
+
+        def send(obj):
+            data, mask = json.dumps(obj).encode(), os.urandom(4)
+            n = len(data)
+            s.sendall(bytes([0x81]) + (bytes([0x80 | n]) if n < 126 else bytes([0xFE]) + struct.pack(">H", n))
+                      + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+        def recv():
+            def rd(k):
+                b = b""
+                while len(b) < k:
+                    c = s.recv(k - len(b))
+                    if not c:
+                        raise OSError("closed")
+                    b += c
+                return b
+            while True:
+                b1, b2 = rd(2); n = b2 & 0x7F
+                n = struct.unpack(">H", rd(2))[0] if n == 126 else struct.unpack(">Q", rd(8))[0] if n == 127 else n
+                data = rd(n)
+                if b1 & 0x0F == 0x8:
+                    raise OSError("closed")
+                if b1 & 0x0F == 0x1:  # skip ping/pong
+                    return json.loads(data)
+
+        reg = {"pairingType": "PROMPT", "manifest": {"manifestVersion": 1, "appVersion": "1.0", "permissions": [
+            "CONTROL_POWER", "CONTROL_INPUT_TV", "READ_INPUT_DEVICE_LIST", "READ_RUNNING_APPS", "LAUNCH"]}}
+        if key:
+            reg["client-key"] = key
+        send({"type": "register", "id": "reg", "payload": reg})
+        while True:
+            m = recv()
+            if m.get("type") == "registered":
+                key = m["payload"]["client-key"]; break
+            if m.get("type") == "error":
+                return None, None
+        send({"type": "request", "id": "cmd", "uri": uri, **({"payload": payload} if payload else {})})
+        return key, recv().get("payload", {})
+    except (OSError, ValueError, KeyError):
+        return None, None
+    finally:
+        s.close()
+
+
+def _net_read(tv):
+    r = webos(tv["ip"], FOREGROUND, key=tv["key"])[1]
+    if r is None:
+        return "off"  # a webOS TV in standby drops off the network
+    return "in-use" if r.get("appId") == "com.webos.app." + tv["input"].lower().replace("_", "") else "other-input"
+
+
+def _net_wake(tv, take_input):
+    if webos(tv["ip"], FOREGROUND, key=tv["key"])[1] is None:
+        mac = bytes.fromhex(tv["mac"].replace(":", ""))
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+            u.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            for _ in range(3):
+                u.sendto(b"\xff" * 6 + mac * 16, ("255.255.255.255", 9))
+        for _ in range(25):
+            time.sleep(1)
+            if webos(tv["ip"], FOREGROUND, key=tv["key"])[1] is not None:
+                break
+        else:
+            return "no answer to wake-on-LAN"
+    if take_input:
+        webos(tv["ip"], "ssap://tv/switchInput", {"inputId": tv["input"]}, key=tv["key"])
+    elif _net_read(tv) == "other-input":
+        return "on another input - left alone"
+    return "woken (network)"
+
+
+def find():
+    """LG webOS TVs (port 3001 open) on this machine's /24."""
+    try:
+        me = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"], capture_output=True, text=True).stdout.split(" src ")[1].split()[0]
+    except (OSError, IndexError):
+        return []
+    net = me.rsplit(".", 1)[0]
+
+    def probe(i):
+        try:
+            socket.create_connection((f"{net}.{i}", 3001), timeout=0.5).close(); return f"{net}.{i}"
+        except OSError:
+            return None
+    with concurrent.futures.ThreadPoolExecutor(64) as ex:
+        return [ip for ip in ex.map(probe, range(1, 255)) if ip]
+
+
+def pair(ip, conn):
+    """Ask the TV to allow us (prompt on the TV, 60 s), learn its MAC and which input is ours, store it for CONNECTOR."""
+    edid = next((e for c, _, e in screens() if c == conn), None)
+    if edid is None:
+        return f"{conn} is not connected"
+    key, inputs = webos(ip, "ssap://tv/getExternalInputList", wait=60)
+    if not key:
+        return "not allowed on the TV (or no answer) - choose Allow on the TV's prompt"
+    hdmi = [d["id"] for d in inputs.get("devices", []) if d.get("connected") and d["id"].startswith("HDMI")]
+    fg = (webos(ip, FOREGROUND, key=key)[1] or {}).get("appId", "")
+    cur = [d["id"] for d in inputs.get("devices", []) if fg == d.get("appId")]
+    # ponytail: ours = the only connected HDMI input, else the one on screen now; ask for it if two TVs ever share a PC
+    our = hdmi[0] if len(hdmi) == 1 else (cur[0] if cur else None)
+    if not our:
+        return "switch the TV to the PC's input, then pair again"
+    socket.create_connection((ip, 3001), timeout=2).close()  # fills the ARP cache for the MAC below
+    mac = re.search(r"lladdr ([0-9a-f:]{17})", subprocess.run(["ip", "neigh", "show", ip], capture_output=True, text=True).stdout)
+    try:
+        d = json.load(open(NET))
+    except (OSError, ValueError):
+        d = {"enabled": True}
+    d.setdefault("tvs", {})[edid.hex()] = {"ip": ip, "mac": mac.group(1) if mac else "", "key": key, "input": our}
+    os.makedirs(os.path.dirname(NET), exist_ok=True)
+    json.dump(d, open(NET, "w"))
+    os.chmod(NET, 0o644)  # the desktop watcher runs as the user
+    return f"paired: {conn} is on {our.replace('_', ' ')}"
+
+
 def read(conn, bus, edid):
     """-> (state, power, input) ; state = in-use | other-input | off | standby | unknown"""
+    tv = _net(edid)
+    if tv:
+        return _net_read(tv), None, None
     cec = _cec_for(conn)
     if cec:
         power, ours = cec_read(cec)
@@ -189,6 +341,9 @@ def read(conn, bus, edid):
 
 
 def wake(conn, bus, edid, take_input=False):
+    tv = _net(edid)
+    if tv:
+        return _net_wake(tv, take_input)
     cec = _cec_for(conn)
     if cec:
         if not take_input and read(conn, bus, edid)[0] == "other-input":
@@ -288,6 +443,10 @@ def main(argv):
         return 0
     if cmd == "settle":
         settle(); return 0
+    if cmd == "find":
+        print("\n".join(find())); return 0
+    if cmd == "pair" and len(want) == 2:
+        print(pair(*want)); return 0
     if cmd == "watch":
         watch()
     if cmd == "selftest":  # the input rule without hardware: (connector, power, input) -> state

@@ -201,6 +201,7 @@ def _nvidia_query(bdf):
 
 
 GAME_SCREEN = "/var/lib/nvegpu/game-screen"   # connector Game Mode goes to first (nv-egpu-gamescope-session)
+SCREEN_NET = "/var/lib/nvegpu/screen-net.json"   # TV control tricks: paired network TVs (egpu-screen)
 _seen_screens = None
 
 
@@ -832,6 +833,38 @@ class Plugin:
     async def wake_screens(self):
         rc, out, err = _sh(["/usr/local/sbin/egpu-screen", "wake", "--input"], 20)
         return {"ok": rc == 0, "message": out.replace("\n", "; ") or err or "No external screens connected."}
+
+    # Extras > TV control tricks (off by default): a TV paired over the network is woken and switched to our HDMI
+    # when Game Mode moves to it, and left out of the desktop while it shows something else (egpu-screen does both)
+    async def get_tv_control(self):
+        try:
+            d = json.load(open(SCREEN_NET))
+        except (OSError, ValueError):
+            d = {}
+        return {"enabled": bool(d.get("enabled")), "paired": [f'{t["ip"]} on {t["input"].replace("_", " ")}' for t in d.get("tvs", {}).values()]}
+
+    async def set_tv_control(self, enabled: bool):
+        try:
+            d = json.load(open(SCREEN_NET))
+        except (OSError, ValueError):
+            d = {}
+        d["enabled"] = bool(enabled)
+        os.makedirs(os.path.dirname(SCREEN_NET), exist_ok=True)
+        json.dump(d, open(SCREEN_NET, "w")); os.chmod(SCREEN_NET, 0o644)
+        return {"ok": True, "message": "TV control on." if enabled else "TV control off: screens are handled as before."}
+
+    async def pair_tv(self):
+        def work():
+            ips = _sh(["/usr/local/sbin/egpu-screen", "find"], 20)[1].split()
+            hdmi = [d["name"] for d in _displays(_gpu_bdf() or "") if d["name"].startswith("HDMI")] if _gpu_bdf() else []
+            if not ips:
+                return "No LG TV found on the network. Turn the TV on, on the same network as this device."
+            if len(hdmi) != 1:
+                return "Connect the TV to the eGPU's HDMI port first." if not hdmi else "More than one HDMI screen: unplug the others while pairing."
+            # ponytail: first TV found; a picker when someone has two LG TVs on the network
+            return _sh(["/usr/local/sbin/egpu-screen", "pair", ips[0], hdmi[0]], 80)[1] or "No answer from the TV."
+        msg = await asyncio.get_running_loop().run_in_executor(None, work)
+        return {"ok": msg.startswith("paired"), "message": msg}
 
     async def get_screen_offer(self):
         """A screen newly connected to the eGPU while Game Mode is on another one -> offer to move."""
