@@ -682,8 +682,9 @@ def _update_worker(version):
         _update["state"] = (f"updated to {version}; finishes on the next reboot" if _setup["rc"] == RC_STAGED
                             else f"updated to {version}" + ("; the NVIDIA driver was not built" if _setup["rc"] == RC_NO_DRIVER else "")); _update["available"] = ""
         d = _settings(); d["last_update"] = version; _save_settings(d)
+        _reattach_after_update(_setup["rc"] == 0)
     except Exception as ex:  # noqa: BLE001
-        d = _settings(); d.pop("continue_update", None); _save_settings(d)
+        d = _settings(); d.pop("continue_update", None); _save_settings(d); _reattach_after_update(False)
         _update["state"] = f"update failed: {ex}"; _update["last_error"] = str(ex); decky.logger.error(f"update failed: {ex}")
     finally:
         _setup["busy"] = False
@@ -695,13 +696,49 @@ def _continue_update():
     if d.pop("continue_update", None) != PAYLOAD_VERSION: return
     _save_settings(d)
     if _read(VERSION_FILE) == PAYLOAD_VERSION and os.path.exists(PRIV):
-        _notify(f"EGPU Buddy updated to {PAYLOAD_VERSION}."); return
+        _notify(f"EGPU Buddy updated to {PAYLOAD_VERSION}."); _reattach_after_update(True); return
     if _setup["busy"] or _game_running():
-        _notify(f"EGPU Buddy plugin {PAYLOAD_VERSION} installed. Open it and press Update system integration."); return
+        _notify(f"EGPU Buddy plugin {PAYLOAD_VERSION} installed. Open it and press Update system integration."); _reattach_after_update(False); return
     _setup.update(busy=True, rc=None, step="update", progress=0, started=time.time())
     try: os.replace(SETUP_LOG, SETUP_LOG + ".prev")
     except OSError: pass
     _update_worker(PAYLOAD_VERSION)
+
+
+def _update_needs_detach():
+    """SteamOS: the system files cannot be written while the eGPU driver is loaded (the update would wait for a reboot)."""
+    return bool(shutil.which("steamos-readonly")) and os.path.exists("/sys/module/nvidia")
+
+
+def _resume_detached_update():
+    """An update that asked for Safe Detach first. The detach stops this backend (it holds /dev/nvidia*), so this runs in the
+    process that started it AND in the one Decky starts after the detach; whichever sees the driver unloaded carries on."""
+    for _ in range(150):
+        d = _settings(); p = d.get("detach_for_update")
+        if not p: return
+        if not os.path.exists("/sys/module/nvidia"):
+            d.pop("detach_for_update"); d["reattach_after_update"] = True; _save_settings(d)
+            _update["state"] = f"eGPU detached; installing {p['version']}"
+            _setup.update(busy=True, rc=None, step="update", progress=0, started=time.time())
+            try: os.replace(SETUP_LOG, SETUP_LOG + ".prev")
+            except OSError: pass
+            _update_worker(p["version"]); return
+        if time.time() - p["t"] > 15 and _sh(["systemctl", "is-active", "--quiet", p["unit"]], 5)[0] != 0:   # the detach ended, driver still loaded
+            d.pop("detach_for_update"); _save_settings(d)
+            _update["state"] = "update not started: Safe Detach did not finish"
+            _notify("Safe Detach did not finish, so the update was not started. The eGPU stays attached."); return
+        time.sleep(2)
+
+
+def _reattach_after_update(ok):
+    """End of an update that detached the eGPU: attach it again, or say why not."""
+    d = _settings()
+    if not d.pop("reattach_after_update", None): return
+    _save_settings(d)
+    if ok and _gamescope_running():
+        _spawn_root_job("attach", [REATTACH]); _notify("Update finished: attaching the eGPU again. Game Mode returns to its screen in about 30 seconds.")
+    else:
+        _notify("The update did not finish, so the eGPU stays detached. Open EGPU Buddy for details; Attach brings it back.")
 
 
 def _check_update(install=False, manual=False):
@@ -731,10 +768,21 @@ class Plugin:
     async def get_update_status(self):
         d = _settings()
         return {"auto_update": d.get("auto_update", False), "available": _update["available"], "state": _update["state"],
-                "checked": _update["checked"], "last_error": _update["last_error"], "installed": _read(VERSION_FILE)}
+                "checked": _update["checked"], "last_error": _update["last_error"], "installed": _read(VERSION_FILE),
+                "needs_detach": _update_needs_detach()}
 
     async def set_auto_update(self, enabled: bool):
         d = _settings(); d["auto_update"] = bool(enabled); _save_settings(d); return {"ok": True, "message": "saved"}
+
+    async def update_detached(self, version: str = ""):
+        """Update with the eGPU in use (SteamOS): Safe Detach, install, attach again. Without the detach the update waits for a reboot."""
+        if _game_running(): return {"ok": False, "message": "Close the running game first."}
+        if not _gamescope_running(): return {"ok": False, "message": "Start it from Game Mode."}
+        if _operation_in_progress(): return {"ok": False, "message": "Another operation is running; try again when it is done."}
+        unit = _spawn_root_job("detach", [DETACH])
+        d = _settings(); d["detach_for_update"] = {"version": version or PAYLOAD_VERSION, "unit": unit, "t": time.time()}; _save_settings(d)
+        threading.Thread(target=_resume_detached_update, daemon=True).start()
+        return {"ok": True, "message": "Detaching the eGPU, then updating. The eGPU is attached again when it is done."}
 
     async def check_update(self, install: bool = False):
         threading.Thread(target=_check_update, args=(bool(install), True), daemon=True).start(); return {"ok": True, "message": "checking"}
@@ -987,6 +1035,7 @@ class Plugin:
             decky.logger.info("removed stray plugin copies from homebrew/plugins")
         await asyncio.sleep(8)
         threading.Thread(target=_continue_update, daemon=True).start()   # second half of a plugin-first update, if one is pending
+        threading.Thread(target=_resume_detached_update, daemon=True).start()   # an update waiting for its Safe Detach, if one is pending
         threading.Thread(target=self._decky_watchdog, daemon=True).start()
         await asyncio.sleep(300)
         while True:  # automatic updates: hourly check; install only if enabled, already installed, and no game running

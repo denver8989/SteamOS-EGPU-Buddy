@@ -1,4 +1,7 @@
-0.7.83 — the beta driver stays after an update.
+0.7.83 — updating with the eGPU in use; the beta driver stays after an update.
+
+**New**
+- SteamOS: updating with the eGPU in use now asks first, then detaches it, installs the update and attaches it again. No reboot.
 
 **Fixed**
 - SteamOS: updating EGPU Buddy no longer switches a kept beta driver (615) back to 610.

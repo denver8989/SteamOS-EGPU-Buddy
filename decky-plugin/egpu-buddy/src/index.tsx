@@ -25,10 +25,11 @@ const installSystem = callable<[boolean, string?], Result>("install_system");
 const uninstallSystem = callable<[], Result>("uninstall_system");
 const rebootSystem = callable<[], Result>("reboot_system");
 const restartGamemode = callable<[], Result>("restart_gamemode");
-type Upd = { auto_update: boolean; available: string; state: string; checked: number; last_error: string; installed: string };
+type Upd = { needs_detach?: boolean; auto_update: boolean; available: string; state: string; checked: number; last_error: string; installed: string };
 const getUpdate = callable<[], Upd>("get_update_status");
 const setAutoUpdate = callable<[boolean], Result>("set_auto_update");
 const checkUpdate = callable<[boolean], Result>("check_update");
+const updateDetached = callable<[string], Result>("update_detached");
 const popNotice = callable<[], string>("pop_notice");
 type Trial = { available: boolean; beta: string; tested: string; installed: string; state: string; message: string; running: boolean; log: string; started: number; progress: number; step: string; acked: boolean };
 const getTrial = callable<[], Trial>("get_driver_trial");
@@ -158,8 +159,14 @@ function Content() {
   // extension cannot be unmerged. Detaching is what clears it.
   const egpuMounted = !!(s?.driver_loaded);
   const WHAT = "Installs the hot-plug scripts, the Game Mode session, the GBM gamescope, the boot policy, the desktop app, the patched hot-unplug driver with the NVIDIA userspace pinned to it, and the kernel parameters. Backups are kept.";
-  const confirmInstall = (title: string, go: () => Promise<Result>) => {
+  const confirmInstall = (title: string, go: () => Promise<Result>, detachGo?: () => Promise<Result>) => {
     const needAccept = !!(su?.untested && !su.accepted_untested);
+    if (detachGo && up?.needs_detach && !needAccept) {   // SteamOS with the eGPU in use: the update cannot be written until it is detached
+      showModal(<ConfirmModal strTitle={`${title}: the eGPU is in use`} strOKButtonText="Detach and update" bDestructiveWarning
+        strDescription={"The eGPU is detached first: Game Mode moves to the handheld screen and the monitor loses signal. Leave the cable plugged in. Then the update installs" + (su?.slow_build ? " (a driver rebuild can take 10-20 minutes; keep the charger connected)" : "") + ". When it is done the eGPU is attached again by itself and Game Mode returns to its screen. A notification tells you each step."}
+        onOK={() => run(detachGo)} />);
+      return;
+    }
     const time = ` Expected time: ${su?.expect ?? "several minutes"}.` + (su?.slow_build ? " The driver is built on /home; the system partition is not touched. Keep the charger connected and the eGPU unplugged." : "") + " You can close the menu meanwhile; a notification appears when it is done.";
     const disclaimer = needAccept ? `NOT TESTED ON THIS HARDWARE: ${su!.untested!.split("\n").join("; ")}. This project was verified on one machine only (Legion Go 2, RTX 5060 Ti, CachyOS). Here it may not work, may leave the screen dark, or may need a reboot to recover. You install and test it at your own risk.\n\n` : "";
     showModal(<ConfirmModal strTitle={needAccept ? `${title} (untested hardware)` : title} strDescription={disclaimer + WHAT + time} strOKButtonText={needAccept ? "I accept the risk" : "Continue"}
@@ -170,7 +177,7 @@ function Content() {
   const behind = !!(su?.installed_version && vt(su.installed_version) < vt(su.payload_version));
   const needsInstall = !!(su && !su.unsupported && (!su.helpers_present || !su.installed_version || behind || (!!su.cmdline_missing && !su.cmdline_pending) || driverMissing));
   const updateReady = !!(up?.available && vt(up.available) > vt(PLUGIN_VERSION) && !needsInstall);   // an update is offered only when one was detected AND the setup is complete
-  const installClick = () => confirmInstall(su?.installed_version ? "Update the system files" : "Install", () => installSystem(false));
+  const installClick = () => confirmInstall(su?.installed_version ? "Update the system files" : "Install", () => installSystem(false), su?.installed_version ? () => updateDetached("") : undefined);
   // An AMD or Intel eGPU needs neither the patched nvidia-open build (the long part of an install)
   // nor the GBM-scanout gamescope (that exists only to fix the NVIDIA scan-out corruption).
   // Everything else - hot-plug attach, safe detach, cable-pull recovery, the session fallback,
@@ -200,7 +207,7 @@ function Content() {
             </>
           )}
           {updateReady && !su?.busy && <PanelSectionRow><div style={{ fontSize: "12px", opacity: 0.8 }}>Version {up!.available} is available.</div></PanelSectionRow>}
-          {updateReady && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => confirmInstall(`Update to ${up!.available}`, () => checkUpdate(true))}>Update to {up!.available}</ButtonItem></PanelSectionRow>}
+          {updateReady && !su?.busy && <PanelSectionRow><ButtonItem layout="below" disabled={busy || gameUp} onClick={() => confirmInstall(`Update to ${up!.available}`, () => checkUpdate(true), () => updateDetached(up!.available))}>Update to {up!.available}</ButtonItem></PanelSectionRow>}
           {up?.state && <PanelSectionRow><div style={{ fontSize: "12px", color: up.state.includes("failed") ? "#ff6b6b" : undefined, opacity: up.state.includes("failed") ? 1 : 0.8 }}>{up.state}</div></PanelSectionRow>}
           {su?.busy && <PanelSectionRow><Progress pct={su.progress} title={(su.step.startsWith("update") || up?.state.startsWith("installing")) ? "Updating" : "Installing"} step={su.step} started={su.started} expect={su.expect} /></PanelSectionRow>}
           {su && !su.busy && su.rc === 0 && (
