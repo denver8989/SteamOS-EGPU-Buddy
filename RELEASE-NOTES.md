@@ -1,7 +1,7 @@
-0.7.79 — SteamOS updates: the eGPU driver is ready before the restart.
+0.7.79 — update resilience: driver ready before the SteamOS restart.
 
 **New**
-- When a SteamOS update is waiting for a restart, the eGPU driver for its new kernel is built in the background first; the plugin says when it is safe to restart.
+- Self-heal builds the eGPU driver for a pending SteamOS update before you restart.
 
 0.7.78 — SteamOS updates: the driver rebuild works again; smoother attach.
 
