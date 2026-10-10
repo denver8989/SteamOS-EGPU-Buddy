@@ -699,6 +699,8 @@ def _continue_update():
         _notify(f"EGPU Buddy updated to {PAYLOAD_VERSION}."); _reattach_after_update(True); return
     if _setup["busy"] or _game_running():
         _notify(f"EGPU Buddy plugin {PAYLOAD_VERSION} installed. Open it and press Update system integration."); _reattach_after_update(False); return
+    if _update_needs_detach() and not _settings().get("reattach_after_update"):   # started from an older plugin without the detach prompt
+        _notify(f"EGPU Buddy plugin {PAYLOAD_VERSION} installed. The eGPU is in use: open EGPU Buddy and press Update system integration to finish without a reboot."); return
     _setup.update(busy=True, rc=None, step="update", progress=0, started=time.time())
     try: os.replace(SETUP_LOG, SETUP_LOG + ".prev")
     except OSError: pass
