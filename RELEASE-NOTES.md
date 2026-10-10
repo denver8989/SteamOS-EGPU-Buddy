@@ -1,3 +1,8 @@
+0.7.83 — the beta driver stays after an update.
+
+**Fixed**
+- SteamOS: updating EGPU Buddy no longer switches a kept beta driver (615) back to 610.
+
 0.7.82 — TV control tricks (optional, off by default).
 
 **New**

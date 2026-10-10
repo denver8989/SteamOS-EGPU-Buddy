@@ -137,7 +137,8 @@ fi
 # On SteamOS /usr/local is part of the system partition (no separate mount), and a merged system extension turns /usr
 # into a read-only overlay: a second install then fails with "Read-only file system" (seen on a real device, 0.7.21).
 # So: unmerge for the duration of the install, and merge again on EVERY way out. Not while the driver is in use.
-SYSEXT_TOOL="$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
+# the kept driver's tool: the 610 one re-linked the 610 image on exit, so a kept 615 trial fell back to 610 after every update
+SYSEXT_TOOL="$ROOT/packaging/$(cat /etc/nv-egpu-buddy/driver-dir 2>/dev/null || echo nvidia-open-egpu)/install-steamos-sysext.sh"; [ -f "$SYSEXT_TOOL" ] || SYSEXT_TOOL="$ROOT/packaging/nvidia-open-egpu/install-steamos-sysext.sh"
 # SteamOS keeps the system partition read-only. The Decky plugin disables that around the install,
 # but running this script directly (from the .run, or by hand) did not — it unmerged the driver
 # extension, started writing, and failed at the first file with "Read-only file system", leaving a
